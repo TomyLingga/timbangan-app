@@ -48,8 +48,9 @@ export interface PortalConfig {
 
 export interface VcfConfig {
   url: string;
-  username: string;
-  password: string;
+  /** Reading the registry needs no account; these are for a later slice. */
+  username: string | null;
+  password: string | null;
 }
 
 export interface Config {
@@ -91,6 +92,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       e.PORTAL_API_URL && e.PORTAL_WEB_URL && e.PORTAL_APP_NAME
         ? { apiUrl: e.PORTAL_API_URL, webUrl: e.PORTAL_WEB_URL, appName: e.PORTAL_APP_NAME }
         : null,
-    vcf: e.VCF_URL && e.VCF_USERNAME && e.VCF_PASSWORD ? { url: e.VCF_URL, username: e.VCF_USERNAME, password: e.VCF_PASSWORD } : null,
+    vcf: e.VCF_URL ? { url: e.VCF_URL, username: e.VCF_USERNAME ?? null, password: e.VCF_PASSWORD ?? null } : null,
   };
 }

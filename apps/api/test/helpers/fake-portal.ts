@@ -36,13 +36,13 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
 export function portalUser(overrides: Partial<PortalUser> = {}, employee: Record<string, unknown> = {}): PortalUser {
   return {
     id: "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001",
-    email: "Budi.Santoso@inl.co.id",
+    email: "Budi.Santoso@example.test",
     role: "user",
     isActive: true,
     employeeId: "9d2f6a10-1111-4222-8333-000000000001",
     employee: {
       id: "9d2f6a10-1111-4222-8333-000000000001",
-      nrk: "INL-0421",
+      nrk: "EMP-0421",
       nama: "Budi Santoso",
       namaLengkap: "Budi Santoso",
       jenisKelamin: "L",

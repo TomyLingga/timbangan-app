@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
@@ -42,10 +42,16 @@ export function registerSsoRoutes(app: FastifyInstance, context: AppContext): vo
       if (existing && !existing.isActive) return null;
       let userId = existing?.id;
       if (userId === undefined) {
-        // First sign-in: the account starts without roles; an admin grants them.
+        // First sign-in: the account starts without roles; an admin grants them. When the email is already
+        // the username of another account (a local one), the portal account gets its own username.
+        const email = identity.email.toLowerCase();
+        const [taken] = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(sql`lower(${users.username})`, email));
         const [created] = await tx
           .insert(users)
-          .values({ kind: "INTERNAL", username: identity.email.toLowerCase(), ssoSubject: identity.subject, ...seen })
+          .values({ kind: "INTERNAL", username: taken ? `${email}#sso` : email, ssoSubject: identity.subject, ...seen })
           .returning({ id: users.id });
         userId = created?.id;
       } else {

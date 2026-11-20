@@ -77,7 +77,13 @@ export function createGuards(context: AppContext) {
     };
   }
 
-  return { authenticate, requireRole };
+  /** Pre-handler, after `authenticate`: staff with at least one role. Partner accounts are refused. */
+  async function requireStaff(request: FastifyRequest): Promise<void> {
+    if (accountOf(request).kind !== "INTERNAL") throw new AppError(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+    await requireRole()(request);
+  }
+
+  return { authenticate, requireRole, requireStaff };
 }
 
 export type Guards = ReturnType<typeof createGuards>;

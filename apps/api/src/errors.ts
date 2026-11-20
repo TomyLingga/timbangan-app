@@ -8,22 +8,31 @@ export class AppError extends Error {
     readonly status: number,
     readonly code: string,
     message: string,
+    /** Per-field messages of a VALIDATION error. */
+    readonly fields?: { field: string; message: string }[],
   ) {
     super(message);
   }
 }
 
+const INVALID = "Data yang dikirim tidak valid.";
+
+/** A 400 VALIDATION for a rule that the Zod schema of the route cannot express. */
+export const invalid = (field: string, message: string) => new AppError(400, "VALIDATION", INVALID, [{ field, message }]);
+export const notFound = (what: string) => new AppError(404, "NOT_FOUND", `${what} tidak ditemukan.`);
+export const duplicate = (message: string) => new AppError(409, "DUPLICATE", message);
+
 export const notConfigured = (what: string) => new AppError(503, "NOT_CONFIGURED", `${what} belum diatur di server.`);
 
 export function errorHandler(error: unknown, request: FastifyRequest, reply: FastifyReply) {
   if (error instanceof AppError) {
-    return reply.code(error.status).send({ error: { code: error.code, message: error.message } });
+    return reply.code(error.status).send({ error: { code: error.code, message: error.message, ...(error.fields ? { fields: error.fields } : {}) } });
   }
   if (error instanceof ZodError) {
     return reply.code(400).send({
       error: {
         code: "VALIDATION",
-        message: "Data yang dikirim tidak valid.",
+        message: INVALID,
         fields: error.issues.map((issue) => ({ field: issue.path.join("."), message: issue.message })),
       },
     });

@@ -116,3 +116,90 @@ export const erpSyncRuns = pgTable("erp_sync_runs", {
   rowsUpserted: integer("rows_upserted").notNull().default(0),
   error: text("error"),
 });
+
+export const auditLog = pgTable("audit_log", {
+  id: id(),
+  at: timestamptz("at").notNull().defaultNow(),
+  userId: bigint("user_id", { mode: "number" }),
+  stationId: integer("station_id"),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: bigint("entity_id", { mode: "number" }),
+  before: jsonb("before"),
+  after: jsonb("after"),
+  reason: text("reason"),
+  ip: inet("ip"),
+});
+
+export const vehicleTypes = pgTable("vehicle_types", {
+  code: text("code").primaryKey(),
+  name: text("name").notNull(),
+  isTank: boolean("is_tank").notNull().default(false),
+  needsContainerNo: boolean("needs_container_no").notNull().default(false),
+});
+
+export const vehicles = pgTable("vehicles", {
+  id: id(),
+  plateNo: text("plate_no").notNull(),
+  plateDisplay: text("plate_display").notNull(),
+  vehicleTypeCode: text("vehicle_type_code").notNull(),
+  ownerPartnerId: bigint("owner_partner_id", { mode: "number" }),
+  ownership: text("ownership", { enum: ["SENDIRI", "MITRA"] }),
+  capacityKg: integer("capacity_kg"),
+  productionYear: smallint("production_year"),
+  tareKg: integer("tare_kg"),
+  stnkValidUntil: date("stnk_valid_until"),
+  taxValidUntil: date("tax_valid_until"),
+  kirValidUntil: date("kir_valid_until"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: bigint("created_by", { mode: "number" }),
+  verifiedBy: bigint("verified_by", { mode: "number" }),
+  verifiedAt: timestamptz("verified_at"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+export const vehicleTareHistory = pgTable("vehicle_tare_history", {
+  id: id(),
+  vehicleId: bigint("vehicle_id", { mode: "number" }).notNull(),
+  tareKg: integer("tare_kg").notNull(),
+  source: text("source", { enum: ["MANUAL", "WEIGHING", "IMPORT"] }).notNull(),
+  weighingId: bigint("weighing_id", { mode: "number" }),
+  reason: text("reason"),
+  changedBy: bigint("changed_by", { mode: "number" }),
+  changedAt: timestamptz("changed_at").notNull().defaultNow(),
+});
+
+export const drivers = pgTable("drivers", {
+  id: id(),
+  fullName: text("full_name").notNull(),
+  licenceNo: text("licence_no").notNull(),
+  licenceClass: text("licence_class"),
+  licenceValidUntil: date("licence_valid_until"),
+  phone: text("phone"),
+  homePartnerId: bigint("home_partner_id", { mode: "number" }),
+  registryRef: text("registry_ref"),
+  registryStatus: text("registry_status", { enum: ["UNKNOWN", "NORMAL", "WARNING", "BLACKLIST"] }).notNull().default("UNKNOWN"),
+  registrySyncedAt: timestamptz("registry_synced_at"),
+  registryPush: text("registry_push", { enum: ["NONE", "PENDING", "SENT", "FAILED"] }).notNull().default("NONE"),
+  registryPushError: text("registry_push_error"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: bigint("created_by", { mode: "number" }),
+  verifiedBy: bigint("verified_by", { mode: "number" }),
+  verifiedAt: timestamptz("verified_at"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+export const destinations = pgTable("destinations", {
+  id: id(),
+  partnerId: bigint("partner_id", { mode: "number" }),
+  name: text("name").notNull(),
+  address: text("address").notNull(),
+  district: text("district"),
+  regency: text("regency"),
+  province: text("province"),
+  isActive: boolean("is_active").notNull().default(true),
+  createdBy: bigint("created_by", { mode: "number" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});

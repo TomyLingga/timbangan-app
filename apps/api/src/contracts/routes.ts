@@ -4,32 +4,17 @@ import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
 import { erpContracts, partners, products } from "../db/schema.js";
+import { likeText, limitParam, searchParam, todayAtPlant } from "../http.js";
 
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 50;
-/** The plant's time zone: "today" for the validity of a contract is the date there. */
-const PLANT_TIME_ZONE = "Asia/Jakarta";
-
-const LIMIT_MESSAGE = "Limit harus angka mulai dari 1.";
 const searchQuery = z.object({
   direction: z.enum(["IN", "OUT"], "Arah harus IN atau OUT.").optional(),
-  q: z.string().trim().max(100, "Kata pencarian terlalu panjang.").optional(),
-  limit: z.coerce
-    .number(LIMIT_MESSAGE)
-    .int(LIMIT_MESSAGE)
-    .min(1, LIMIT_MESSAGE)
-    .default(DEFAULT_LIMIT)
-    .transform((value) => Math.min(value, MAX_LIMIT)),
+  q: searchParam,
+  limit: limitParam,
   includeClosed: z
     .enum(["true", "false"], "includeClosed harus true atau false.")
     .default("false")
     .transform((value) => value === "true"),
 });
-
-/** `%`, `_` and `\` in a search word are text, not LIKE wildcards. */
-const likeText = (word: string) => `%${word.replace(/[\\%_]/g, "\\$&")}%`;
-
-const dateIn = (timeZone: string, at: Date) => new Intl.DateTimeFormat("en-CA", { timeZone }).format(at);
 
 export function registerContractRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
@@ -45,7 +30,7 @@ export function registerContractRoutes(app: FastifyInstance, context: AppContext
     if (query.direction) conditions.push(eq(c.direction, query.direction));
     if (query.q) conditions.push(or(ilike(c.contractNo, likeText(query.q)), ilike(partners.name, likeText(query.q))));
     if (!query.includeClosed) {
-      conditions.push(eq(c.state, "OPEN"), or(isNull(c.validUntil), gte(c.validUntil, dateIn(PLANT_TIME_ZONE, context.now()))));
+      conditions.push(eq(c.state, "OPEN"), or(isNull(c.validUntil), gte(c.validUntil, todayAtPlant(context.now()))));
     }
     const where = and(...conditions);
 

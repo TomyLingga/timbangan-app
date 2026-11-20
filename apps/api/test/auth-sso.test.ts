@@ -50,9 +50,9 @@ describe("POST /api/auth/sso/exchange", () => {
     expect(row).toEqual({
       id: expect.any(Number),
       kind: "INTERNAL",
-      username: "budi.santoso@inl.co.id",
+      username: "budi.santoso@example.test",
       full_name: "Budi Santoso",
-      employee_no: "INL-0421",
+      employee_no: "EMP-0421",
       sso_subject: "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001",
       sso_profile: {
         jabatan: "Staff Logistik",
@@ -66,7 +66,7 @@ describe("POST /api/auth/sso/exchange", () => {
     });
 
     const body = response.json() as { accessToken: string; user: unknown };
-    expect(body.user).toEqual({ id: row?.id, kind: "INTERNAL", username: "budi.santoso@inl.co.id", fullName: "Budi Santoso", roles: [], partner: null });
+    expect(body.user).toEqual({ id: row?.id, kind: "INTERNAL", username: "budi.santoso@example.test", fullName: "Budi Santoso", roles: [], partner: null });
     expect(response.cookies.find((item) => item.name === "refresh_token")).toMatchObject({ path: "/api/auth", httpOnly: true });
     expect(await database.query("select count(*)::int as n from auth_sessions where user_id = $1", [row?.id])).toEqual([{ n: 1 }]);
     expect(await database.query("select count(*)::int as n from user_roles")).toEqual([{ n: 0 }]);
@@ -84,16 +84,16 @@ describe("POST /api/auth/sso/exchange", () => {
 
     portal.ticket(
       "ticket-2",
-      portalUser({}, { nama: "Budi Santoso, S.T.", nrk: "INL-0421B", jabatan: "Supervisor Logistik", grade: { id: "g2", kode: "G5", label: "Supervisor", level: 5 }, unit: null }),
+      portalUser({}, { nama: "Budi Santoso, S.T.", nrk: "EMP-0421B", jabatan: "Supervisor Logistik", grade: { id: "g2", kode: "G5", label: "Supervisor", level: 5 }, unit: null }),
     );
     const response = await exchange("ticket-2");
     expect(response.statusCode).toBe(200);
 
     expect(await database.query("select username, full_name, employee_no, sso_profile from users")).toEqual([
       {
-        username: "budi.santoso@inl.co.id",
+        username: "budi.santoso@example.test",
         full_name: "Budi Santoso, S.T.",
-        employee_no: "INL-0421B",
+        employee_no: "EMP-0421B",
         sso_profile: { jabatan: "Supervisor Logistik", unit: null, grade: { kode: "G5", label: "Supervisor", level: 5 } },
       },
     ]);

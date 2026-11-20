@@ -46,7 +46,7 @@ async function setup() {
     expired: await seedContract(database, { line: 3, no: "0202/K/CPO/XI/2026", partnerId: pksA, productId: cpoId, validUntil: "2026-11-19" }),
     closed: await seedContract(database, { line: 4, no: "0203/K/CPO/XI/2026", partnerId: pksA, productId: cpoId, state: "CLOSED" }),
     cancelled: await seedContract(database, { line: 5, no: "0204/K/CPO/XI/2026", partnerId: pksB, productId: cpoId, state: "CANCELLED" }),
-    sale: await seedContract(database, { line: 9, no: "101A/SC/FR/INL/X/2026", partnerId: pksA, productId: oleinId, direction: "OUT", validUntil: "2026-12-31" }),
+    sale: await seedContract(database, { line: 9, no: "101A/SC/FR/XYZ/X/2026", partnerId: pksA, productId: oleinId, direction: "OUT", validUntil: "2026-12-31" }),
   };
   await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
   const headers = await bearer(context.app, "logistics");
@@ -67,7 +67,7 @@ describe("GET /api/contracts", () => {
     expect(body.items.map((item) => item.id)).toEqual([ids.open, ids.endsToday, ids.sale]);
     expect(body.items[2]).toEqual({
       id: ids.sale,
-      contractNo: "101A/SC/FR/INL/X/2026",
+      contractNo: "101A/SC/FR/XYZ/X/2026",
       direction: "OUT",
       partner: { id: pksA, name: "PT PKS Alpha" },
       product: { id: oleinId, name: "RBD Palm Olein", category: "BULK_LIQUID" },

@@ -63,7 +63,7 @@ describe("POST /api/auth/login", () => {
     const { app, database } = await testApp();
     await seedStaff(database, "admin");
     const secureOf = async (host: string) => (await login(app, "admin", PASSWORD, { host })).cookies.find((item) => item.name === "refresh_token")?.secure;
-    expect(await secureOf("timbangan.inl.co.id")).toBe(true);
+    expect(await secureOf("timbangan.example.test")).toBe(true);
     expect(await secureOf("localhost:3100")).toBeUndefined();
     expect(await secureOf("127.0.0.1:3100")).toBeUndefined();
   });

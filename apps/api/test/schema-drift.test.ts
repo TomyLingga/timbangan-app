@@ -33,7 +33,10 @@ const tables: PgTable[] = Object.values(schema).filter((value) => is(value, PgTa
 describe("Drizzle definitions against the migrated database", () => {
   it("declares the tables this slice uses", () => {
     expect(tables.map((table) => getTableConfig(table).name).sort()).toEqual([
+      "audit_log",
       "auth_sessions",
+      "destinations",
+      "drivers",
       "erp_contracts",
       "erp_sync_runs",
       "partners",
@@ -41,6 +44,9 @@ describe("Drizzle definitions against the migrated database", () => {
       "roles",
       "user_roles",
       "users",
+      "vehicle_tare_history",
+      "vehicle_types",
+      "vehicles",
     ]);
   });
 

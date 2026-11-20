@@ -86,7 +86,7 @@ describe("syncOdoo", () => {
       erp_ref: "sale.blanket.order.line,201",
       site_id: null,
       direction: "OUT",
-      contract_no: "101A/SC/FR/INL/X/2026",
+      contract_no: "101A/SC/FR/XYZ/X/2026",
       partner_ref: "12",
       product_ref: "22",
       qty_contract: 2000000,

@@ -42,8 +42,8 @@ const TRANSPORTER = partner("Transporter T");
 const CUSTOMER = partner("Customer C");
 const OPERATOR = user("operator");
 const TRANSPORTER_USER = user("transporter-t");
-const DO_550 = deliveryOrder("550/DO-LOG/INL/XI/2026");
-const DO_551 = deliveryOrder("551/DO-LOG/INL/XI/2026");
+const DO_550 = deliveryOrder("550/DO-LOG/XYZ/XI/2026");
+const DO_551 = deliveryOrder("551/DO-LOG/XYZ/XI/2026");
 
 let scenarios = 0;
 
@@ -103,7 +103,7 @@ describe("constraint scenarios", () => {
     insert into erp_contracts (erp_system, erp_ref, direction, contract_no, partner_id, product_id, qty_contract, tolerance_pct, state)
       values ('ODOO', 'purchase.requisition.line,1', 'IN', '0200/K/CPO/XI/2026', ${PKS}, ${product("prod1")}, 1000000, 0.3, 'OPEN'),
              ('ODOO', 'purchase.requisition.line,2', 'IN', '0201/K/CPO/XI/2026', ${PKS}, ${product("prod1")}, 500000, 0, 'OPEN'),
-             ('ODOO', 'sale.blanket.order.line,9', 'OUT', '101A/SC/FR/INL/X/2026', ${CUSTOMER}, ${product("prod2")}, 2000000, 0, 'OPEN');
+             ('ODOO', 'sale.blanket.order.line,9', 'OUT', '101A/SC/FR/XYZ/X/2026', ${CUSTOMER}, ${product("prod2")}, 2000000, 0, 'OPEN');
     insert into registrations (site_id, reg_no, direction, flow_code, partner_id, transporter_id, status, created_via, created_by)
       values (${site}, 'REG-1', 'IN', 'IN_CPO', ${PKS}, ${TRANSPORTER}, 'APPROVED', 'PORTAL', ${OPERATOR});
     insert into registration_allocations (registration_id, seq, contract_id, contract_no, tolerance_pct)
@@ -179,7 +179,7 @@ describe("constraint scenarios", () => {
     `
     insert into destinations (partner_id, name, address, district, regency, province) values (${CUSTOMER}, 'Gudang C Belawan', 'Jl. Pelabuhan 1', 'Medan Belawan', 'Kota Medan', 'Sumatera Utara');
     insert into delivery_orders (site_id, do_no, do_date, contract_id, contract_no, customer_po_no, partner_id, product_id, qty, destination_id, delivery_from, created_by)
-      values (${site}, '550/DO-LOG/INL/XI/2026', '2026-11-20', ${contract("sale.blanket.order.line,9")}, '101A/SC/FR/INL/X/2026', 'PO-77', ${CUSTOMER}, ${product("prod2")}, 120000, ${destination}, '2026-11-21', ${OPERATOR})`,
+      values (${site}, '550/DO-LOG/XYZ/XI/2026', '2026-11-20', ${contract("sale.blanket.order.line,9")}, '101A/SC/FR/XYZ/X/2026', 'PO-77', ${CUSTOMER}, ${product("prod2")}, 120000, ${destination}, '2026-11-21', ${OPERATOR})`,
   );
   reject("delivery order sent without a transporter", `update delivery_orders set status = 'SENT', sent_at = now() where id = ${DO_550}`);
   ok("delivery order sent to a transporter", `update delivery_orders set status = 'SENT', sent_at = now(), transporter_id = ${TRANSPORTER} where id = ${DO_550}`);
@@ -192,13 +192,13 @@ describe("constraint scenarios", () => {
     "same DO number twice",
     `
     insert into delivery_orders (site_id, do_no, do_date, partner_id, product_id, qty, destination_id, delivery_from, created_by)
-    values (${site}, '550/DO-LOG/INL/XI/2026', '2026-11-20', ${CUSTOMER}, ${product("prod2")}, 1000, ${destination}, '2026-11-21', ${OPERATOR})`,
+    values (${site}, '550/DO-LOG/XYZ/XI/2026', '2026-11-20', ${CUSTOMER}, ${product("prod2")}, 1000, ${destination}, '2026-11-21', ${OPERATOR})`,
   );
   ok(
     "delivery order without a contract (transfer, waste)",
     `
     insert into delivery_orders (site_id, do_no, do_date, partner_id, product_id, qty, destination_id, delivery_from, created_by)
-    values (${site}, '551/DO-LOG/INL/XI/2026', '2026-11-20', ${CUSTOMER}, ${product("prod2")}, 30000, ${destination}, '2026-11-21', ${OPERATOR})`,
+    values (${site}, '551/DO-LOG/XYZ/XI/2026', '2026-11-20', ${CUSTOMER}, ${product("prod2")}, 30000, ${destination}, '2026-11-21', ${OPERATOR})`,
   );
   reject(
     "outgoing request submitted without close cargo / flexi bag",
@@ -212,7 +212,7 @@ describe("constraint scenarios", () => {
     insert into registrations (site_id, reg_no, direction, flow_code, partner_id, transporter_id, status, truck_count, qty_total, close_cargo, flexi_bag, created_via, created_by)
       values (${site}, 'REG-3', 'OUT', 'OUT_BULK', ${CUSTOMER}, ${TRANSPORTER}, 'SUBMITTED', 4, 120000, false, false, 'PORTAL', ${TRANSPORTER_USER});
     insert into registration_allocations (registration_id, seq, delivery_order_id, contract_no, do_no, qty_planned)
-      values (${registration("REG-3")}, 1, ${DO_550}, '101A/SC/FR/INL/X/2026', '550/DO-LOG/INL/XI/2026', 120000)`,
+      values (${registration("REG-3")}, 1, ${DO_550}, '101A/SC/FR/XYZ/X/2026', '550/DO-LOG/XYZ/XI/2026', 120000)`,
   );
   reject(
     "allocation with a contract and a delivery order",

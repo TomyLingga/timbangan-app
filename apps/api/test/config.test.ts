@@ -67,10 +67,4 @@ describe("loadConfig", () => {
     });
     expect(loadConfig({ ...base, ...portal, PORTAL_APP_NAME: undefined }).portal).toBeNull();
   });
-
-  it("gives the VCF group only when all three keys are set", () => {
-    const vcf = { VCF_URL: "http://127.0.0.1:9100", VCF_USERNAME: "reader", VCF_PASSWORD: "secret" };
-    expect(loadConfig({ ...base, ...vcf }).vcf).toEqual({ url: "http://127.0.0.1:9100", username: "reader", password: "secret" });
-    expect(loadConfig({ ...base, ...vcf, VCF_USERNAME: "" }).vcf).toBeNull();
-  });
 });

@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "migrate": "tsx --env-file-if-exists=.env src/cli/migrate.ts",
     "user:create": "tsx --env-file-if-exists=.env src/cli/user-create.ts",
-    "sync:odoo": "tsx --env-file-if-exists=.env src/cli/sync-odoo.ts"
+    "sync:odoo": "tsx --env-file-if-exists=.env src/cli/sync-odoo.ts",
+    "sync:vcf": "tsx --env-file-if-exists=.env src/cli/sync-vcf.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.17",

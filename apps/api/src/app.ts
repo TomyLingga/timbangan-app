@@ -9,8 +9,14 @@ import { registerSsoRoutes } from "./auth/sso-routes.js";
 import type { Config } from "./config.js";
 import { registerContractRoutes } from "./contracts/routes.js";
 import type { Database } from "./db/client.js";
+import { registerDestinationRoutes } from "./destinations/routes.js";
+import { registerDriverRoutes } from "./drivers/routes.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
+import { registerPartnerRoutes } from "./partners/routes.js";
+import { registerUserAdminRoutes } from "./users/routes.js";
+import { registerVcfRoutes } from "./vcf/routes.js";
+import { registerVehicleRoutes } from "./vehicles/routes.js";
 
 export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
@@ -62,6 +68,12 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerSsoRoutes(app, context);
   registerSyncRoutes(app, context, guards);
   registerContractRoutes(app, context, guards);
+  registerUserAdminRoutes(app, context, guards);
+  registerVcfRoutes(app, context, guards);
+  registerDriverRoutes(app, context, guards);
+  registerVehicleRoutes(app, context, guards);
+  registerPartnerRoutes(app, context, guards);
+  registerDestinationRoutes(app, context, guards);
 
   return app;
 }

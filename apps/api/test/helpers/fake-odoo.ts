@@ -141,7 +141,7 @@ export function sampleOdooRecords(): Record<string, OdooRow[]> {
   });
   const sale = (id: number, state: string, extra: Record<string, unknown> = {}): OdooRow => ({
     id,
-    name: `10${id}A/SC/FR/INL/X/2026`,
+    name: `10${id}A/SC/FR/XYZ/X/2026`,
     partner_id: [12, "PT Customer C"],
     state,
     po_customer: "PO-77",
@@ -169,11 +169,11 @@ export function sampleOdooRecords(): Record<string, OdooRow[]> {
     })),
     "sale.blanket.order": [sale(1, "open"), sale(2, "done", { po_customer: false, certificate: false }), sale(3, "expired"), sale(4, "draft")],
     "sale.blanket.order.line": [
-      { id: 201, order_id: [1, "101A/SC/FR/INL/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 2000000, delivered_uom_qty: 150000.5 },
-      { id: 202, order_id: [1, "101A/SC/FR/INL/X/2026"], product_id: [23, "Freight"], product_uom: [1, "Unit"], original_uom_qty: 1, delivered_uom_qty: 0 },
-      { id: 203, order_id: [2, "102A/SC/FR/INL/X/2026"], product_id: [24, "Minyak Goreng 1L"], product_uom: [9, "Karton"], original_uom_qty: 500, delivered_uom_qty: 0 },
-      { id: 204, order_id: [3, "103A/SC/FR/INL/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 10000, delivered_uom_qty: 10000 },
-      { id: 205, order_id: [4, "104A/SC/FR/INL/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 10000, delivered_uom_qty: 0 },
+      { id: 201, order_id: [1, "101A/SC/FR/XYZ/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 2000000, delivered_uom_qty: 150000.5 },
+      { id: 202, order_id: [1, "101A/SC/FR/XYZ/X/2026"], product_id: [23, "Freight"], product_uom: [1, "Unit"], original_uom_qty: 1, delivered_uom_qty: 0 },
+      { id: 203, order_id: [2, "102A/SC/FR/XYZ/X/2026"], product_id: [24, "Minyak Goreng 1L"], product_uom: [9, "Karton"], original_uom_qty: 500, delivered_uom_qty: 0 },
+      { id: 204, order_id: [3, "103A/SC/FR/XYZ/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 10000, delivered_uom_qty: 10000 },
+      { id: 205, order_id: [4, "104A/SC/FR/XYZ/X/2026"], product_id: [22, "[OLN] RBD Palm Olein"], product_uom: [3, "kg"], original_uom_qty: 10000, delivered_uom_qty: 0 },
     ],
     "product.product": [
       { id: 21, name: "Crude Palm Oil", default_code: "CPO", uom_id: [3, "kg"], type: "product", location_type: false, active: true },
