@@ -1,0 +1,25 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# local settings and secrets: never committed
+.env
+.env.*
+!.env.example
+
+# internal notes and design documents: kept on the development machine only (the repository is public)
+/CLAUDE.md
+/docs/
+
+# local development database (PGlite data folder) and uploaded files
+.data/
+storage/
+
+# editor and OS
+.vscode/*
+!.vscode/extensions.json
+Thumbs.db
+.DS_Store
