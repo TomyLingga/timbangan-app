@@ -16,6 +16,8 @@ interface FormSheetProps {
   /** Message for a failure of the whole form, shown next to the buttons. */
   error?: string | null;
   onSubmit: () => void;
+  /** Where focus goes when the sheet closes. Without it, focus returns to the button that opened it. */
+  returnFocus?: () => void;
   children: ReactNode;
 }
 
@@ -29,6 +31,7 @@ export function FormSheet({
   pending,
   error,
   onSubmit,
+  returnFocus,
   children,
 }: FormSheetProps) {
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -40,6 +43,14 @@ export function FormSheet({
     <Sheet open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
       <SheetContent
         side="right"
+        onCloseAutoFocus={
+          returnFocus
+            ? (event) => {
+                event.preventDefault();
+                returnFocus();
+              }
+            : undefined
+        }
         className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-md"
       >
         <SheetHeader className="border-b px-4 py-4 pr-14 sm:px-5">

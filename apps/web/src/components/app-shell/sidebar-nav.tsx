@@ -4,18 +4,20 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   ClipboardList,
+  CreditCard,
   FileText,
   House,
   IdCard,
   Map,
   MapPin,
   PackageCheck,
+  ScanLine,
   Truck,
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
 
-import { canManageUsers, isStaff } from "@/lib/roles";
+import { navigationFor, type NavHref } from "@/lib/navigation";
 import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -24,30 +26,23 @@ interface NavItem {
   icon: LucideIcon;
 }
 
-interface NavLink extends NavItem {
-  href: string;
-  /** Who gets the entry. The page behind it applies the same rule on a direct visit. */
-  visible: (user: User) => boolean;
-}
-
-const everyone = () => true;
-
-const AVAILABLE: ReadonlyArray<NavLink> = [
-  { href: "/", label: "Beranda", icon: House, visible: everyone },
-  { href: "/kontrak", label: "Kontrak", icon: FileText, visible: everyone },
-  { href: "/supir", label: "Supir", icon: IdCard, visible: isStaff },
-  { href: "/kendaraan", label: "Kendaraan", icon: Truck, visible: everyone },
-  { href: "/tujuan", label: "Tujuan", icon: MapPin, visible: isStaff },
-  { href: "/pengguna", label: "Pengguna", icon: UsersRound, visible: canManageUsers },
-];
+// Who gets which entry is decided in lib/navigation.ts.
+const ENTRIES: Readonly<Record<NavHref, NavItem>> = {
+  "/": { label: "Beranda", icon: House },
+  "/registrasi": { label: "Registrasi", icon: ClipboardList },
+  "/delivery-order": { label: "Delivery Order", icon: PackageCheck },
+  "/pos": { label: "Pos registrasi", icon: ScanLine },
+  "/kontrak": { label: "Kontrak", icon: FileText },
+  "/supir": { label: "Supir", icon: IdCard },
+  "/kendaraan": { label: "Kendaraan", icon: Truck },
+  "/tujuan": { label: "Tujuan", icon: MapPin },
+  "/kartu": { label: "Kartu RFID", icon: CreditCard },
+  "/pengguna": { label: "Pengguna", icon: UsersRound },
+};
 
 // Modules that come in later phases. Listed so people know they are planned,
 // rendered as plain text so nothing leads to a page that does not exist.
-const PLANNED: ReadonlyArray<NavItem> = [
-  { label: "Registrasi", icon: ClipboardList },
-  { label: "Delivery Order", icon: PackageCheck },
-  { label: "Denah", icon: Map },
-];
+const PLANNED: ReadonlyArray<NavItem> = [{ label: "Denah", icon: Map }];
 
 function isCurrent(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
@@ -59,7 +54,8 @@ export function SidebarNav({ user, onNavigate }: { user: User; onNavigate?: () =
   return (
     <nav aria-label="Menu utama" className="flex flex-1 flex-col gap-6 overflow-y-auto p-3">
       <ul className="flex flex-col gap-1">
-        {AVAILABLE.filter((item) => item.visible(user)).map((item) => {
+        {navigationFor(user).map((href) => {
+          const item = { href, ...ENTRIES[href] };
           const current = isCurrent(pathname, item.href);
           return (
             <li key={item.href}>

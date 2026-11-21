@@ -78,6 +78,74 @@ export function userAdminErrorMessage(error: unknown): string {
   return errorMessage(error);
 }
 
+// --- phase 3 ----------------------------------------------------------------
+
+const GATE_REFUSALS: Record<string, string> = {
+  SPJ_NOT_FOUND: "Kode SPJ ini tidak dikenal. Periksa lagi kodenya, atau minta SPJ dicetak ulang.",
+  SPJ_EXPIRED: "Masa berlaku SPJ sudah lewat. Truk tidak bisa check-in dengan SPJ ini.",
+  SPJ_REVOKED: "SPJ ini sudah dicabut. Truk perlu SPJ yang baru.",
+  ALREADY_CHECKED_IN: "Truk ini sudah check-in. SPJ yang sama tidak bisa dipakai dua kali.",
+  CARD_UNKNOWN: "Kartu ini belum terdaftar. Pakai kartu lain, atau minta admin logistik mendaftarkannya.",
+  CARD_IN_USE: "Kartu ini sedang dipakai truk lain. Pakai kartu lain.",
+  CARD_NOT_AVAILABLE: "Kartu ini tercatat hilang atau tidak dipakai lagi. Pakai kartu lain.",
+  VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik. Selesaikan perjalanan sebelumnya dulu.",
+  DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik. Selesaikan perjalanan sebelumnya dulu.",
+  DRIVER_BLACKLISTED: "Supir masuk daftar hitam VCF. Truk tidak boleh check-in.",
+  INVALID_STATE: "Status truk ini tidak memungkinkan tindakan itu. Scan ulang SPJ-nya.",
+};
+
+/** Refusals at the registration post (scan, check-in, replace card, cancel). */
+export function gateErrorMessage(error: unknown): string {
+  if (isApiError(error) && GATE_REFUSALS[error.code]) return GATE_REFUSALS[error.code];
+  return errorMessage(error);
+}
+
+const REGISTRATION_REFUSALS: Record<string, string> = {
+  DRIVER_BLACKLISTED: "Supir ini masuk daftar hitam VCF, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
+  DRIVER_BLOCKED: "Supir ini sedang diblokir di pabrik, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
+  FLOW_MISMATCH: "Kontrak yang dipilih tidak bisa digabung dalam satu registrasi karena alur barangnya berbeda.",
+  TOO_MANY_ALLOCATIONS: "Terlalu banyak kontrak atau DO untuk satu registrasi.",
+  DUPLICATE_IN_REGISTRATION: "Kendaraan atau supir yang sama dipakai dua kali dalam registrasi ini.",
+  CONTRACT_NOT_OPEN: "Ada kontrak yang sudah tidak terbuka. Hapus kontrak itu dari registrasi.",
+  DELIVERY_ORDER_NOT_OPEN: "Ada DO yang belum diterima atau sudah ditutup. Hapus DO itu dari registrasi.",
+  VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
+  DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik.",
+  INVALID_STATE: "Registrasi ini sudah berubah status. Muat ulang halaman, lalu coba lagi.",
+};
+
+/** Saving or sending a registration. */
+export function registrationErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (REGISTRATION_REFUSALS[error.code]) return REGISTRATION_REFUSALS[error.code];
+    if (error.code === "VALIDATION" || error.status === 400) {
+      return "Server menolak isian ini. Periksa kolom yang ditandai, lalu kirim lagi.";
+    }
+    if (error.status === 403) return "Akun ini tidak punya izin membuat registrasi ini.";
+  }
+  return errorMessage(error);
+}
+
+/** Status changes: send, accept, close, cancel, approve, reject. */
+export function transitionErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (error.code === "INVALID_STATE") {
+      return "Statusnya sudah berubah sejak halaman ini dibuka. Muat ulang halaman, lalu coba lagi.";
+    }
+    if (error.status === 403) return "Akun ini tidak punya izin untuk tindakan ini.";
+    if (error.code === "VALIDATION" || error.status === 400) {
+      return "Server menolak isian ini. Periksa kolom yang ditandai, lalu coba lagi.";
+    }
+  }
+  return errorMessage(error);
+}
+
+export function cardSaveErrorMessage(error: unknown): string {
+  if (isApiError(error) && (error.code === "CARD_IN_USE" || error.code === "INVALID_STATE")) {
+    return "Kartu ini sedang terikat ke truk, jadi statusnya belum bisa diubah.";
+  }
+  return saveErrorMessage(error, "UID kartu ini sudah terdaftar.");
+}
+
 export function syncErrorMessage(error: unknown): string {
   if (isApiError(error)) {
     if (error.code === "SYNC_RUNNING" || error.status === 409) {

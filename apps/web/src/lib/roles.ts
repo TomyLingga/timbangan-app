@@ -63,6 +63,50 @@ export function canManageUsers(user: User | null | undefined): boolean {
   return !!user && user.roles.includes("SUPER_ADMIN");
 }
 
+// --- phase 3: registrations, delivery orders, the post, RFID cards ----------
+
+const ADMIN_ROLES: ReadonlySet<string> = new Set(["SUPER_ADMIN", "LOGISTICS_ADMIN"]);
+/** Staff who may register a truck on behalf of a partner (created_via OPERATOR). */
+const REGISTERING_STAFF: ReadonlySet<string> = new Set(["SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR"]);
+const SUPPLIER: ReadonlySet<string> = new Set(["PARTNER_SUPPLIER"]);
+const TRANSPORTER: ReadonlySet<string> = new Set(["PARTNER_TRANSPORTER"]);
+
+export function isTransporterAccount(user: User | null | undefined): boolean {
+  return user?.kind === "PARTNER" && hasAny(user, TRANSPORTER);
+}
+
+export function canSeeRegistrations(user: User | null | undefined): boolean {
+  return hasAny(user, REGISTERING_STAFF) || hasAny(user, SUPPLIER) || hasAny(user, TRANSPORTER);
+}
+
+export function canCreateIncoming(user: User | null | undefined): boolean {
+  return hasAny(user, REGISTERING_STAFF) || hasAny(user, SUPPLIER);
+}
+
+export function canCreateOutgoing(user: User | null | undefined): boolean {
+  return hasAny(user, REGISTERING_STAFF) || hasAny(user, TRANSPORTER);
+}
+
+export function canReviewRegistrations(user: User | null | undefined): boolean {
+  return hasAny(user, ADMIN_ROLES);
+}
+
+export function canSeeDeliveryOrders(user: User | null | undefined): boolean {
+  return hasAny(user, ADMIN_ROLES) || hasAny(user, TRANSPORTER);
+}
+
+export function canManageDeliveryOrders(user: User | null | undefined): boolean {
+  return hasAny(user, ADMIN_ROLES);
+}
+
+export function canUseGate(user: User | null | undefined): boolean {
+  return hasAny(user, REGISTERING_STAFF);
+}
+
+export function canManageCards(user: User | null | undefined): boolean {
+  return hasAny(user, ADMIN_ROLES);
+}
+
 /** Roles an account of this kind can hold: staff roles for staff, partner roles for partners. */
 export function rolesForKind(roles: readonly RoleDefinition[], kind: UserKind): RoleDefinition[] {
   return roles.filter((role) => role.scope === kind);

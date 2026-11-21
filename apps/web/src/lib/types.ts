@@ -172,3 +172,208 @@ export interface Destination {
   province: string | null;
   isActive: boolean;
 }
+
+// --- phase 3: RFID cards, delivery orders, registrations, trips, SPJ --------
+// Shapes from section 3 of docs/fase-3-rancangan.md. Status values are typed as
+// string because the contract may grow them (Phase 4 adds trip statuses).
+
+export type Numeric = number | string | null;
+
+export interface RfidCard {
+  id: string | number;
+  uid: string;
+  label: string | null;
+  status: string;
+  note: string | null;
+  trip: { id: string | number; tripNo: string | null; plateNo: string | null } | null;
+}
+
+export interface DeliveryOrder {
+  id: string | number;
+  doNo: string;
+  doDate: string | null;
+  status: string;
+  contract: { id: string | number; contractNo: string } | null;
+  customerPoNo: string | null;
+  /** The contract names it "partner" without a shape; read as a reference. */
+  partner: PartnerRef | null;
+  product: { id: string | number; name: string; category: string | null } | null;
+  qty: Numeric;
+  uom: string | null;
+  tolerancePct: Numeric;
+  destination: {
+    id: string | number;
+    name: string;
+    address: string | null;
+    district: string | null;
+    regency: string | null;
+    province: string | null;
+  } | null;
+  deliveryFrom: string | null;
+  deliveryUntil: string | null;
+  transportTerms: string | null;
+  transporter: PartnerRef | null;
+  truckCount: number | null;
+  truckCountBy: string | null;
+  qtyPlanned: Numeric;
+  qtyRemaining: Numeric;
+  tripCount: number | null;
+  remark: string | null;
+  sentAt: string | null;
+  acceptedAt: string | null;
+}
+
+/** One finding of a registration check. `tripSeq` and `allocationSeq` point at what it is about. */
+export interface Finding {
+  code: string;
+  message: string | null;
+  tripSeq?: number | null;
+  allocationSeq?: number | null;
+}
+
+export interface TripAllocation {
+  seq: number;
+  qtyPlanned: Numeric;
+  handoverNo: string | null;
+  spbNo: string | null;
+  spbDate: string | null;
+  originTicketNo: string | null;
+  originGrossKg: Numeric;
+  originTareKg: Numeric;
+  originNetKg: Numeric;
+  quality: Record<string, number | string> | null;
+}
+
+export interface Spj {
+  id: string | number;
+  spjNo: string;
+  barcodeToken: string;
+  issuedAt: string | null;
+  validUntil: string | null;
+  printCount: number | null;
+}
+
+export interface Trip {
+  id: string | number;
+  seq: number;
+  tripNo: string | null;
+  status: string;
+  vehicle: { id: string | number; plateNo: string; plateDisplay: string; vehicleTypeCode: string | null } | null;
+  driver: { id: string | number; fullName: string; licenceNo: string; registryStatus: string | null } | null;
+  containerNo: string | null;
+  plannedArrival: string | null;
+  qtyPlanned: Numeric;
+  docGrossKg: Numeric;
+  docTareKg: Numeric;
+  docNetKg: Numeric;
+  allocations: TripAllocation[];
+  spj: Spj | null;
+  card: { uid: string; label: string | null } | null;
+  checkedInAt: string | null;
+}
+
+/** `Trip` in short, with what the lists at the post need. Every extra field is optional on purpose. */
+export interface TripSummary extends Partial<Omit<Trip, "id" | "status">> {
+  id: string | number;
+  status: string;
+  direction?: Direction | null;
+  flowCode?: string | null;
+  partner?: PartnerRef | null;
+  transporter?: PartnerRef | null;
+  currentStep?: string | null;
+}
+
+export interface RegistrationAllocation {
+  seq: number;
+  contract: { id: string | number; contractNo: string } | null;
+  deliveryOrder: { id: string | number; doNo: string } | null;
+  contractNo: string | null;
+  doNo: string | null;
+  qtyPlanned: Numeric;
+  tolerancePct: Numeric;
+  product: { id: string | number; name: string; category?: string | null } | null;
+  partner: PartnerRef | null;
+}
+
+export interface Registration {
+  id: string | number;
+  regNo: string;
+  direction: Direction;
+  flowCode: string | null;
+  status: string;
+  partner: PartnerRef | null;
+  transporter: PartnerRef | null;
+  plannedDate: string | null;
+  truckCount: number | null;
+  qtyTotal: Numeric;
+  uom: string | null;
+  closeCargo: boolean | null;
+  flexiBag: boolean | null;
+  remark: string | null;
+  createdVia: string | null;
+  createdBy: { id: string | number; fullName: string } | null;
+  submittedAt: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
+  findings: Finding[];
+  allocations: RegistrationAllocation[];
+  trips: Trip[];
+}
+
+/**
+ * The contract names `RegistrationSummary` without its fields. The list reads
+ * the fields of `Registration` it needs and treats every one as optional.
+ */
+export type RegistrationSummary = Partial<Registration> & Pick<Registration, "id" | "regNo" | "status">;
+
+export interface SpjPrint {
+  spjNo: string;
+  barcodeToken: string;
+  issuedAt: string | null;
+  validUntil: string | null;
+  /** Shape left open by the contract: a code, a name, or both. */
+  site: string | { code?: string | null; name?: string | null } | null;
+  direction: Direction;
+  driver: { fullName: string; licenceNo: string } | null;
+  vehicle: { plateDisplay: string; vehicleType: string | null } | null;
+  transporter: PartnerRef | string | null;
+  lines: SpjLine[];
+}
+
+export interface SpjLine {
+  contractNo: string | null;
+  doNo: string | null;
+  product: { name: string } | string | null;
+  qtyPlanned: Numeric;
+  uom: string | null;
+  partner: PartnerRef | string | null;
+  destination: { name: string; address?: string | null } | string | null;
+}
+
+export interface GateCheck {
+  code: string;
+  level: string;
+  message: string | null;
+}
+
+export interface GateScan {
+  trip: TripSummary;
+  checks: GateCheck[];
+}
+
+/** Not in the contract: the incoming form needs the parameter list and its plausible range. */
+export interface QualityParameter {
+  code: string;
+  name: string;
+  unit: string | null;
+  decimals: number | null;
+  minValid: Numeric;
+  maxValid: Numeric;
+}
+
+/** Not in the contract: a delivery order without a contract needs a product to choose from. */
+export interface Product {
+  id: string | number;
+  name: string;
+  category: string | null;
+}

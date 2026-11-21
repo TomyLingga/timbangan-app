@@ -24,7 +24,7 @@ const subscribeNever = () => () => {};
  * forwarded to the callback page before the session is even looked at, because
  * sending an anonymous visitor to /login first would throw the ticket away.
  */
-export function AuthGate({ children }: { children: ReactNode }) {
+export function AuthGate({ children, bare = false }: { children: ReactNode; /** No app shell around the page (print pages). */ bare?: boolean }) {
   const router = useRouter();
   const { state, restore } = useAuth();
   const forwardTarget = useSyncExternalStore(subscribeNever, currentForwardTarget, () => null);
@@ -69,6 +69,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       return <NoRoleScreen user={null} />;
     case "authenticated":
       if (awaitsRoleAssignment(state.user)) return <NoRoleScreen user={state.user} />;
+      if (bare) return <>{children}</>;
       return <AppShell user={state.user}>{children}</AppShell>;
   }
 }

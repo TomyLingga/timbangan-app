@@ -1,4 +1,4 @@
-import type { SyncRun } from "@/lib/types";
+import type { Finding, GateCheck, SyncRun } from "@/lib/types";
 
 // The API contract names the `state` and `status` fields but not their values.
 // Known spellings get an Indonesian label; anything else is shown as received,
@@ -120,6 +120,105 @@ export function expirySummary(expired: readonly string[] | null | undefined): st
     .sort((a, b) => rank(a) - rank(b))
     .map(expiredDocumentLabel)
     .join(", ");
+}
+
+// --- phase 3 ----------------------------------------------------------------
+
+const DRAFT: StatusInfo = { label: "Draf", tone: "neutral" };
+const AWAITING_REVIEW: StatusInfo = { label: "Menunggu tinjauan", tone: "warning" };
+
+const DELIVERY_ORDER_STATUSES: Record<string, StatusInfo> = {
+  draft: DRAFT,
+  sent: { label: "Menunggu transporter", tone: "warning" },
+  accepted: { label: "Diterima transporter", tone: "success" },
+  closed: CLOSED,
+  cancelled: CANCELLED,
+};
+
+export function deliveryOrderStatusInfo(status: string): StatusInfo {
+  return lookup(DELIVERY_ORDER_STATUSES, status);
+}
+
+const REGISTRATION_STATUSES: Record<string, StatusInfo> = {
+  draft: DRAFT,
+  submitted: AWAITING_REVIEW,
+  approved: { label: "Disetujui", tone: "success" },
+  rejected: { label: "Ditolak", tone: "destructive" },
+  cancelled: CANCELLED,
+};
+
+export function registrationStatusInfo(status: string): StatusInfo {
+  return lookup(REGISTRATION_STATUSES, status);
+}
+
+const TRIP_STATUSES: Record<string, StatusInfo> = {
+  draft: DRAFT,
+  ready: AWAITING_REVIEW,
+  issued: { label: "SPJ terbit", tone: "success" },
+  checked_in: { label: "Sudah check-in", tone: "success" },
+  cancelled: CANCELLED,
+  expired: { label: "SPJ kedaluwarsa", tone: "destructive" },
+};
+
+export function tripStatusInfo(status: string): StatusInfo {
+  return lookup(TRIP_STATUSES, status);
+}
+
+const CARD_STATUSES: Record<string, StatusInfo> = {
+  available: { label: "Tersedia", tone: "success" },
+  in_use: { label: "Dipakai truk", tone: "warning" },
+  lost: { label: "Hilang", tone: "destructive" },
+  retired: { label: "Tidak dipakai lagi", tone: "neutral" },
+};
+
+export function cardStatusInfo(status: string): StatusInfo {
+  return lookup(CARD_STATUSES, status);
+}
+
+/**
+ * Findings of a registration and checks at the post share their codes. Each
+ * known code gets a plain sentence; for an unknown one the server's text is
+ * shown (these texts describe the truck, not the program), or the code.
+ */
+const CHECK_SENTENCES: Record<string, string> = {
+  DRIVER_WARNING: "Supir berstatus Warning di VCF.",
+  DRIVER_NOT_IN_REGISTRY: "Supir belum ada di VCF.",
+  DRIVER_BLACKLISTED: "Supir masuk daftar hitam VCF.",
+  DRIVER_BLOCKED: "Supir sedang diblokir di pabrik ini.",
+  LICENCE_EXPIRED: "SIM supir sudah lewat masa berlaku.",
+  VEHICLE_UNVERIFIED: "Kendaraan baru dan belum diverifikasi admin.",
+  STNK_EXPIRED: "STNK kendaraan sudah lewat masa berlaku.",
+  TAX_EXPIRED: "Pajak kendaraan sudah lewat masa berlaku.",
+  KIR_EXPIRED: "KIR kendaraan sudah lewat masa berlaku.",
+  OVER_CONTRACT: "Netto surat melebihi sisa kontrak.",
+  OVER_DO: "Rencana quantity melebihi sisa DO.",
+  OVER_CAPACITY: "Rencana muatan melebihi daya angkut kendaraan.",
+  OUTSIDE_DELIVERY_WINDOW: "Tanggal datang di luar masa kirim DO.",
+  SPJ_EXPIRED: "Masa berlaku SPJ sudah lewat.",
+  SPJ_REVOKED: "SPJ ini sudah dicabut.",
+  ALREADY_CHECKED_IN: "Truk ini sudah check-in.",
+  VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
+  DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik.",
+  TRIP_CANCELLED: "Perjalanan ini sudah dibatalkan.",
+  TRIP_NOT_ISSUED: "SPJ truk ini belum terbit.",
+};
+
+export function checkSentence(check: { code: string; message: string | null }): string {
+  return CHECK_SENTENCES[check.code] ?? (check.message?.trim() || check.code);
+}
+
+/** "Truk 2, alokasi 1": what a finding points at, or null when it is about the whole registration. */
+export function findingWhere(finding: Pick<Finding, "tripSeq" | "allocationSeq"> & { code?: string; message?: string | null }): string | null {
+  const parts: string[] = [];
+  if (finding.tripSeq !== null && finding.tripSeq !== undefined) parts.push(`Truk ${finding.tripSeq}`);
+  if (finding.allocationSeq !== null && finding.allocationSeq !== undefined) {
+    parts.push(parts.length > 0 ? `alokasi ${finding.allocationSeq}` : `Alokasi ${finding.allocationSeq}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : null;
+}
+
+export function isBlocking(check: Pick<GateCheck, "level"> & Partial<GateCheck>): boolean {
+  return check.level.trim().toUpperCase() === "BLOCK";
 }
 
 export function syncEntityLabel(entity: string): string {

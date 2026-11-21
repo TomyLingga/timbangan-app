@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { CircleAlert, CircleCheck, Lock, RefreshCw, Search, SearchX, X } from "lucide-react";
+import { CircleAlert, CircleCheck, Lock, RefreshCw, Search, SearchX, TriangleAlert, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -85,18 +85,17 @@ export function SearchField({
   );
 }
 
-/** Result of an action (sync, save): one line with an icon, announced politely. */
-export function Notice({ tone, children }: { tone: "success" | "error"; children: ReactNode }) {
-  const Icon = tone === "success" ? CircleCheck : CircleAlert;
+const NOTICE_TONES = {
+  success: { icon: CircleCheck, classes: "border-success/30 bg-success-subtle text-success" },
+  warning: { icon: TriangleAlert, classes: "border-warning/30 bg-warning-subtle text-warning" },
+  error: { icon: CircleAlert, classes: "border-destructive/30 bg-destructive-subtle text-destructive" },
+} as const;
+
+/** Result of an action (sync, save), or a caution on a form: one line with an icon. */
+export function Notice({ tone, children }: { tone: "success" | "warning" | "error"; children: ReactNode }) {
+  const { icon: Icon, classes } = NOTICE_TONES[tone];
   return (
-    <p
-      className={cn(
-        "flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm",
-        tone === "success"
-          ? "border-success/30 bg-success-subtle text-success"
-          : "border-destructive/30 bg-destructive-subtle text-destructive",
-      )}
-    >
+    <p className={cn("flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm", classes)}>
       <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </p>
