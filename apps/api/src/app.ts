@@ -14,6 +14,8 @@ import { registerDestinationRoutes } from "./destinations/routes.js";
 import { registerDriverRoutes } from "./drivers/routes.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { registerGateRoutes } from "./gate/routes.js";
+import { registerLookupRoutes } from "./lookup/routes.js";
+import { registerProductRoutes } from "./products/routes.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
 import { registerTripRoutes } from "./trips/routes.js";
 import { registerPartnerRoutes } from "./partners/routes.js";
@@ -93,6 +95,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerDriverRoutes(app, context, guards);
   registerVehicleRoutes(app, context, guards);
   registerPartnerRoutes(app, context, guards);
+  registerProductRoutes(app, context, guards);
+  registerLookupRoutes(app, context, guards);
   registerDestinationRoutes(app, context, guards);
   registerRfidCardRoutes(app, context, guards);
   registerDeliveryOrderRoutes(app, context, guards);
