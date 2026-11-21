@@ -168,6 +168,7 @@ describe("POST /api/auth/sso/exchange", () => {
 describe("bootstrap admins", () => {
   const EVERY_ACTIVE_MODULE = {
     contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
+    weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW",
   };
 
   async function withBootstrap(emails: string) {
@@ -204,9 +205,9 @@ describe("bootstrap admins", () => {
     const first = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
     expect(first.permissions).not.toHaveProperty("dashboard");
 
-    await database.query("update modules set is_active = true where code in ('dashboard', 'approvals')");
+    await database.query("update modules set is_active = true where code = 'dashboard'");
     const later = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
-    expect(later.permissions).toEqual({ ...EVERY_ACTIVE_MODULE, approvals: "EDIT", dashboard: "VIEW" });
+    expect(later.permissions).toEqual({ ...EVERY_ACTIVE_MODULE, dashboard: "VIEW" });
   });
 
   it("grants nothing when the setting is empty", async () => {

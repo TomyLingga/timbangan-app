@@ -1,9 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { onTestFinished } from "vitest";
+import { inject, onTestFinished } from "vitest";
 import { type AppOptions, buildApp } from "../../src/app.js";
 import { type Config, loadConfig } from "../../src/config.js";
 import { createDb, type Database } from "../../src/db/client.js";
 import { migrate } from "../../src/db/migrate.js";
+import { serverDatabase } from "../pg/server.js";
 
 export const TEST_JWT_SECRET = "test-secret-test-secret-test-secret-0123";
 
@@ -16,9 +17,19 @@ export class TestClock {
   }
 }
 
-/** A fresh in-memory database with every migration applied; closed when the test ends. */
+/**
+ * A database without tables: in-process PGlite, or under `npm run test:pg` a new database on the PostgreSQL server
+ * that is dropped when it is closed. The caller closes it.
+ */
+export async function emptyDatabase(): Promise<Database> {
+  const server = inject("pgServer");
+  return server ? serverDatabase(server, false) : createDb("pglite://memory");
+}
+
+/** A fresh database with every migration applied; closed (and on a server dropped) when the test ends. */
 export async function freshDatabase(): Promise<Database> {
-  const database = await createDb("pglite://memory");
+  const server = inject("pgServer");
+  const database = server ? await serverDatabase(server, true) : await createDb("pglite://memory");
   onTestFinished(() => database.close());
   await migrate(database);
   return database;
@@ -36,7 +47,9 @@ export async function testApp(env: Record<string, string> = {}, options: Partial
   const database = await freshDatabase();
   const config = loadConfig({ DATABASE_URL: "pglite://memory", JWT_SECRET: TEST_JWT_SECRET, ...env });
   const clock = new TestClock();
-  const app = await buildApp({ config, database, now: clock.now, logger: false, ...options });
+  // TEST_LOG_ERRORS=1 prints the cause of each 500, which the answer itself never carries
+  const logger = process.env.TEST_LOG_ERRORS === "1" ? { level: "error" } : false;
+  const app = await buildApp({ config, database, now: clock.now, logger, ...options });
   onTestFinished(() => app.close());
   return { app, database, config, clock };
 }

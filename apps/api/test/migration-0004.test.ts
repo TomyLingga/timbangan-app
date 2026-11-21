@@ -4,8 +4,9 @@ import { copyFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createDb, type Database } from "../src/db/client.js";
+import type { Database } from "../src/db/client.js";
 import { MIGRATIONS_DIR, migrate } from "../src/db/migrate.js";
+import { emptyDatabase } from "./helpers/app.js";
 
 const BEFORE = ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql"];
 const folders: string[] = [];
@@ -20,7 +21,7 @@ async function databaseBefore0004(): Promise<{ db: Database; dir: string }> {
   const dir = await mkdtemp(join(tmpdir(), "timbangan-0004-"));
   folders.push(dir);
   for (const name of BEFORE) await copyFile(join(MIGRATIONS_DIR, name), join(dir, name));
-  database = await createDb("pglite://memory");
+  database = await emptyDatabase();
   expect((await migrate(database, { dir })).applied).toEqual(BEFORE);
   return { db: database, dir };
 }

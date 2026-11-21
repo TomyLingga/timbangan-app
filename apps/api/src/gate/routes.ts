@@ -7,7 +7,7 @@ import { accountOf, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import { cardAssignments, drivers, flowSteps, registrations, rfidCards, spjDocuments, trips, tripSteps, vehicles } from "../db/schema.js";
-import { AppError, invalidState, refused } from "../errors.js";
+import { AppError, invalidState, refused, violatedUnique } from "../errors.js";
 import { idNumber, todayAtPlant } from "../http.js";
 import { nextDocumentNo } from "../numbering.js";
 import { driverPolicy, isDriverBlocked, registryVerdict, vehicleFindings } from "../registrations/checks.js";
@@ -16,6 +16,7 @@ import { siteById } from "../settings.js";
 import { releaseCard } from "../trips/routes.js";
 import { normaliseToken } from "../trips/spj.js";
 import { ARRIVED_STATUSES, expireDueTrips, INSIDE_STATUSES, loadTrips } from "../trips/view.js";
+import { finishStep, loadSteps, readyStep } from "../weighing/steps.js";
 
 const uidField = z
   .string("UID kartu wajib diisi.")
@@ -28,6 +29,8 @@ const replaceBody = z.object({
   reason: z.enum(["REPLACED", "LOST"], "Alasan harus REPLACED atau LOST."),
 });
 
+const checkOutBody = z.object({ cardUid: uidField });
+
 const spjNotFound = () => new AppError(404, "SPJ_NOT_FOUND", "SPJ dengan kode ini tidak ditemukan.");
 
 /** The refusal code for a unique index that stopped a check-in racing another one; null for other errors. */
@@ -38,16 +41,8 @@ export function uniqueViolation(error: unknown): string | null {
     card_assignments_card_key: "CARD_IN_USE",
     card_assignments_trip_key: "ALREADY_CHECKED_IN",
   };
-  let current: unknown = error;
-  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
-    const fields = current as { code?: unknown; constraint?: unknown; constraint_name?: unknown; cause?: unknown };
-    if (fields.code === "23505") {
-      const name = typeof fields.constraint === "string" ? fields.constraint : typeof fields.constraint_name === "string" ? fields.constraint_name : "";
-      return codes[name] ?? null;
-    }
-    current = fields.cause;
-  }
-  return null;
+  const name = violatedUnique(error);
+  return name === null ? null : (codes[name] ?? null);
 }
 
 const MESSAGES: Record<string, string> = {
@@ -55,6 +50,7 @@ const MESSAGES: Record<string, string> = {
   SPJ_REVOKED: "SPJ ini sudah dicabut. Pakai SPJ yang terbaru.",
   ALREADY_CHECKED_IN: "Truk ini sudah check-in.",
   CARD_UNKNOWN: "Kartu belum terdaftar.",
+  CARD_NOT_IN_USE: "Kartu tidak sedang dipakai truk.",
   CARD_IN_USE: "Kartu sedang dipakai truk lain.",
   CARD_NOT_AVAILABLE: "Kartu berstatus hilang atau tidak dipakai lagi.",
   VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
@@ -195,6 +191,33 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
       if (code) throw refuse(code);
       throw error;
     }
+  });
+
+  // the card comes back at the desk once the exit step is READY: the truck leaves, the card is free again
+  app.post("/api/gate/check-out", { preHandler: [guards.authenticate, guards.requirePermission("gate", "CREATE")] }, async (request) => {
+    const { cardUid } = checkOutBody.parse(request.body);
+    const account = accountOf(request);
+    const now = context.now();
+    const trip = await orm.transaction(async (tx) => {
+      const [card] = await tx.select().from(rfidCards).where(eq(rfidCards.uid, cardUid));
+      if (!card) throw refuse("CARD_UNKNOWN");
+      const [assigned] = await tx.select().from(cardAssignments).where(and(eq(cardAssignments.cardId, card.id), isNull(cardAssignments.releasedAt)));
+      if (!assigned) throw refuse("CARD_NOT_IN_USE");
+      const [current] = await tx.select().from(trips).where(eq(trips.id, assigned.tripId)).for("update");
+      if (!current) throw refuse("CARD_NOT_IN_USE");
+      const ready = readyStep(await loadSteps(tx, current.id));
+      if (!INSIDE_STATUSES.includes(current.status) || ready?.stepCode !== "CHECK_OUT") {
+        throw refused("NOT_READY", `Truk belum sampai langkah keluar.${ready ? ` Langkah sekarang: ${ready.name}.` : ""}`);
+      }
+      await finishStep(tx, ready.id, { status: "DONE", result: "PASS", performedBy: account.id }, now);
+      await releaseCard(tx, current.id, account.id, now, "CHECK_OUT", "AVAILABLE");
+      const outcome = current.outcome ?? "OK";
+      const status = outcome === "OK" ? ("COMPLETED" as const) : ("REJECTED" as const);
+      await tx.update(trips).set({ status, outcome, currentStep: null, completedAt: now, exitedAt: now, updatedAt: now }).where(eq(trips.id, current.id));
+      await writeAudit(tx, request, now, { action: "TRIP_CHECKED_OUT", entityType: "trip", entityId: current.id, before: { status: current.status }, after: { status, outcome, cardUid } });
+      return tripView(tx, current.id);
+    });
+    return { trip };
   });
 
   app.post("/api/gate/replace-card", { preHandler: [guards.authenticate, guards.requirePermission("gate", "EDIT")] }, async (request) => {

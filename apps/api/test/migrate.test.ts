@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createDb, type Database } from "../src/db/client.js";
+import type { Database } from "../src/db/client.js";
 import { MIGRATIONS_DIR, migrate } from "../src/db/migrate.js";
+import { emptyDatabase } from "./helpers/app.js";
 
 let database: Database;
 const folders: string[] = [];
@@ -22,7 +23,7 @@ const publicTables = async () =>
   );
 
 beforeEach(async () => {
-  database = await createDb("pglite://memory");
+  database = await emptyDatabase();
 });
 
 afterEach(async () => {
@@ -33,18 +34,18 @@ afterEach(async () => {
 describe("migrate", () => {
   it("applies the project's migrations to an empty database and records them", async () => {
     const result = await migrate(database);
-    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql"], skipped: [] });
+    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql"], skipped: [] });
 
     const tables = await publicTables();
     expect(tables).toContain("schema_migrations");
-    expect(tables.filter((name) => name !== "schema_migrations")).toHaveLength(47);
+    expect(tables.filter((name) => name !== "schema_migrations")).toHaveLength(48);
     expect(await database.query("select code from sites")).toEqual([{ code: "SMK" }]);
     expect(await database.query("select count(*)::int as n from modules")).toEqual([{ n: 19 }]);
 
     const recorded = await database.query<{ name: string; checksum: string; applied_at: Date }>(
       "select name, checksum, applied_at from schema_migrations order by name",
     );
-    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql"]);
+    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql"]);
     const text = (await readFile(join(MIGRATIONS_DIR, "0001_schema.sql"), "utf8")).replaceAll("\r\n", "\n");
     expect(recorded[0]?.checksum).toBe(createHash("sha256").update(text).digest("hex"));
     expect(recorded[0]?.applied_at).toBeInstanceOf(Date);
@@ -53,8 +54,8 @@ describe("migrate", () => {
   it("applies nothing on a second run", async () => {
     await migrate(database);
     const result = await migrate(database);
-    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql"] });
-    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 4 }]);
+    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql"] });
+    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 5 }]);
     expect(await database.query("select count(*)::int as n from sites")).toEqual([{ n: 1 }]);
   });
 

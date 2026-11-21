@@ -8,6 +8,7 @@ export const PASSWORD = "s3cret-s3cret";
 /** EDIT on every active module. */
 export const EVERYTHING: Permissions = {
   contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
+  weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW",
 };
 /** The logistics office: everything except the user administration. */
 export const LOGISTICS: Permissions = {

@@ -32,6 +32,10 @@ const envSchema = z.object({
   VCF_PASSWORD: z.string().optional(),
   // portal emails that get EDIT on every active module at each sign-in; comma separated
   BOOTSTRAP_ADMIN_EMAILS: z.string().optional(),
+  // the voice of the weighbridge answers; "off" is the only engine built so far
+  TTS_ENGINE: z.enum(["off"], "must be off (the only speech engine built so far)").default("off"),
+  // where the audio of each sentence is kept, per engine
+  TTS_CACHE_DIR: z.string().default(".data/tts-cache"),
 });
 
 export interface OdooConfig {
@@ -55,6 +59,11 @@ export interface VcfConfig {
   password: string | null;
 }
 
+export interface TtsConfig {
+  engine: "off";
+  cacheDir: string;
+}
+
 export interface Config {
   port: number;
   host: string;
@@ -69,6 +78,7 @@ export interface Config {
   vcf: VcfConfig | null;
   /** Lower case; compared with the portal email of an account at sign-in. */
   bootstrapAdminEmails: string[];
+  tts: TtsConfig;
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -101,5 +111,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
+    tts: { engine: e.TTS_ENGINE, cacheDir: e.TTS_CACHE_DIR },
   };
 }

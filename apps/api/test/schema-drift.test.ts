@@ -3,9 +3,10 @@
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, type Database } from "../src/db/client.js";
+import type { Database } from "../src/db/client.js";
 import { migrate } from "../src/db/migrate.js";
 import * as schema from "../src/db/schema.js";
+import { emptyDatabase } from "./helpers/app.js";
 
 interface ColumnRow {
   column_name: string;
@@ -21,7 +22,7 @@ interface ColumnRow {
 let database: Database;
 
 beforeAll(async () => {
-  database = await createDb("pglite://memory");
+  database = await emptyDatabase();
   await migrate(database);
 });
 
@@ -44,6 +45,8 @@ describe("Drizzle definitions against the migrated database", () => {
       "drivers",
       "erp_contracts",
       "erp_sync_runs",
+      "exception_rules",
+      "exceptions",
       "flow_steps",
       "modules",
       "partners",
@@ -56,6 +59,7 @@ describe("Drizzle definitions against the migrated database", () => {
       "settings",
       "sites",
       "spj_documents",
+      "stations",
       "trip_allocations",
       "trip_steps",
       "trips",
@@ -64,6 +68,9 @@ describe("Drizzle definitions against the migrated database", () => {
       "vehicle_tare_history",
       "vehicle_types",
       "vehicles",
+      "weighbridge_requests",
+      "weighings",
+      "zones",
     ]);
   });
 

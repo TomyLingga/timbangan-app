@@ -56,13 +56,44 @@ async function createPglite(location: string): Promise<Database> {
   };
 }
 
+/** Type oids whose values `query()` answers the way PGlite does. */
+const TIMESTAMPTZ = 1184;
+const TIMESTAMP = 1114;
+const DATE = 1082;
+const INT8 = 20;
+
+/**
+ * Drizzle's postgres.js driver switches the client's date and time parsers and serializers, and its json
+ * serializers, to pass values through unchanged: its typed columns convert them themselves. Raw `query()` has no
+ * columns, so without this a Date parameter cannot be sent at all and a timestamp comes back as server text.
+ */
+function toParam(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof Uint8Array)) return JSON.stringify(value);
+  return value;
+}
+
+function likePglite(rows: postgres.RowList<postgres.Row[]>): Record<string, unknown>[] {
+  const convert = new Map<string, (value: unknown) => unknown>();
+  for (const column of rows.columns ?? []) {
+    if (column.type === TIMESTAMPTZ || column.type === TIMESTAMP || column.type === DATE) convert.set(column.name, (value) => new Date(value as string));
+    else if (column.type === INT8) convert.set(column.name, (value) => Number(value));
+  }
+  if (convert.size === 0) return [...rows];
+  return rows.map((row) => {
+    const out: Record<string, unknown> = { ...row };
+    for (const [name, to] of convert) if (out[name] !== null && out[name] !== undefined) out[name] = to(out[name]);
+    return out;
+  });
+}
+
 function createPostgres(url: string): Database {
   const client = postgres(url);
   type Target = Pick<typeof client, "unsafe">;
   const runner = (target: Target): SqlRunner => ({
     query: async <T>(text: string, params: unknown[] = []) => {
-      const rows = await target.unsafe(text, params as never[]);
-      return [...rows] as T[];
+      const rows = await target.unsafe(text, params.map(toParam) as never[]);
+      return likePglite(rows) as T[];
     },
     script: async (text) => {
       await target.unsafe(text).simple();

@@ -3,13 +3,14 @@
 // Ids are never guessed: an insert that is refused still uses up an identity value, so every row is looked
 // up through a unique column.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, type Database } from "../src/db/client.js";
+import type { Database } from "../src/db/client.js";
 import { migrate } from "../src/db/migrate.js";
+import { emptyDatabase } from "./helpers/app.js";
 
 let database: Database;
 
 beforeAll(async () => {
-  database = await createDb("pglite://memory");
+  database = await emptyDatabase();
   await migrate(database);
 });
 
@@ -69,11 +70,11 @@ function reject(label: string, sql: string) {
 
 describe("migrated schema", () => {
   it("has the tables, indexes and reference rows of the design", async () => {
-    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(47);
-    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(124);
+    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(48);
+    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(126);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
     expect(await count("select count(*) n from modules")).toBe(19);
-    expect(await count("select count(*) n from modules where is_active")).toBe(9);
+    expect(await count("select count(*) n from modules where is_active")).toBe(18);
     expect(await count("select count(*) n from flow_steps where performer_module is not null")).toBe(22);
     expect(await count("select count(*) n from zones")).toBe(9);
     expect(await count("select count(*) n from flow_steps where wait_zone_id is null or work_zone_id is null")).toBe(0);

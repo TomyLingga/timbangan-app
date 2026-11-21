@@ -5,8 +5,26 @@ import { modules, PERMISSION_LEVELS, type PermissionLevel, userPermissions, user
 
 export { PERMISSION_LEVELS, type PermissionLevel };
 
-/** The modules the routes of this phase check. Later modules exist in the table but are not active yet. */
-export type ModuleCode = "contracts" | "drivers" | "vehicles" | "destinations" | "delivery_orders" | "registrations" | "gate" | "rfid_cards" | "users";
+/** The modules the routes check. `dashboard` exists in the table but is not active yet. */
+export type ModuleCode =
+  | "contracts"
+  | "drivers"
+  | "vehicles"
+  | "destinations"
+  | "delivery_orders"
+  | "registrations"
+  | "gate"
+  | "rfid_cards"
+  | "users"
+  | "weighbridge"
+  | "approvals"
+  | "qc"
+  | "qc_approvals"
+  | "security_check"
+  | "unloading"
+  | "loading"
+  | "sealing"
+  | "reports";
 
 /** Module code to level, for the modules the account may open. */
 export type Permissions = Record<string, PermissionLevel>;

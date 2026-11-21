@@ -10,6 +10,8 @@ export class AppError extends Error {
     message: string,
     /** Per-field messages of a VALIDATION error. */
     readonly fields?: { field: string; message: string }[],
+    /** More keys of the error object, for example the `speech` of a weighbridge answer. */
+    readonly extra?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -27,11 +29,27 @@ export const forbidden = () => new AppError(403, "FORBIDDEN", "Anda tidak berhak
 /** A business rule refused the request: 409 with the rule's own code. */
 export const refused = (code: string, message: string) => new AppError(409, code, message);
 
-export const notConfigured = (what: string) => new AppError(503, "NOT_CONFIGURED", `${what} belum diatur di server.`);
+/**
+ * The name of the unique constraint a database error broke, or null when it is another error. Drizzle wraps the
+ * driver's error in `cause`; PGlite names the constraint `constraint`, postgres.js `constraint_name`.
+ */
+export function violatedUnique(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current && typeof current === "object"; depth++) {
+    const fields = current as { code?: unknown; constraint?: unknown; constraint_name?: unknown; cause?: unknown };
+    if (fields.code === "23505") {
+      return typeof fields.constraint === "string" ? fields.constraint : typeof fields.constraint_name === "string" ? fields.constraint_name : "";
+    }
+    current = fields.cause;
+  }
+  return null;
+}
+
+export const notConfigured =(what: string) => new AppError(503, "NOT_CONFIGURED", `${what} belum diatur di server.`);
 
 export function errorHandler(error: unknown, request: FastifyRequest, reply: FastifyReply) {
   if (error instanceof AppError) {
-    return reply.code(error.status).send({ error: { code: error.code, message: error.message, ...(error.fields ? { fields: error.fields } : {}) } });
+    return reply.code(error.status).send({ error: { code: error.code, message: error.message, ...(error.fields ? { fields: error.fields } : {}), ...error.extra } });
   }
   if (error instanceof ZodError) {
     return reply.code(400).send({

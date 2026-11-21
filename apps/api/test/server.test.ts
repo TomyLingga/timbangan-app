@@ -1,9 +1,8 @@
 import { describe, expect, it, onTestFinished } from "vitest";
 import { runMigrate } from "../src/cli/migrate.js";
 import { ConfigError } from "../src/config.js";
-import { createDb } from "../src/db/client.js";
 import { startServer } from "../src/server.js";
-import { TEST_JWT_SECRET } from "./helpers/app.js";
+import { emptyDatabase, TEST_JWT_SECRET } from "./helpers/app.js";
 
 const env = { DATABASE_URL: "pglite://memory", JWT_SECRET: TEST_JWT_SECRET };
 
@@ -35,17 +34,17 @@ describe("startServer", () => {
 
 describe("migrate command", () => {
   it("applies the migrations, and says so when there is nothing to apply", async () => {
-    const database = await createDb("pglite://memory");
+    const database = await emptyDatabase();
     onTestFinished(() => database.close());
     const open = async () => ({ ...database, close: async () => {} });
     const lines: string[] = [];
 
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Applied 4 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql"]);
+    expect(lines).toEqual(["Applied 5 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql, 0005_weighing.sql"]);
 
     lines.length = 0;
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Nothing to apply: 4 migrations were applied before."]);
+    expect(lines).toEqual(["Nothing to apply: 5 migrations were applied before."]);
   });
 
   it("prints the reason and exits with 1 when it cannot run", async () => {

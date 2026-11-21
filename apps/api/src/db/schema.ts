@@ -467,3 +467,124 @@ export const tripSteps = pgTable("trip_steps", {
   finishedAt: timestamptz("finished_at"),
   note: text("note"),
 });
+
+// --- Phase 4: stations, weighings, exceptions ---
+
+export const zones = pgTable("zones", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  siteId: smallint("site_id").notNull(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  kind: text("kind").notNull(),
+  color: text("color"),
+  mapShape: jsonb("map_shape"),
+  capacity: smallint("capacity"),
+  sortOrder: smallint("sort_order").notNull().default(0),
+});
+
+export const STATION_KINDS = ["REGISTRATION", "GATE", "WEIGHBRIDGE", "QC", "STAGING", "UNLOADING_BAY", "LOADING_BAY", "DOCK", "SEALING"] as const;
+
+export const stations = pgTable("stations", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  siteId: smallint("site_id").notNull(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: STATION_KINDS }).notNull(),
+  zoneId: integer("zone_id"),
+  config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
+  apiKeyHash: text("api_key_hash"),
+  isActive: boolean("is_active").notNull().default(true),
+  // added by 0005
+  pinHash: text("pin_hash"),
+  pinFailedCount: smallint("pin_failed_count").notNull().default(0),
+  pinLockedUntil: timestamptz("pin_locked_until"),
+  keyCreatedAt: timestamptz("key_created_at"),
+});
+
+export const weighings = pgTable("weighings", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  stationId: integer("station_id").notNull(),
+  stage: smallint("stage").notNull(),
+  kind: text("kind", { enum: ["GROSS", "TARE"] }).notNull(),
+  weightKg: integer("weight_kg").notNull(),
+  rawReading: text("raw_reading"),
+  weighedAt: timestamptz("weighed_at").notNull().defaultNow(),
+  mode: text("mode", { enum: ["AUTO", "EXCEPTION"] }).notNull().default("AUTO"),
+  cardUid: text("card_uid"),
+  plateRead: text("plate_read"),
+  plateConfidence: numeric("plate_confidence", { precision: 5, scale: 4, mode: "number" }),
+  plateCheck: text("plate_check", { enum: ["MATCH", "CONFIRMED", "BYPASSED"] }).notNull(),
+  status: text("status", { enum: ["PENDING", "VALID", "VOID"] }).notNull().default("VALID"),
+  voidReason: text("void_reason"),
+  voidedBy: bigint("voided_by", { mode: "number" }),
+  voidedAt: timestamptz("voided_at"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+export const EXCEPTION_TYPES = ["PLATE", "GROSS_IN", "TARE_OUT", "NET_IN", "NET_OUT", "QC_HOLD"] as const;
+export type ExceptionType = (typeof EXCEPTION_TYPES)[number];
+export const EXCEPTION_STATUSES = ["PENDING", "APPROVED", "REJECTED", "RETRY", "CANCELLED", "EXPIRED"] as const;
+export type ExceptionStatus = (typeof EXCEPTION_STATUSES)[number];
+
+export const exceptionRules = pgTable("exception_rules", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  siteId: smallint("site_id").notNull(),
+  type: text("type", { enum: EXCEPTION_TYPES }).notNull(),
+  flowCode: text("flow_code"),
+  thresholdPct: numeric("threshold_pct", { precision: 7, scale: 4, mode: "number" }),
+  thresholdKg: integer("threshold_kg"),
+  onExceed: text("on_exceed", { enum: ["WARN", "APPROVAL", "BLOCK"] }).notNull().default("APPROVAL"),
+  escalateAfterS: integer("escalate_after_s"),
+  isActive: boolean("is_active").notNull().default(true),
+  validFrom: date("valid_from").notNull().defaultNow(),
+  // added by 0004
+  approverModule: text("approver_module").notNull(),
+  escalateModule: text("escalate_module"),
+});
+
+export const exceptions = pgTable("exceptions", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  weighingId: bigint("weighing_id", { mode: "number" }),
+  qualityCheckId: bigint("quality_check_id", { mode: "number" }),
+  type: text("type", { enum: EXCEPTION_TYPES }).notNull(),
+  status: text("status", { enum: EXCEPTION_STATUSES }).notNull().default("PENDING"),
+  decisionCode: text("decision_code", { enum: ["OK", "ADD_LOAD", "REDUCE_LOAD"] }),
+  expectedValue: numeric("expected_value", { precision: 16, scale: 3, mode: "number" }),
+  actualValue: numeric("actual_value", { precision: 16, scale: 3, mode: "number" }),
+  diffValue: numeric("diff_value", { precision: 16, scale: 3, mode: "number" }),
+  diffPct: numeric("diff_pct", { precision: 9, scale: 4, mode: "number" }),
+  tolerancePct: numeric("tolerance_pct", { precision: 7, scale: 4, mode: "number" }),
+  liveWeightKg: integer("live_weight_kg"),
+  liveWeightAt: timestamptz("live_weight_at"),
+  context: jsonb("context").$type<Record<string, unknown>>().notNull().default({}),
+  raisedAt: timestamptz("raised_at").notNull().defaultNow(),
+  reminderCount: smallint("reminder_count").notNull().default(0),
+  lastRemindedAt: timestamptz("last_reminded_at"),
+  escalatedAt: timestamptz("escalated_at"),
+  decidedBy: bigint("decided_by", { mode: "number" }),
+  decidedAt: timestamptz("decided_at"),
+  decisionReason: text("decision_reason"),
+  reportNo: text("report_no"),
+  reportFileId: bigint("report_file_id", { mode: "number" }),
+  // added by 0004
+  approverModule: text("approver_module").notNull(),
+  escalatedModule: text("escalated_module"),
+  // added by 0005
+  stationId: integer("station_id"),
+});
+
+export const weighbridgeRequests = pgTable("weighbridge_requests", {
+  stationId: integer("station_id").notNull(),
+  requestId: text("request_id").notNull(),
+  tripId: bigint("trip_id", { mode: "number" }),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  result: text("result", { enum: ["SAVED", "PENDING", "PLATE_RETRY"] }).notNull(),
+  statusCode: smallint("status_code").notNull(),
+  response: jsonb("response").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});

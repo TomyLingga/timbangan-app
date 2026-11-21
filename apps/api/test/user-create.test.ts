@@ -41,6 +41,7 @@ const permissionsOf = async (database: Database, id: number) =>
 
 const EVERY_ACTIVE_MODULE = {
   contracts: "EDIT", delivery_orders: "EDIT", destinations: "EDIT", drivers: "EDIT", gate: "EDIT", registrations: "EDIT", rfid_cards: "EDIT", users: "EDIT", vehicles: "EDIT",
+  weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW",
 };
 
 describe("createUser", () => {

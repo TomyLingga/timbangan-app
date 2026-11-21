@@ -72,7 +72,7 @@ export function accountOf(request: FastifyRequest): Account {
   return request.account;
 }
 
-export function createGuards(context: AppContext) {
+export function createGuards(context: Omit<AppContext, "speech">) {
   /** Pre-handler: needs `Authorization: Bearer <access token>` of an active account. */
   async function authenticate(request: FastifyRequest): Promise<void> {
     const [scheme, token] = (request.headers.authorization ?? "").split(" ");

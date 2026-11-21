@@ -85,6 +85,15 @@ describe("GET /api/admin/modules", () => {
         { code: "gate", name: "Pos registrasi", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "rfid_cards", name: "Kartu RFID", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "users", name: "Pengguna dan hak akses", levels: ["VIEW", "EDIT"], partnerAllowed: false },
+        { code: "weighbridge", name: "Timbangan", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "approvals", name: "Keputusan selisih dan plat", levels: ["VIEW", "EDIT"], partnerAllowed: false },
+        { code: "qc", name: "QC", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "qc_approvals", name: "Keputusan QC", levels: ["VIEW", "EDIT"], partnerAllowed: false },
+        { code: "security_check", name: "Pemeriksaan security", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "unloading", name: "Bongkar", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "loading", name: "Muat", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "sealing", name: "Segel", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "reports", name: "Laporan", levels: ["VIEW"], partnerAllowed: false },
       ],
     });
   });
@@ -125,7 +134,7 @@ describe("PUT /api/admin/users/:id/permissions", () => {
 
   it("answers 400 VALIDATION for an unknown module, a level the module does not have, or a module partners may not get", async () => {
     const { call, qcId, partnerUserId, audit, database } = await setup();
-    const unknown = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "VIEW", nope: "VIEW", weighbridge: "VIEW" } });
+    const unknown = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "VIEW", nope: "VIEW", dashboard: "VIEW" } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toEqual({
       error: {
@@ -134,7 +143,7 @@ describe("PUT /api/admin/users/:id/permissions", () => {
         fields: [
           { field: "permissions.nope", message: "Modul nope tidak ada." },
           // a module of a later phase cannot be granted yet
-          { field: "permissions.weighbridge", message: "Modul weighbridge tidak ada." },
+          { field: "permissions.dashboard", message: "Modul dashboard tidak ada." },
         ],
       },
     });

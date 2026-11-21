@@ -60,6 +60,13 @@ export function doNumber(format: string, input: { seq: number; site: string; at:
   });
 }
 
+/** `{0001}/BA-{kind}/{site}/{roman month}/{yyyy}`: a Berita Acara, numbered per kind per site per year. */
+export async function nextReportNo(orm: Orm, kind: string, site: string, at: Date): Promise<string> {
+  const { yyyy, mm } = plantDateParts(at);
+  const seq = await takeNumber(orm, `BA-${kind}/${site}/${yyyy}`);
+  return `${pad(seq, 4)}/BA-${kind}/${site}/${romanMonth(Number(mm))}/${yyyy}`;
+}
+
 /** Series that have a fixed pattern. */
 export type Series = "SPJ" | "REG" | "TRIP";
 

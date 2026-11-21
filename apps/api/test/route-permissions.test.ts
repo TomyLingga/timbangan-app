@@ -6,9 +6,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { ModuleCode, PermissionLevel, Permissions } from "../src/auth/permissions.js";
 import { loadConfig } from "../src/config.js";
-import { createDb, type Database } from "../src/db/client.js";
+import type { Database } from "../src/db/client.js";
 import { migrate } from "../src/db/migrate.js";
-import { TEST_JWT_SECRET } from "./helpers/app.js";
+import { emptyDatabase, TEST_JWT_SECRET } from "./helpers/app.js";
 import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
 
 type Method = "GET" | "POST" | "PUT" | "PATCH";
@@ -73,6 +73,12 @@ const ROUTES: Row[] = [
   row("POST", "/api/trips/999999/spj/reissue", [["gate", "EDIT"]]),
   row("POST", "/api/trips/999999/cancel", [["gate", "EDIT"], ["registrations", "CREATE"]]),
 
+  row("PUT", "/api/trips/999999/split", [["registrations", "EDIT"]], true),
+  // the module of a field step is checked against the step itself, after the trip is found
+  row("GET", "/api/trips/999999/steps", [], true),
+  row("POST", "/api/trips/999999/steps/QC/complete", [], true),
+  row("POST", "/api/gate/check-out", [["gate", "CREATE"]]),
+
   row("GET", "/api/gate/spj/NOTATOKEN", [["gate", "VIEW"]]),
   row("POST", "/api/gate/check-in", [["gate", "CREATE"]]),
   row("POST", "/api/gate/replace-card", [["gate", "EDIT"]]),
@@ -80,6 +86,19 @@ const ROUTES: Row[] = [
   row("GET", "/api/rfid-cards", [["rfid_cards", "VIEW"]]),
   row("POST", "/api/rfid-cards", [["rfid_cards", "CREATE"]]),
   row("PATCH", "/api/rfid-cards/999999", [["rfid_cards", "EDIT"]]),
+
+  row("GET", "/api/stations", [["weighbridge", "EDIT"]], true),
+  row("POST", "/api/stations", [["weighbridge", "EDIT"]], true),
+  row("PATCH", "/api/stations/999999", [["weighbridge", "EDIT"]], true),
+  row("POST", "/api/stations/999999/key", [["weighbridge", "EDIT"]], true),
+
+  row("GET", "/api/exceptions", [["approvals", "VIEW"]], true),
+  row("GET", "/api/exceptions/999999", [["approvals", "VIEW"]], true),
+  row("GET", "/api/exceptions/999999/report", [["approvals", "VIEW"]], true),
+  row("POST", "/api/exceptions/999999/decide", [["approvals", "EDIT"]], true),
+
+  row("GET", "/api/reports/contracts", [["reports", "VIEW"]], true),
+  row("GET", "/api/reports/trips", [["reports", "VIEW"]], true),
 
   row("GET", "/api/admin/users", [["users", "VIEW"]]),
   row("GET", "/api/admin/modules", [["users", "VIEW"]]),
@@ -112,7 +131,7 @@ const send = (route: Row, headers: { authorization: string }) =>
   app.inject({ method: route.method, url: route.url, headers, ...(route.method === "GET" ? {} : { payload: {} }) });
 
 beforeAll(async () => {
-  database = await createDb("pglite://memory");
+  database = await emptyDatabase();
   await migrate(database);
   // the clock stays still, so the access tokens made here do not expire during the run
   const now = new Date("2026-11-20T03:00:00Z");
