@@ -34,7 +34,7 @@ describe("GET /api/auth/sso/start", () => {
 });
 
 describe("POST /api/auth/sso/exchange", () => {
-  it("creates the staff account without roles on the first sign-in and starts a session", async () => {
+  it("creates the staff account without permissions on the first sign-in and starts a session", async () => {
     const { app, database, portal, exchange, clock } = await withPortal();
     portal.ticket("ticket-1", portalUser());
 
@@ -66,21 +66,21 @@ describe("POST /api/auth/sso/exchange", () => {
     });
 
     const body = response.json() as { accessToken: string; user: unknown };
-    expect(body.user).toEqual({ id: row?.id, kind: "INTERNAL", username: "budi.santoso@example.test", fullName: "Budi Santoso", roles: [], partner: null });
+    expect(body.user).toEqual({ id: row?.id, kind: "INTERNAL", username: "budi.santoso@example.test", fullName: "Budi Santoso", permissions: {}, partner: null });
     expect(response.cookies.find((item) => item.name === "refresh_token")).toMatchObject({ path: "/api/auth", httpOnly: true });
     expect(await database.query("select count(*)::int as n from auth_sessions where user_id = $1", [row?.id])).toEqual([{ n: 1 }]);
-    expect(await database.query("select count(*)::int as n from user_roles")).toEqual([{ n: 0 }]);
+    expect(await database.query("select count(*)::int as n from user_permissions")).toEqual([{ n: 0 }]);
 
-    // the access token belongs to the new account, which has no role yet
+    // the access token belongs to the new account, which has no permission yet
     const me = await app.inject({ method: "GET", url: "/api/me", headers: { authorization: `Bearer ${body.accessToken}` } });
     expect(me.json()).toEqual({ user: body.user });
   });
 
-  it("updates name and profile on a later sign-in and keeps the account and its roles", async () => {
+  it("updates name and profile on a later sign-in and keeps the account and its permissions", async () => {
     const { app, database, portal, exchange } = await withPortal();
     portal.ticket("ticket-1", portalUser());
     await exchange("ticket-1");
-    await database.query("insert into user_roles (user_id, role_code) select id, 'LOGISTICS_ADMIN' from users");
+    await database.query("insert into user_permissions (user_id, module_code, level) select id, 'gate', 'CREATE' from users");
 
     portal.ticket(
       "ticket-2",
@@ -97,10 +97,10 @@ describe("POST /api/auth/sso/exchange", () => {
         sso_profile: { jabatan: "Supervisor Logistik", unit: null, grade: { kode: "G5", label: "Supervisor", level: 5 } },
       },
     ]);
-    const { accessToken, user } = response.json() as { accessToken: string; user: { roles: string[]; fullName: string } };
-    expect(user).toMatchObject({ fullName: "Budi Santoso, S.T.", roles: ["LOGISTICS_ADMIN"] });
+    const { accessToken, user } = response.json() as { accessToken: string; user: { permissions: object; fullName: string } };
+    expect(user).toMatchObject({ fullName: "Budi Santoso, S.T.", permissions: { gate: "CREATE" } });
     const me = await app.inject({ method: "GET", url: "/api/me", headers: { authorization: `Bearer ${accessToken}` } });
-    expect(me.json().user.roles).toEqual(["LOGISTICS_ADMIN"]);
+    expect(me.json().user.permissions).toEqual({ gate: "CREATE" });
   });
 
   it("answers 401 SSO_REJECTED when the portal refuses the token, and creates nothing", async () => {
@@ -162,5 +162,55 @@ describe("POST /api/auth/sso/exchange", () => {
       ],
     });
     expect(portal.requests).toEqual([]);
+  });
+});
+
+describe("bootstrap admins", () => {
+  const EVERY_ACTIVE_MODULE = {
+    contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
+  };
+
+  async function withBootstrap(emails: string) {
+    const portal = await startFakePortal();
+    const context = await testApp({
+      PORTAL_API_URL: portal.apiUrl, PORTAL_WEB_URL: "http://portal.test", PORTAL_APP_NAME: "Timbangan Registrasi", BOOTSTRAP_ADMIN_EMAILS: emails,
+    });
+    let tickets = 0;
+    const signIn = async (email: string, id: string) => {
+      tickets++;
+      portal.ticket(`ticket-${tickets}`, portalUser({ id, email }));
+      const response = await context.app.inject({ method: "POST", url: "/api/auth/sso/exchange", payload: { token: `ticket-${tickets}`, appId: APP_ID } });
+      expect(response.statusCode).toBe(200);
+      return (response.json() as { user: { id: number; permissions: Record<string, string> } }).user;
+    };
+    return { ...context, signIn };
+  }
+
+  it("gives a listed portal email EDIT on every active module at each sign-in, comparing without case", async () => {
+    const { database, signIn } = await withBootstrap("someone.else@example.test, BUDI.SANTOSO@example.test");
+    const admin = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
+    expect(admin.permissions).toEqual(EVERY_ACTIVE_MODULE);
+    const other = await signIn("siti.aminah@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0002");
+    expect(other.permissions).toEqual({});
+
+    // taken away by hand, given back at the next sign-in
+    await database.query("delete from user_permissions where user_id = $1 and module_code in ('users', 'gate')", [admin.id]);
+    await database.query("update user_permissions set level = 'VIEW' where user_id = $1 and module_code = 'contracts'", [admin.id]);
+    expect((await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001")).permissions).toEqual(EVERY_ACTIVE_MODULE);
+  });
+
+  it("picks up a module that is switched on later, at its highest level", async () => {
+    const { database, signIn } = await withBootstrap("budi.santoso@example.test");
+    const first = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
+    expect(first.permissions).not.toHaveProperty("dashboard");
+
+    await database.query("update modules set is_active = true where code in ('dashboard', 'approvals')");
+    const later = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
+    expect(later.permissions).toEqual({ ...EVERY_ACTIVE_MODULE, approvals: "EDIT", dashboard: "VIEW" });
+  });
+
+  it("grants nothing when the setting is empty", async () => {
+    const { signIn } = await withBootstrap("");
+    expect((await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001")).permissions).toEqual({});
   });
 });

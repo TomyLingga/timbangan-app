@@ -8,7 +8,7 @@ import { type Account, accountOf, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import { deliveryOrders, destinations, erpContracts, partners, products, registrationAllocations, spjDocuments, tripAllocations, trips } from "../db/schema.js";
-import { AppError, duplicate, forbidden, invalid, invalidState, notFound } from "../errors.js";
+import { AppError, duplicate, invalid, invalidState, notFound } from "../errors.js";
 import { dateText, idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
 import { nextDoNumber } from "../numbering.js";
 import { defaultSite, readSetting } from "../settings.js";
@@ -16,7 +16,6 @@ import { ARRIVED_STATUSES, expireDueTrips, loadTrips } from "../trips/view.js";
 
 const DEFAULT_DO_FORMAT = "{seq:3}/DO/{site}/{roman}/{yyyy}";
 const STATUSES = ["DRAFT", "SENT", "ACCEPTED", "CLOSED", "CANCELLED"] as const;
-const ADMIN_ROLES = ["SUPER_ADMIN", "LOGISTICS_ADMIN"];
 
 const optionalText = (label: string, max: number) => z.string(`${label} harus berupa teks.`).trim().max(max, `${label} terlalu panjang.`).nullable().optional();
 const QTY_MESSAGE = "Quantity harus angka lebih dari 0.";
@@ -203,8 +202,12 @@ async function releaseTrips(orm: Orm, deliveryOrderId: number, actor: number, no
 
 export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const readers = { preHandler: [guards.authenticate, guards.requireRole()] };
-  const admins = { preHandler: [guards.authenticate, guards.requireRole(...ADMIN_ROLES)] };
+  const readers = { preHandler: [guards.authenticate, guards.requirePermission("delivery_orders", "VIEW")] };
+  // a partner account never writes a DO, whatever its level
+  const creators = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("delivery_orders", "CREATE")] };
+  const editors = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("delivery_orders", "EDIT")] };
+  // the transporter accepts a DO sent to its own company (see visibleTo); staff accept any
+  const acceptors = { preHandler: [guards.authenticate, guards.requirePermission("delivery_orders", "EDIT")] };
 
   const one = async (db: Orm, id: number, account: Account) => {
     const [order] = await listDeliveryOrders(db, and(eq(deliveryOrders.id, id), visibleTo(account)), 1);
@@ -250,7 +253,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return { deliveryOrder, trips: await loadTrips(orm, tripIds.map((row) => row.id)) };
   });
 
-  app.post("/api/delivery-orders", admins, async (request, reply) => {
+  app.post("/api/delivery-orders", creators, async (request, reply) => {
     const { doNo, ...body } = createBody.parse(request.body);
     const account = accountOf(request);
     const now = context.now();
@@ -281,7 +284,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return reply.code(201).send({ deliveryOrder });
   });
 
-  app.patch("/api/delivery-orders/:id", admins, async (request) => {
+  app.patch("/api/delivery-orders/:id", editors, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = patchBody.parse(request.body);
     const account = accountOf(request);
@@ -337,7 +340,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return { deliveryOrder };
   });
 
-  app.post("/api/delivery-orders/:id/send", admins, async (request) => {
+  app.post("/api/delivery-orders/:id/send", editors, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = sendBody.parse(request.body ?? {});
     const account = accountOf(request);
@@ -355,12 +358,10 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return { deliveryOrder };
   });
 
-  app.post("/api/delivery-orders/:id/accept", readers, async (request) => {
+  app.post("/api/delivery-orders/:id/accept", acceptors, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = acceptBody.parse(request.body ?? {});
     const account = accountOf(request);
-    const allowed = account.kind === "PARTNER" ? account.roles.includes("PARTNER_TRANSPORTER") : account.roles.some((role) => ADMIN_ROLES.includes(role));
-    if (!allowed) throw forbidden();
     const now = context.now();
     const deliveryOrder = await orm.transaction(async (tx) => {
       const current = await lock(tx, id, account);
@@ -374,7 +375,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return { deliveryOrder };
   });
 
-  app.post("/api/delivery-orders/:id/close", admins, async (request) => {
+  app.post("/api/delivery-orders/:id/close", editors, async (request) => {
     const { id } = idParams.parse(request.params);
     const account = accountOf(request);
     const now = context.now();
@@ -388,7 +389,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     return { deliveryOrder };
   });
 
-  app.post("/api/delivery-orders/:id/cancel", admins, async (request) => {
+  app.post("/api/delivery-orders/:id/cancel", editors, async (request) => {
     const { id } = idParams.parse(request.params);
     const { reason } = reasonBody.parse(request.body ?? {});
     const account = accountOf(request);

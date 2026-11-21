@@ -18,7 +18,7 @@ const ROLE_COLUMN = { supplier: partners.isSupplier, customer: partners.isCustom
 export function registerPartnerRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
 
-  app.get("/api/partners", { preHandler: [guards.authenticate, guards.requireStaff] }, async (request) => {
+  app.get("/api/partners", { preHandler: [guards.authenticate, guards.requireInternal] }, async (request) => {
     const query = listQuery.parse(request.query);
     const pattern = query.q ? likeText(query.q) : null;
     const where = and(

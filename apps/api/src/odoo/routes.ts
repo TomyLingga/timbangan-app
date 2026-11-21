@@ -14,11 +14,13 @@ const runsQuery = z.object({
 });
 
 export function registerSyncRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
-  const admin = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN")] };
+  const syncing = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("contracts", "EDIT")] };
+  // the history holds both the Odoo and the driver registry runs
+  const history = { preHandler: [guards.authenticate, guards.requireInternal, guards.requireAnyPermission(["contracts", "VIEW"], ["drivers", "VIEW"])] };
   // One run at a time in this process. `npm run sync:odoo` in another process is not seen here.
   let running = false;
 
-  app.post("/api/admin/sync/odoo", admin, async (request) => {
+  app.post("/api/admin/sync/odoo", syncing, async (request) => {
     if (!context.config.odoo) throw notConfigured("Odoo");
     if (running) throw new AppError(409, "SYNC_RUNNING", "Sinkronisasi Odoo sedang berjalan.");
     running = true;
@@ -32,7 +34,7 @@ export function registerSyncRoutes(app: FastifyInstance, context: AppContext, gu
     }
   });
 
-  app.get("/api/admin/sync/runs", admin, async (request) => {
+  app.get("/api/admin/sync/runs", history, async (request) => {
     const { limit } = runsQuery.parse(request.query);
     return { items: await context.database.db.select().from(erpSyncRuns).orderBy(desc(erpSyncRuns.id)).limit(limit) };
   });

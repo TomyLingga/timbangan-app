@@ -30,6 +30,8 @@ const envSchema = z.object({
   VCF_URL: baseUrl("VCF_URL").optional(),
   VCF_USERNAME: z.string().optional(),
   VCF_PASSWORD: z.string().optional(),
+  // portal emails that get EDIT on every active module at each sign-in; comma separated
+  BOOTSTRAP_ADMIN_EMAILS: z.string().optional(),
 });
 
 export interface OdooConfig {
@@ -65,6 +67,8 @@ export interface Config {
   odoo: OdooConfig | null;
   portal: PortalConfig | null;
   vcf: VcfConfig | null;
+  /** Lower case; compared with the portal email of an account at sign-in. */
+  bootstrapAdminEmails: string[];
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -93,5 +97,9 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
         ? { apiUrl: e.PORTAL_API_URL, webUrl: e.PORTAL_WEB_URL, appName: e.PORTAL_APP_NAME }
         : null,
     vcf: e.VCF_URL ? { url: e.VCF_URL, username: e.VCF_USERNAME ?? null, password: e.VCF_PASSWORD ?? null } : null,
+    bootstrapAdminEmails: (e.BOOTSTRAP_ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
   };
 }

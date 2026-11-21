@@ -72,7 +72,9 @@ describe("migrated schema", () => {
     expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(47);
     expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(124);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
-    expect(await count("select count(*) n from roles")).toBe(14);
+    expect(await count("select count(*) n from modules")).toBe(19);
+    expect(await count("select count(*) n from modules where is_active")).toBe(9);
+    expect(await count("select count(*) n from flow_steps where performer_module is not null")).toBe(22);
     expect(await count("select count(*) n from zones")).toBe(9);
     expect(await count("select count(*) n from flow_steps where wait_zone_id is null or work_zone_id is null")).toBe(0);
   });
@@ -142,11 +144,11 @@ describe("constraint scenarios", () => {
   );
   ok(
     "exception raised",
-    `insert into exceptions (site_id, trip_id, type, approver_role, expected_value, actual_value, diff_pct, tolerance_pct) values (${site}, ${trip(1)}, 'GROSS_IN', 'LOGISTICS_SUPERVISOR', 40000, 40200, 0.5, 0.3)`,
+    `insert into exceptions (site_id, trip_id, type, approver_module, expected_value, actual_value, diff_pct, tolerance_pct) values (${site}, ${trip(1)}, 'GROSS_IN', 'approvals', 40000, 40200, 0.5, 0.3)`,
   );
   reject(
     "second pending exception of the same type",
-    `insert into exceptions (site_id, trip_id, type, approver_role) values (${site}, ${trip(1)}, 'GROSS_IN', 'LOGISTICS_SUPERVISOR')`,
+    `insert into exceptions (site_id, trip_id, type, approver_module) values (${site}, ${trip(1)}, 'GROSS_IN', 'approvals')`,
   );
   reject("approval without an approver", `update exceptions set status = 'APPROVED', decision_reason = 'sesuai foto' where id = ${exception("PENDING")}`);
   reject(
@@ -163,7 +165,7 @@ describe("constraint scenarios", () => {
   );
   ok(
     "same type raised again after the cancellation",
-    `insert into exceptions (site_id, trip_id, type, approver_role) values (${site}, ${trip(1)}, 'GROSS_IN', 'LOGISTICS_SUPERVISOR')`,
+    `insert into exceptions (site_id, trip_id, type, approver_module) values (${site}, ${trip(1)}, 'GROSS_IN', 'approvals')`,
   );
   ok(
     "approval with approver, time and reason",
@@ -280,10 +282,16 @@ describe("constraint scenarios", () => {
     "two accounts for one portal user",
     `insert into users (kind, username, full_name, sso_subject) values ('INTERNAL', 'operator2', 'Operator', '7f0c6d0e-0000-4000-8000-000000000001')`,
   );
+  ok("permission on a module", `insert into user_permissions (user_id, module_code, level) values (${OPERATOR}, 'gate', 'EDIT')`);
+  reject("second permission row for the same module", `insert into user_permissions (user_id, module_code, level) values (${OPERATOR}, 'gate', 'VIEW')`);
+  reject("permission on a module that does not exist", `insert into user_permissions (user_id, module_code, level) values (${OPERATOR}, 'nope', 'VIEW')`);
+  reject("permission level that does not exist", `insert into user_permissions (user_id, module_code, level) values (${OPERATOR}, 'users', 'ADMIN')`);
+  reject("module with a level that does not exist", `insert into modules (code, name, sort_order, levels) values ('x', 'X', 99, array['VIEW', 'DELETE'])`);
+  reject("flow step done by a module that does not exist", `update flow_steps set performer_module = 'nope' where step_code = 'CHECK_IN'`);
   reject("zone colour that is not a hex colour", `insert into zones (site_id, code, name, kind, color) values (${site}, 'X', 'x', 'QC', 'merah')`);
 
   it("ends with the state the scenarios describe", async () => {
-    expect(scenarios).toBe(47);
+    expect(scenarios).toBe(53);
     const split = await database.query<{ total: number; net: number }>(
       `select sum(net_kg)::int total, (select net_kg from trips where id = ${trip(1)}) net from trip_allocations where trip_id = ${trip(1)}`,
     );

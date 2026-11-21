@@ -55,14 +55,13 @@ async function listCards(orm: Orm, where: SQL | undefined, limit: number) {
 
 export function registerRfidCardRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const admins = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN")] };
   const one = async (db: Orm, id: number) => {
     const [card] = await listCards(db, eq(rfidCards.id, id), 1);
     if (!card) throw notFound("Kartu");
     return card;
   };
 
-  app.get("/api/rfid-cards", admins, async (request) => {
+  app.get("/api/rfid-cards", { preHandler: [guards.authenticate, guards.requirePermission("rfid_cards", "VIEW")] }, async (request) => {
     const query = listQuery.parse(request.query);
     const pattern = query.q ? likeText(query.q) : null;
     const where = and(
@@ -73,7 +72,7 @@ export function registerRfidCardRoutes(app: FastifyInstance, context: AppContext
     return { items: await listCards(orm, where, query.limit), total: counted?.total ?? 0 };
   });
 
-  app.post("/api/rfid-cards", admins, async (request, reply) => {
+  app.post("/api/rfid-cards", { preHandler: [guards.authenticate, guards.requirePermission("rfid_cards", "CREATE")] }, async (request, reply) => {
     const body = createBody.parse(request.body);
     const card = await orm.transaction(async (tx) => {
       const [taken] = await tx.select({ id: rfidCards.id }).from(rfidCards).where(eq(rfidCards.uid, body.uid));
@@ -86,7 +85,7 @@ export function registerRfidCardRoutes(app: FastifyInstance, context: AppContext
     return reply.code(201).send({ card });
   });
 
-  app.patch("/api/rfid-cards/:id", admins, async (request) => {
+  app.patch("/api/rfid-cards/:id", { preHandler: [guards.authenticate, guards.requirePermission("rfid_cards", "EDIT")] }, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = patchBody.parse(request.body);
     const card = await orm.transaction(async (tx) => {

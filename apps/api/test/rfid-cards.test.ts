@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { testApp } from "./helpers/app.js";
-import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, DESK, LOGISTICS, seedPartner, seedPartnerUser, seedStaff, SUPPLIER } from "./helpers/users.js";
 
 async function setup() {
   const context = await testApp();
   const { app, database } = context;
-  await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
-  await seedStaff(database, "pos", "REGISTRATION_OPERATOR");
-  await seedPartnerUser(database, "pks", await seedPartner(database, "PT Contoh Sawit"), "PARTNER_SUPPLIER");
+  await seedStaff(database, "logistics", LOGISTICS);
+  await seedStaff(database, "pos", DESK);
+  await seedPartnerUser(database, "pks", await seedPartner(database, "PT Contoh Sawit"), SUPPLIER);
   const call = async (method: "GET" | "POST" | "PATCH", url: string, username = "logistics", payload?: object) =>
     app.inject({ method, url, headers: await bearer(app, username), ...(payload ? { payload } : {}) });
   return { ...context, call };

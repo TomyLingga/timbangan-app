@@ -10,6 +10,7 @@ import * as schema from "../src/db/schema.js";
 interface ColumnRow {
   column_name: string;
   data_type: string;
+  udt_name: string;
   numeric_precision: number | null;
   numeric_scale: number | null;
   is_nullable: "YES" | "NO";
@@ -44,6 +45,7 @@ describe("Drizzle definitions against the migrated database", () => {
       "erp_contracts",
       "erp_sync_runs",
       "flow_steps",
+      "modules",
       "partners",
       "products",
       "quality_parameters",
@@ -51,14 +53,13 @@ describe("Drizzle definitions against the migrated database", () => {
       "registration_allocations",
       "registrations",
       "rfid_cards",
-      "roles",
       "settings",
       "sites",
       "spj_documents",
       "trip_allocations",
       "trip_steps",
       "trips",
-      "user_roles",
+      "user_permissions",
       "users",
       "vehicle_tare_history",
       "vehicle_types",
@@ -68,7 +69,7 @@ describe("Drizzle definitions against the migrated database", () => {
 
   it.each(tables.map((table) => [getTableConfig(table).name, table] as const))("%s has the same columns", async (name, table) => {
     const actual = await database.query<ColumnRow>(
-      `select column_name, data_type, numeric_precision, numeric_scale, is_nullable, is_identity, column_default
+      `select column_name, data_type, udt_name, numeric_precision, numeric_scale, is_nullable, is_identity, column_default
        from information_schema.columns where table_schema = 'public' and table_name = $1 order by ordinal_position`,
       [name],
     );
@@ -76,7 +77,12 @@ describe("Drizzle definitions against the migrated database", () => {
 
     const describeActual = (row: ColumnRow) => ({
       name: row.column_name,
-      type: row.data_type === "numeric" ? `numeric(${row.numeric_precision}, ${row.numeric_scale})` : row.data_type,
+      type:
+        row.data_type === "numeric"
+          ? `numeric(${row.numeric_precision}, ${row.numeric_scale})`
+          : row.data_type === "ARRAY"
+            ? `${row.udt_name.replace(/^_/, "")}[]`
+            : row.data_type,
       notNull: row.is_nullable === "NO",
       identity: row.is_identity === "YES",
       hasDefault: row.column_default !== null || row.is_identity === "YES",

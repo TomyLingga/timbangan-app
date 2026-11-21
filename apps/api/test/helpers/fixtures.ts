@@ -2,7 +2,8 @@
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../src/db/client.js";
 import { testApp } from "./app.js";
-import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./users.js";
+import type { Permissions } from "../../src/auth/permissions.js";
+import { bearer, DESK, grant, LOGISTICS, seedPartner, seedPartnerUser, seedStaff, VIEWER } from "./users.js";
 
 const one = async (database: Database, text: string, params: unknown[]) => Number((await database.query<{ id: number }>(text, params))[0]?.id);
 
@@ -100,13 +101,15 @@ export async function siteCode(database: Database): Promise<string> {
 }
 
 type Method = "GET" | "POST" | "PUT" | "PATCH";
+type Phase3User = "logistics" | "pos" | "qc" | "pks1" | "pks2" | "angkut1" | "angkut2";
 
 /**
  * An application with the accounts the phase 3 tests use:
- * logistics (LOGISTICS_ADMIN), pos (REGISTRATION_OPERATOR), qc (QC_OPERATOR, no right here),
- * pks1 / pks2 (PARTNER_SUPPLIER of supplier1 / supplier2), angkut1 / angkut2 (PARTNER_TRANSPORTER of transporter1 / transporter2).
+ * logistics (LOGISTICS), pos (DESK), qc (VIEWER: reads, writes nothing),
+ * pks1 / pks2 (accounts of supplier1 / supplier2), angkut1 / angkut2 (accounts of transporter1 / transporter2); the
+ * partner accounts have the defaults their companies give. `permissions` replaces what an account holds.
  */
-export async function phase3App(env: Record<string, string> = {}) {
+export async function phase3App(env: Record<string, string> = {}, permissions: Partial<Record<Phase3User, Permissions>> = {}) {
   const context = await testApp(env);
   const { app, database } = context;
   const supplier1 = await seedCompany(database, "PT Sawit Satu", { supplier: true });
@@ -116,14 +119,15 @@ export async function phase3App(env: Record<string, string> = {}) {
   const transporter1 = await seedCompany(database, "PT Angkut Satu", { transporter: true });
   const transporter2 = await seedCompany(database, "PT Angkut Dua", { transporter: true });
   const ids = {
-    logistics: await seedStaff(database, "logistics", "LOGISTICS_ADMIN"),
-    pos: await seedStaff(database, "pos", "REGISTRATION_OPERATOR"),
-    qc: await seedStaff(database, "qc", "QC_OPERATOR"),
-    pks1: await seedPartnerUser(database, "pks1", supplier1, "PARTNER_SUPPLIER"),
-    pks2: await seedPartnerUser(database, "pks2", supplier2, "PARTNER_SUPPLIER"),
-    angkut1: await seedPartnerUser(database, "angkut1", transporter1, "PARTNER_TRANSPORTER"),
-    angkut2: await seedPartnerUser(database, "angkut2", transporter2, "PARTNER_TRANSPORTER"),
+    logistics: await seedStaff(database, "logistics", LOGISTICS),
+    pos: await seedStaff(database, "pos", DESK),
+    qc: await seedStaff(database, "qc", VIEWER),
+    pks1: await seedPartnerUser(database, "pks1", supplier1),
+    pks2: await seedPartnerUser(database, "pks2", supplier2),
+    angkut1: await seedPartnerUser(database, "angkut1", transporter1),
+    angkut2: await seedPartnerUser(database, "angkut2", transporter2),
   };
+  for (const [name, wanted] of Object.entries(permissions)) await grant(database, ids[name as Phase3User], wanted);
   const cpo = await seedProduct(database, "Minyak Contoh Mentah", "CPO");
   const olein = await seedProduct(database, "Minyak Contoh Olahan", "BULK_LIQUID");
   const packed = await seedProduct(database, "Minyak Contoh Kemasan", "PACKED", "karton");

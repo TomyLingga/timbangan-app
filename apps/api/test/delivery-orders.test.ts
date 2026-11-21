@@ -204,7 +204,8 @@ describe("GET /api/delivery-orders", () => {
     expect(await numbers("logistics", "?q=pembeli dua")).toEqual({ total: 1, numbers: ["DO-C"] });
     expect(await numbers("angkut1")).toEqual({ total: 1, numbers: ["DO-B"] });
     expect(await numbers("angkut2")).toEqual({ total: 1, numbers: ["DO-C"] });
-    expect(await numbers("pks1")).toEqual({ total: 0, numbers: [] });
+    // a supplier account does not get the DO module by default
+    expect((await call("GET", "/api/delivery-orders", "pks1")).statusCode).toBe(403);
 
     expect((await call("GET", `/api/delivery-orders/${draft.id}`, "angkut1")).statusCode).toBe(404);
     expect((await call("GET", `/api/delivery-orders/${otherTransporter.id}`, "angkut1")).statusCode).toBe(404);

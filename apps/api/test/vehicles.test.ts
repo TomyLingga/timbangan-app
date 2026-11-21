@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { testApp } from "./helpers/app.js";
-import { bearer, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, DESK, LOGISTICS, seedPartnerUser, seedStaff, TRANSPORTER, VIEWER } from "./helpers/users.js";
 
 async function setup() {
   const context = await testApp();
   const { app, database } = context;
-  const adminId = await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
-  await seedStaff(database, "qc", "QC_OPERATOR");
-  await seedStaff(database, "pos", "REGISTRATION_OPERATOR");
+  const adminId = await seedStaff(database, "logistics", LOGISTICS);
+  await seedStaff(database, "qc", VIEWER);
+  await seedStaff(database, "pos", DESK);
   const partner = async (name: string, transporter: boolean) =>
     Number((await database.query<{ id: number }>("insert into partners (name, is_transporter) values ($1, $2) returning id::int as id", [name, transporter]))[0]?.id);
   const angkut = await partner("PT Angkut Satu", true);
   const lain = await partner("PT Angkut Dua", true);
   const pabrik = await partner("PT Pabrik", false);
-  await seedPartnerUser(database, "angkut", angkut, "PARTNER_TRANSPORTER");
+  await seedPartnerUser(database, "angkut", angkut, TRANSPORTER);
   const call = async (method: "GET" | "POST" | "PATCH", url: string, username: string | null = "logistics", payload?: object) =>
     app.inject({ method, url, headers: username ? await bearer(app, username) : {}, ...(payload ? { payload } : {}) });
   const history = () =>
@@ -140,7 +140,9 @@ describe("PATCH /api/vehicles/:id", () => {
   it("changes the given fields and writes a tare history row only when the tare changes", async () => {
     const { call, id, history, lain, clock, adminId } = await withVehicle();
     clock.advance(60_000);
-    const same = await call("PATCH", `/api/vehicles/${id}`, "pos", { tareKg: 15000, ownerPartnerId: lain, kirValidUntil: null, capacityKg: null });
+    // the desk adds vehicles but does not change them
+    expect((await call("PATCH", `/api/vehicles/${id}`, "pos", { tareKg: 15000 })).statusCode).toBe(403);
+    const same = await call("PATCH", `/api/vehicles/${id}`, "logistics", { tareKg: 15000, ownerPartnerId: lain, kirValidUntil: null, capacityKg: null });
     expect(same.statusCode).toBe(200);
     expect(same.json().vehicle).toMatchObject({ tareKg: 15000, owner: { id: lain, name: "PT Angkut Dua" }, kirValidUntil: null, capacityKg: null, plateNo: "BK8001XX", ownership: "MITRA" });
     expect(await history()).toHaveLength(1);

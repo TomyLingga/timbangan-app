@@ -20,6 +20,7 @@ describe("loadConfig", () => {
       odoo: null,
       portal: null,
       vcf: null,
+      bootstrapAdminEmails: [],
     });
   });
 
@@ -66,5 +67,13 @@ describe("loadConfig", () => {
       appName: "Timbangan Registrasi",
     });
     expect(loadConfig({ ...base, ...portal, PORTAL_APP_NAME: undefined }).portal).toBeNull();
+  });
+
+  it("reads the bootstrap admin emails as a lower-case list, comma separated", () => {
+    expect(loadConfig({ ...base, BOOTSTRAP_ADMIN_EMAILS: " Admin.Satu@Example.test, ,admin.dua@example.test " }).bootstrapAdminEmails).toEqual([
+      "admin.satu@example.test",
+      "admin.dua@example.test",
+    ]);
+    expect(loadConfig({ ...base, BOOTSTRAP_ADMIN_EMAILS: "" }).bootstrapAdminEmails).toEqual([]);
   });
 });

@@ -13,7 +13,7 @@ import { nextDocumentNo } from "../numbering.js";
 import { driverPolicy, isDriverBlocked, registryVerdict, vehicleFindings } from "../registrations/checks.js";
 import { normaliseUid } from "../rfid-cards/routes.js";
 import { siteById } from "../settings.js";
-import { DESK_ROLES, releaseCard } from "../trips/routes.js";
+import { releaseCard } from "../trips/routes.js";
 import { normaliseToken } from "../trips/spj.js";
 import { ARRIVED_STATUSES, expireDueTrips, INSIDE_STATUSES, loadTrips } from "../trips/view.js";
 
@@ -82,7 +82,6 @@ async function availableCard(orm: Orm, uid: string) {
 
 export function registerGateRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const desk = { preHandler: [guards.authenticate, guards.requireRole(...DESK_ROLES)] };
 
   const tripView = async (db: Orm, id: number) => {
     const [trip] = await loadTrips(db, [id]);
@@ -90,7 +89,7 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
     return trip;
   };
 
-  app.get("/api/gate/spj/:token", desk, async (request) => {
+  app.get("/api/gate/spj/:token", { preHandler: [guards.authenticate, guards.requirePermission("gate", "VIEW")] }, async (request) => {
     const token = normaliseToken(String((request.params as { token?: unknown }).token ?? ""));
     const now = context.now();
     await expireDueTrips(orm, now);
@@ -126,7 +125,7 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
     return { trip: await tripView(orm, trip.id), checks };
   });
 
-  app.post("/api/gate/check-in", desk, async (request) => {
+  app.post("/api/gate/check-in", { preHandler: [guards.authenticate, guards.requirePermission("gate", "CREATE")] }, async (request) => {
     const body = checkInBody.parse(request.body);
     const token = normaliseToken(body.token);
     const account = accountOf(request);
@@ -198,7 +197,7 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
     }
   });
 
-  app.post("/api/gate/replace-card", desk, async (request) => {
+  app.post("/api/gate/replace-card", { preHandler: [guards.authenticate, guards.requirePermission("gate", "EDIT")] }, async (request) => {
     const body = replaceBody.parse(request.body);
     const account = accountOf(request);
     const now = context.now();

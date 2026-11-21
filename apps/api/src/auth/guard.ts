@@ -1,10 +1,20 @@
-import { asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { FastifyRequest } from "fastify";
 import type { AppContext } from "../app.js";
 import type { Orm } from "../db/client.js";
-import { partners, userRoles, users } from "../db/schema.js";
-import { AppError } from "../errors.js";
+import { partners, users } from "../db/schema.js";
+import { AppError, forbidden } from "../errors.js";
+import { covers, type ModuleCode, type PermissionLevel, type Permissions, permissionsOf } from "./permissions.js";
 import { verifyAccessToken } from "./tokens.js";
+
+/** The company of a PARTNER account; its flags say which kinds of partner it is. */
+export interface AccountPartner {
+  id: number;
+  name: string;
+  isSupplier: boolean;
+  isTransporter: boolean;
+  isCustomer: boolean;
+}
 
 /** The signed-in user as the API shows it. */
 export interface Account {
@@ -12,8 +22,9 @@ export interface Account {
   kind: "INTERNAL" | "PARTNER";
   username: string;
   fullName: string;
-  roles: string[];
-  partner: { id: number; name: string } | null;
+  /** Level per active module; a module that is absent cannot be opened. */
+  permissions: Permissions;
+  partner: AccountPartner | null;
 }
 
 declare module "fastify" {
@@ -23,23 +34,34 @@ declare module "fastify" {
   }
 }
 
-/** The account with its roles as they are now, or null when it does not exist or is inactive. */
+/** The account with its permissions as they are now, or null when it does not exist or is inactive. */
 export async function loadAccount(orm: Orm, userId: number): Promise<Account | null> {
   const [row] = await orm
-    .select({ id: users.id, kind: users.kind, username: users.username, fullName: users.fullName, isActive: users.isActive, partnerId: partners.id, partnerName: partners.name })
+    .select({
+      id: users.id,
+      kind: users.kind,
+      username: users.username,
+      fullName: users.fullName,
+      isActive: users.isActive,
+      partner: { id: partners.id, name: partners.name, isSupplier: partners.isSupplier, isTransporter: partners.isTransporter, isCustomer: partners.isCustomer },
+    })
     .from(users)
     .leftJoin(partners, eq(partners.id, users.partnerId))
     .where(eq(users.id, userId));
   if (!row?.isActive) return null;
-  const roleRows = await orm.selectDistinct({ code: userRoles.roleCode }).from(userRoles).where(eq(userRoles.userId, userId)).orderBy(asc(userRoles.roleCode));
   return {
     id: row.id,
     kind: row.kind,
     username: row.username,
     fullName: row.fullName,
-    roles: roleRows.map((role) => role.code),
-    partner: row.partnerId !== null && row.partnerName !== null ? { id: row.partnerId, name: row.partnerName } : null,
+    permissions: (await permissionsOf(orm, [userId])).get(userId) ?? {},
+    partner: row.partner,
   };
+}
+
+/** Whether the account holds `level` or higher on the module. */
+export function can(account: Account, moduleCode: ModuleCode, level: PermissionLevel): boolean {
+  return covers(account.permissions[moduleCode], level);
 }
 
 const unauthenticated = () => new AppError(401, "UNAUTHENTICATED", "Silakan masuk terlebih dahulu.");
@@ -61,29 +83,35 @@ export function createGuards(context: AppContext) {
     request.account = account;
   }
 
-  /**
-   * Pre-handler, after `authenticate`: the account needs one of the codes; SUPER_ADMIN passes every check.
-   * A staff account without any role gets NO_ROLE, so the web app can tell it to ask for one.
-   * Without codes every staff role and every partner account passes.
-   */
-  function requireRole(...codes: string[]) {
+  /** A staff account without any permission gets NO_ACCESS, so the web app can tell it to wait for one. */
+  function checkHasAccess(account: Account): void {
+    if (account.kind === "INTERNAL" && Object.keys(account.permissions).length === 0) {
+      throw new AppError(403, "NO_ACCESS", "Akun Anda belum diberi hak akses. Hubungi admin sistem.");
+    }
+  }
+
+  /** Pre-handler, after `authenticate`: the account holds at least one of the module levels. */
+  function requireAnyPermission(...needs: [ModuleCode, PermissionLevel][]) {
     return async (request: FastifyRequest): Promise<void> => {
       const account = accountOf(request);
-      if (account.kind === "INTERNAL" && account.roles.length === 0) {
-        throw new AppError(403, "NO_ROLE", "Akun Anda belum diberi peran. Hubungi admin sistem.");
-      }
-      if (codes.length === 0 || account.roles.includes("SUPER_ADMIN")) return;
-      if (!codes.some((code) => account.roles.includes(code))) throw new AppError(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+      checkHasAccess(account);
+      if (!needs.some(([moduleCode, level]) => can(account, moduleCode, level))) throw forbidden();
     };
   }
 
-  /** Pre-handler, after `authenticate`: staff with at least one role. Partner accounts are refused. */
-  async function requireStaff(request: FastifyRequest): Promise<void> {
-    if (accountOf(request).kind !== "INTERNAL") throw new AppError(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
-    await requireRole()(request);
+  /** Pre-handler, after `authenticate`: the account holds `level` or higher on the module. */
+  function requirePermission(moduleCode: ModuleCode, level: PermissionLevel) {
+    return requireAnyPermission([moduleCode, level]);
   }
 
-  return { authenticate, requireRole, requireStaff };
+  /** Pre-handler, after `authenticate`: a staff account with at least one permission. Partner accounts are refused. */
+  async function requireInternal(request: FastifyRequest): Promise<void> {
+    const account = accountOf(request);
+    if (account.kind !== "INTERNAL") throw forbidden();
+    checkHasAccess(account);
+  }
+
+  return { authenticate, requirePermission, requireAnyPermission, requireInternal };
 }
 
 export type Guards = ReturnType<typeof createGuards>;

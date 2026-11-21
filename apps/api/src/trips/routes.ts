@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { alias } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
-import { type Account, accountOf, type Guards } from "../auth/guard.js";
+import { type Account, accountOf, can, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import {
@@ -32,9 +32,6 @@ import { dateText, idParams, lettersAndDigits, likeText, limitParam, PLANT_TIME_
 import { registrationsVisibleTo } from "../registrations/view.js";
 import { issueSpj, revokeSpj } from "./spj.js";
 import { expireDueTrips, loadTrips } from "./view.js";
-
-/** Staff who reissue SPJs and work the registration desk. */
-export const DESK_ROLES = ["SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR"];
 
 const STATUS_MESSAGE = `Status trip harus salah satu dari ${TRIP_STATUSES.join(", ")}; beberapa dipisah koma.`;
 const listQuery = z.object({
@@ -83,9 +80,10 @@ export async function releaseCard(
 
 export function registerTripRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const signedIn = { preHandler: [guards.authenticate, guards.requireRole()] };
-  const staff = { preHandler: [guards.authenticate, guards.requireStaff] };
-  const desk = { preHandler: [guards.authenticate, guards.requireRole(...DESK_ROLES)] };
+  // the SPJ belongs to the registration: whoever may see the registration may print it
+  const printers = { preHandler: [guards.authenticate, guards.requirePermission("registrations", "VIEW")] };
+  // staff only: the list is not limited to a company
+  const listers = { preHandler: [guards.authenticate, guards.requireInternal, guards.requireAnyPermission(["gate", "VIEW"], ["registrations", "VIEW"])] };
 
   const view = async (db: Orm, id: number) => {
     const [trip] = await loadTrips(db, [id]);
@@ -93,7 +91,7 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     return trip;
   };
 
-  app.get("/api/trips", staff, async (request) => {
+  app.get("/api/trips", listers, async (request) => {
     const query = listQuery.parse(request.query);
     await expireDueTrips(orm, context.now());
     const plate = query.q ? lettersAndDigits(query.q) : "";
@@ -141,7 +139,7 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     return row.spj;
   };
 
-  app.get("/api/trips/:id/spj", signedIn, async (request) => {
+  app.get("/api/trips/:id/spj", printers, async (request) => {
     const { id } = idParams.parse(request.params);
     const spj = await activeSpj(orm, id, accountOf(request));
     const [head] = await orm
@@ -216,7 +214,7 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     };
   });
 
-  app.post("/api/trips/:id/spj/printed", signedIn, async (request) => {
+  app.post("/api/trips/:id/spj/printed", printers, async (request) => {
     const { id } = idParams.parse(request.params);
     const spj = await activeSpj(orm, id, accountOf(request));
     const [updated] = await orm
@@ -227,7 +225,7 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     return { printCount: updated?.printCount ?? spj.printCount + 1 };
   });
 
-  app.post("/api/trips/:id/spj/reissue", desk, async (request) => {
+  app.post("/api/trips/:id/spj/reissue", { preHandler: [guards.authenticate, guards.requirePermission("gate", "EDIT")] }, async (request) => {
     const { id } = idParams.parse(request.params);
     const { reason } = reasonBody.parse(request.body ?? {});
     const account = accountOf(request);
@@ -247,16 +245,21 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     return { trip };
   });
 
-  // the owner cancels before check-in; desk staff also after check-in, before the truck is weighed
-  app.post("/api/trips/:id/cancel", signedIn, async (request) => {
+  // the owner (registrations:CREATE) cancels before check-in; the desk (gate:EDIT) also after check-in, before
+  // the truck is weighed. The owner is the partner whose registration it is, or the staff member who made it.
+  const cancellers = { preHandler: [guards.authenticate, guards.requireAnyPermission(["gate", "EDIT"], ["registrations", "CREATE"])] };
+  app.post("/api/trips/:id/cancel", cancellers, async (request) => {
     const { id } = idParams.parse(request.params);
     const account = accountOf(request);
-    const isDesk = account.kind === "INTERNAL" && account.roles.some((role) => DESK_ROLES.includes(role));
-    if (account.kind === "INTERNAL" && !isDesk) throw forbidden();
+    const isDesk = account.kind === "INTERNAL" && can(account, "gate", "EDIT");
     const { reason } = reasonBody.parse(request.body ?? {});
     const now = context.now();
     const trip = await orm.transaction(async (tx) => {
       const current = await lockTrip(tx, id, account);
+      if (!isDesk && account.kind === "INTERNAL") {
+        const [owner] = await tx.select({ createdBy: registrations.createdBy }).from(registrations).where(eq(registrations.id, current.registrationId));
+        if (owner?.createdBy !== account.id) throw forbidden();
+      }
       const allowed = isDesk ? ["DRAFT", "READY", "ISSUED", "EXPIRED", "CHECKED_IN"] : ["DRAFT", "READY", "ISSUED", "EXPIRED"];
       if (!allowed.includes(current.status)) {
         throw invalidState(isDesk ? "Trip ini sudah ditimbang, selesai, atau dibatalkan." : "Trip yang sudah check-in hanya bisa dibatalkan petugas.");

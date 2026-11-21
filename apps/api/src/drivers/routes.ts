@@ -61,7 +61,8 @@ const toItem = (row: Row, today: string) => ({
 export function registerDriverRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
 
-  app.get("/api/drivers", { preHandler: [guards.authenticate, guards.requireStaff] }, async (request) => {
+  // staff only: the list is not limited to a company
+  app.get("/api/drivers", { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("drivers", "VIEW")] }, async (request) => {
     const query = listQuery.parse(request.query);
     const conditions: (SQL | undefined)[] = [];
     if (query.status) conditions.push(eq(drivers.registryStatus, query.status));
@@ -80,7 +81,8 @@ export function registerDriverRoutes(app: FastifyInstance, context: AppContext, 
   // A driver entered here is not in the central registry yet: status UNKNOWN, queued to be sent there.
   // With a registry account it is sent at once, within a few seconds; whatever happens there, the driver is
   // created here, and one that was not sent waits for the next sync run.
-  const writers = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR")] };
+  // Partner accounts add their drivers inside a registration.
+  const writers = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("drivers", "CREATE")] };
   app.post("/api/drivers", writers, async (request, reply) => {
     const body = createBody.parse(request.body);
     if ((await driverIdByLicence(orm, body.licenceNo)) !== null) throw duplicate(`Nomor SIM ${body.licenceNo} sudah terdaftar.`);

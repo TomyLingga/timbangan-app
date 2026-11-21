@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { runSyncOdoo } from "../src/cli/sync-odoo.js";
 import { freshDatabase, TEST_JWT_SECRET, testApp } from "./helpers/app.js";
 import { sampleOdooRecords, startFakeOdoo } from "./helpers/fake-odoo.js";
-import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, EVERYTHING, LOGISTICS, seedPartner, seedPartnerUser, seedStaff, SUPPLIER, VIEWER } from "./helpers/users.js";
 
 async function withOdoo() {
   const odoo = await startFakeOdoo(sampleOdooRecords());
   const context = await testApp(odoo.env);
-  await seedStaff(context.database, "logistics", "LOGISTICS_ADMIN");
+  await seedStaff(context.database, "logistics", LOGISTICS);
   const post = async (username?: string) =>
     context.app.inject({ method: "POST", url: "/api/admin/sync/odoo", headers: username ? await bearer(context.app, username) : {} });
   return { ...context, odoo, post };
@@ -24,11 +24,11 @@ describe("POST /api/admin/sync/odoo", () => {
     expect((await post("logistics")).json()).toMatchObject({ contracts: 0, partners: 0, products: 0, skipped: 0 });
   });
 
-  it("is open to SUPER_ADMIN and LOGISTICS_ADMIN only", async () => {
+  it("is open to staff with contracts:EDIT only", async () => {
     const { post, database, odoo } = await withOdoo();
-    await seedStaff(database, "root", "SUPER_ADMIN");
-    await seedStaff(database, "supervisor", "LOGISTICS_SUPERVISOR");
-    await seedPartnerUser(database, "pks-a", await seedPartner(database, "PKS A"));
+    await seedStaff(database, "root", EVERYTHING);
+    await seedStaff(database, "supervisor", VIEWER);
+    await seedPartnerUser(database, "pks-a", await seedPartner(database, "PKS A"), SUPPLIER);
 
     expect((await post()).statusCode).toBe(401);
     expect((await post("supervisor")).statusCode).toBe(403);
@@ -39,7 +39,7 @@ describe("POST /api/admin/sync/odoo", () => {
 
   it("answers 503 NOT_CONFIGURED when the Odoo settings are incomplete", async () => {
     const { app, database } = await testApp({ ODOO_URL: "http://127.0.0.1:1", ODOO_DB: "live_test" });
-    await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
+    await seedStaff(database, "logistics", LOGISTICS);
     const response = await app.inject({ method: "POST", url: "/api/admin/sync/odoo", headers: await bearer(app, "logistics") });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: { code: "NOT_CONFIGURED", message: "Odoo belum diatur di server." } });
@@ -116,9 +116,10 @@ describe("GET /api/admin/sync/runs", () => {
     expect(limited.json().items.map((item: { status: string }) => item.status)).toEqual(["FAILED"]);
   });
 
-  it("validates the limit and needs the same roles", async () => {
+  it("validates the limit and needs contracts:VIEW or drivers:VIEW", async () => {
     const { app, database } = await withOdoo();
-    await seedStaff(database, "qc", "QC_OPERATOR");
+    await seedStaff(database, "desk", { gate: "EDIT" });
+    await seedStaff(database, "drivers", { drivers: "VIEW" });
     const headers = await bearer(app, "logistics");
 
     const invalid = await app.inject({ method: "GET", url: "/api/admin/sync/runs?limit=0", headers });
@@ -127,7 +128,8 @@ describe("GET /api/admin/sync/runs", () => {
     expect((await app.inject({ method: "GET", url: "/api/admin/sync/runs?limit=abc", headers })).statusCode).toBe(400);
 
     expect((await app.inject({ method: "GET", url: "/api/admin/sync/runs" })).statusCode).toBe(401);
-    expect((await app.inject({ method: "GET", url: "/api/admin/sync/runs", headers: await bearer(app, "qc") })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/admin/sync/runs", headers: await bearer(app, "desk") })).statusCode).toBe(403);
+    expect((await app.inject({ method: "GET", url: "/api/admin/sync/runs", headers: await bearer(app, "drivers") })).statusCode).toBe(200);
   });
 });
 

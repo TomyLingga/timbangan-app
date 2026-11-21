@@ -42,16 +42,22 @@ export const users = pgTable("users", {
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
 });
 
-export const roles = pgTable("roles", {
+export const PERMISSION_LEVELS = ["VIEW", "CREATE", "EDIT"] as const;
+export type PermissionLevel = (typeof PERMISSION_LEVELS)[number];
+
+export const modules = pgTable("modules", {
   code: text("code").primaryKey(),
   name: text("name").notNull(),
-  scope: text("scope", { enum: ["INTERNAL", "PARTNER"] }).notNull(),
+  sortOrder: smallint("sort_order").notNull(),
+  levels: text("levels", { enum: PERMISSION_LEVELS }).array().notNull(),
+  partnerAllowed: boolean("partner_allowed").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
 });
 
-export const userRoles = pgTable("user_roles", {
+export const userPermissions = pgTable("user_permissions", {
   userId: bigint("user_id", { mode: "number" }).notNull(),
-  roleCode: text("role_code").notNull(),
-  siteId: smallint("site_id"),
+  moduleCode: text("module_code").notNull(),
+  level: text("level", { enum: PERMISSION_LEVELS }).notNull(),
   grantedBy: bigint("granted_by", { mode: "number" }),
   grantedAt: timestamptz("granted_at").notNull().defaultNow(),
 });
@@ -235,7 +241,7 @@ export const flowSteps = pgTable("flow_steps", {
   name: text("name").notNull(),
   isOptional: boolean("is_optional").notNull().default(false),
   onReject: text("on_reject").notNull().default("SKIP"),
-  performerRole: text("performer_role"),
+  performerModule: text("performer_module"),
   waitZoneId: integer("wait_zone_id"),
   workZoneId: integer("work_zone_id"),
 });

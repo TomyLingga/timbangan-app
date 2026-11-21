@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Database } from "../src/db/client.js";
 import { testApp } from "./helpers/app.js";
-import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, LOGISTICS, seedPartner, seedPartnerUser, seedStaff, SUPPLIER, VIEWER } from "./helpers/users.js";
 
 interface ContractSeed {
   line: number;
@@ -48,7 +48,7 @@ async function setup() {
     cancelled: await seedContract(database, { line: 5, no: "0204/K/CPO/XI/2026", partnerId: pksB, productId: cpoId, state: "CANCELLED" }),
     sale: await seedContract(database, { line: 9, no: "101A/SC/FR/XYZ/X/2026", partnerId: pksA, productId: oleinId, direction: "OUT", validUntil: "2026-12-31" }),
   };
-  await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
+  await seedStaff(database, "logistics", LOGISTICS);
   const headers = await bearer(context.app, "logistics");
   const search = async (query = "", as = headers) => {
     const response = await context.app.inject({ method: "GET", url: `/api/contracts${query}`, headers: as });
@@ -163,7 +163,7 @@ describe("GET /api/contracts", () => {
 
   it("shows a partner account only the contracts of its own company, whatever it asks for", async () => {
     const { search, app, database, pksA, pksB, ids } = await setup();
-    await seedPartnerUser(database, "beta", pksB);
+    await seedPartnerUser(database, "beta", pksB, SUPPLIER);
     const beta = await bearer(app, "beta");
 
     expect((await search("", beta)).body).toMatchObject({ total: 1 });
@@ -174,16 +174,16 @@ describe("GET /api/contracts", () => {
     expect((await search("?q=0200", beta)).found).toEqual([]);
   });
 
-  it("needs a signed-in account, and a staff account needs a role", async () => {
+  it("needs a signed-in account with contracts:VIEW, and a staff account without any permission gets NO_ACCESS", async () => {
     const { search, app, database } = await setup();
     expect((await search("", {} as never)).response.statusCode).toBe(401);
 
-    const id = await seedStaff(database, "newcomer", "QC_OPERATOR");
+    const id = await seedStaff(database, "newcomer", VIEWER);
     const qc = await bearer(app, "newcomer");
     expect((await search("", qc)).body.total).toBe(3);
-    await database.query("delete from user_roles where user_id = $1", [id]);
+    await database.query("delete from user_permissions where user_id = $1", [id]);
     const refused = await search("", qc);
     expect(refused.response.statusCode).toBe(403);
-    expect(refused.response.json().error.code).toBe("NO_ROLE");
+    expect(refused.response.json().error.code).toBe("NO_ACCESS");
   });
 });

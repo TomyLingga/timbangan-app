@@ -4,7 +4,7 @@ import type { AppOptions } from "../src/app.js";
 import { runSyncVcf } from "../src/cli/sync-vcf.js";
 import { freshDatabase, TEST_JWT_SECRET, testApp } from "./helpers/app.js";
 import { FAKE_ACCOUNT, registryDriver, registryTransporter, startFakeVcf } from "./helpers/fake-vcf.js";
-import { bearer, seedStaff } from "./helpers/users.js";
+import { bearer, LOGISTICS, seedStaff } from "./helpers/users.js";
 
 const accountEnv = (url: string, account = FAKE_ACCOUNT) => ({ VCF_URL: url, VCF_USERNAME: account.username, VCF_PASSWORD: account.password });
 const body = { fullName: "Eko Prasetyo", licenceNo: "JK12345678", licenceClass: "B2 UMUM", licenceValidUntil: "2029-02-28" };
@@ -12,7 +12,7 @@ const ALLOWED_CALLS = new Set(["POST /api/login", "POST /api/master/driver", "GE
 
 async function setup(env: Record<string, string>, options: Partial<AppOptions> = {}) {
   const context = await testApp(env, options);
-  await seedStaff(context.database, "logistics", "LOGISTICS_ADMIN");
+  await seedStaff(context.database, "logistics", LOGISTICS);
   const headers = await bearer(context.app, "logistics");
   const createDriver = (payload: object = body) => context.app.inject({ method: "POST", url: "/api/drivers", headers, payload });
   const sync = () => context.app.inject({ method: "POST", url: "/api/admin/sync/vcf", headers });

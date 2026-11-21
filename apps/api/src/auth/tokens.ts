@@ -3,7 +3,7 @@ import { jwtVerify, SignJWT } from "jose";
 
 const key = (secret: string) => new TextEncoder().encode(secret);
 
-/** Access token: a JWT (HS256) that carries the user id and its lifetime. Roles are read from the database per request. */
+/** Access token: a JWT (HS256) that carries the user id and its lifetime. Permissions are read from the database per request. */
 export function signAccessToken(secret: string, userId: number, ttlSeconds: number, now: Date): Promise<string> {
   const issuedAt = Math.floor(now.getTime() / 1000);
   return new SignJWT({})

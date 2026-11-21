@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FAKE_ACCOUNT, startFakeVcf } from "./helpers/fake-vcf.js";
 import { phase3App, seedContract, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { seedStaff } from "./helpers/users.js";
 
 const TOKEN = /^[0-9A-HJKMNP-TV-Z]{12}$/;
 
@@ -234,7 +235,7 @@ describe("incoming registration refusals", () => {
     expect((await register(incoming([contracts.c1], { vehicle: { id: vehicles.iso }, containerNo: "ABCU1234567" }))).statusCode).toBe(201);
   });
 
-  it("is not open to transporter accounts or to staff without a registration role", async () => {
+  it("is not open to transporter accounts or to staff without registrations:CREATE", async () => {
     const { register, incoming, contracts } = await setup();
     expect((await register(incoming([contracts.c1]), "angkut1")).statusCode).toBe(403);
     expect((await register(incoming([contracts.c1]), "qc")).statusCode).toBe(403);
@@ -326,6 +327,20 @@ describe("incoming registration findings and review", () => {
     const late = await call("POST", `/api/registrations/${arrived.id}/cancel`, "logistics", { reason: "x" });
     expect(late.statusCode).toBe(409);
     expect(late.json().error.code).toBe("INVALID_STATE");
+  });
+
+  it("is cancelled, with its trips, by a staff member holding only registrations:CREATE when that member made it", async () => {
+    const { registerOk, incoming, contracts, call, database } = await setup();
+    await seedStaff(database, "clerk", { registrations: "CREATE" });
+    await seedStaff(database, "clerk2", { registrations: "CREATE" });
+    const mine = await registerOk(incoming([contracts.c1]), "clerk");
+    expect(mine).toMatchObject({ status: "APPROVED", createdVia: "OPERATOR" });
+    const trip = mine.trips[0];
+
+    expect((await call("POST", `/api/trips/${trip.id}/cancel`, "clerk2", { reason: "x" })).statusCode).toBe(403);
+    expect((await call("POST", `/api/trips/${trip.id}/cancel`, "clerk", { reason: "truk ganti" })).json().trip).toMatchObject({ status: "CANCELLED" });
+    expect((await call("POST", `/api/registrations/${mine.id}/cancel`, "clerk2", { reason: "x" })).statusCode).toBe(403);
+    expect((await call("POST", `/api/registrations/${mine.id}/cancel`, "clerk", { reason: "tidak jadi" })).json().registration.status).toBe("CANCELLED");
   });
 });
 

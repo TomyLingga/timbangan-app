@@ -4,7 +4,12 @@ import { phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVeh
 
 describe("phase 3 scenarios", () => {
   it("(a) one incoming truck with two purchase contracts, from the supplier's registration to check-in", async () => {
-    const { database, call, companies, products, clock } = await phase3App();
+    // every account holds exactly what this run needs
+    const { database, call, companies, products, clock } = await phase3App({}, {
+      pks1: { registrations: "CREATE" },
+      pos: { gate: "CREATE" },
+      logistics: { rfid_cards: "VIEW" },
+    });
     const site = await siteCode(database);
     const first = await seedContract(database, { no: "PC-901/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 200_000 });
     const second = await seedContract(database, { no: "PC-902/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 200_000 });
@@ -62,7 +67,12 @@ describe("phase 3 scenarios", () => {
   });
 
   it("(b) one DO with four trucks, from the logistics admin to four check-ins", async () => {
-    const { database, call, companies, products } = await phase3App();
+    // every account holds exactly what this run needs
+    const { database, call, companies, products } = await phase3App({}, {
+      logistics: { delivery_orders: "EDIT" },
+      angkut1: { delivery_orders: "EDIT", registrations: "CREATE" },
+      pos: { gate: "CREATE" },
+    });
     const sale = await seedContract(database, { no: "SC-901/CONTOH", direction: "OUT", partnerId: companies.customer1, productId: products.olein, qty: 500_000 });
     const place = await seedDestination(database, "Gudang Skenario B", companies.customer1);
     const vehicles: number[] = [];

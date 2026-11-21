@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { testApp } from "./helpers/app.js";
-import { bearer, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, LOGISTICS, seedPartnerUser, seedStaff, TRANSPORTER, VIEWER } from "./helpers/users.js";
 
 async function setup() {
   const context = await testApp();
   const { app, database } = context;
-  const adminId = await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
-  await seedStaff(database, "qc", "QC_OPERATOR");
+  const adminId = await seedStaff(database, "logistics", LOGISTICS);
+  await seedStaff(database, "qc", VIEWER);
   const partner = async (name: string, code: string | null, flags: string, active = true) =>
     Number(
       (
@@ -23,7 +23,7 @@ async function setup() {
     serba: await partner("CV Serba Delta", null, "SCT"),
     tutup: await partner("PT Tutup Epsilon", "V009", "ST", false),
   };
-  await seedPartnerUser(database, "angkut", ids.angkut, "PARTNER_TRANSPORTER");
+  await seedPartnerUser(database, "angkut", ids.angkut, TRANSPORTER);
   const call = async (method: "GET" | "POST" | "PATCH", url: string, username: string | null = "logistics", payload?: object) =>
     app.inject({ method, url, headers: username ? await bearer(app, username) : {}, ...(payload ? { payload } : {}) });
   return { ...context, adminId, ids, call };

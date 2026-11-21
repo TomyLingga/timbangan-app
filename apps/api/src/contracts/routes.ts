@@ -20,7 +20,7 @@ export function registerContractRoutes(app: FastifyInstance, context: AppContext
   const orm = context.database.db;
   const c = erpContracts;
 
-  app.get("/api/contracts", { preHandler: [guards.authenticate, guards.requireRole()] }, async (request) => {
+  app.get("/api/contracts", { preHandler: [guards.authenticate, guards.requirePermission("contracts", "VIEW")] }, async (request) => {
     const query = searchQuery.parse(request.query);
     const account = accountOf(request);
 

@@ -28,11 +28,6 @@ import { issueSpj } from "../trips/spj.js";
 import { ARRIVED_STATUSES } from "../trips/view.js";
 import { checkRegistration, doRemaining } from "./checks.js";
 
-/** Staff roles that may register on behalf of any partner. */
-export const STAFF_WRITERS = ["SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR"];
-/** Who approves and rejects. */
-export const REVIEWERS = ["SUPER_ADMIN", "LOGISTICS_ADMIN"];
-
 type Field = { field: string; message: string };
 const fail = (fields: Field[]) => new AppError(400, "VALIDATION", "Data yang dikirim tidak valid.", fields);
 
@@ -102,10 +97,13 @@ export const registrationBody = z.object({
 });
 export type RegistrationInput = z.infer<typeof registrationBody>;
 
-/** Whether the account may write registrations of this direction at all. */
+/**
+ * Whether the account may write registrations of this direction at all, next to registrations:CREATE: a partner
+ * account registers incoming trucks when its company is a supplier and outgoing ones when it is a transporter.
+ */
 export function mayWrite(account: Account, direction: "IN" | "OUT"): boolean {
-  if (account.kind === "PARTNER") return account.roles.includes(direction === "IN" ? "PARTNER_SUPPLIER" : "PARTNER_TRANSPORTER");
-  return account.roles.some((role) => STAFF_WRITERS.includes(role));
+  if (account.kind === "INTERNAL") return true;
+  return direction === "IN" ? account.partner?.isSupplier === true : account.partner?.isTransporter === true;
 }
 
 interface Resolved {

@@ -32,10 +32,21 @@ describe("passwords", () => {
   });
 });
 
+const permissionsOf = async (database: Database, id: number) =>
+  Object.fromEntries(
+    (await database.query<{ module_code: string; level: string }>("select module_code, level from user_permissions where user_id = $1 order by module_code", [id])).map(
+      (row) => [row.module_code, row.level],
+    ),
+  );
+
+const EVERY_ACTIVE_MODULE = {
+  contracts: "EDIT", delivery_orders: "EDIT", destinations: "EDIT", drivers: "EDIT", gate: "EDIT", registrations: "EDIT", rfid_cards: "EDIT", users: "EDIT", vehicles: "EDIT",
+};
+
 describe("createUser", () => {
-  it("creates a staff account with a password and one role", async () => {
+  it("creates a staff account with a password and without any permission", async () => {
     const database = await freshDatabase();
-    const { id } = await createUser(database.db, { username: "Darurat", fullName: "Admin Darurat", kind: "INTERNAL", role: "SUPER_ADMIN", password: "s3cret-s3cret" });
+    const { id } = await createUser(database.db, { username: "Darurat", fullName: "Admin Darurat", kind: "INTERNAL", password: "s3cret-s3cret" });
 
     const [row] = await database.query<{ username: string; kind: string; password_hash: string; partner_id: number | null }>(
       "select username, kind, password_hash, partner_id from users where id = $1",
@@ -43,34 +54,41 @@ describe("createUser", () => {
     );
     expect(row).toMatchObject({ username: "Darurat", kind: "INTERNAL", partner_id: null });
     expect(await verifyPassword(row?.password_hash ?? "", "s3cret-s3cret")).toBe(true);
-    expect(await database.query("select role_code from user_roles where user_id = $1", [id])).toEqual([{ role_code: "SUPER_ADMIN" }]);
+    expect(await permissionsOf(database, id)).toEqual({});
   });
 
-  it("creates a partner account for a company", async () => {
+  it("gives an admin EDIT on every active module and nothing on the modules of later phases", async () => {
     const database = await freshDatabase();
-    const company = await partnerId(database, "Transporter T");
-    const { id } = await createUser(database.db, {
-      username: "transporter-t",
-      fullName: "Admin T",
-      kind: "PARTNER",
-      partnerId: company,
-      role: "PARTNER_TRANSPORTER",
-      password: "s3cret-s3cret",
-    });
-    expect(await database.query<{ partner_id: number }>("select partner_id::int as partner_id from users where id = $1", [id])).toEqual([{ partner_id: company }]);
+    const { id } = await createUser(database.db, { username: "darurat", fullName: "Admin Darurat", kind: "INTERNAL", admin: true, password: "s3cret-s3cret" });
+    expect(await permissionsOf(database, id)).toEqual(EVERY_ACTIVE_MODULE);
+  });
+
+  it("gives a partner account the defaults of its company's kinds", async () => {
+    const database = await freshDatabase();
+    const company = async (name: string, flags: string) =>
+      Number((await database.query<{ id: number }>(`insert into partners (name, ${flags}) values ($1, ${flags.split(",").map(() => "true").join(", ")}) returning id`, [name]))[0]?.id);
+    const make = async (username: string, partnerId: number) =>
+      (await createUser(database.db, { username, fullName: username, kind: "PARTNER", partnerId, password: "s3cret-s3cret" })).id;
+
+    const supplier = { contracts: "VIEW", drivers: "CREATE", registrations: "CREATE", vehicles: "CREATE" };
+    const deliveries = { delivery_orders: "EDIT", drivers: "CREATE", registrations: "CREATE", vehicles: "CREATE" };
+    expect(await permissionsOf(database, await make("pks", await company("PKS A", "is_supplier")))).toEqual(supplier);
+    expect(await permissionsOf(database, await make("angkut", await company("Angkut T", "is_transporter")))).toEqual(deliveries);
+    expect(await permissionsOf(database, await make("pembeli", await company("Pembeli C", "is_customer")))).toEqual(deliveries);
+    expect(await permissionsOf(database, await make("serba", await company("Serba D", "is_supplier, is_transporter")))).toEqual({ ...supplier, ...deliveries });
+    const plain = Number((await database.query<{ id: number }>("insert into partners (name) values ('Tanpa jenis') returning id"))[0]?.id);
+    expect(await permissionsOf(database, await make("plain", plain))).toEqual({});
   });
 
   it("refuses what would be a wrong or duplicate account, and leaves no row behind", async () => {
     const database = await freshDatabase();
     const company = await partnerId(database, "Transporter T");
-    const staff = { username: "admin", fullName: "Admin", kind: "INTERNAL", role: "LOGISTICS_ADMIN", password: "s3cret-s3cret" } as const;
+    const staff = { username: "admin", fullName: "Admin", kind: "INTERNAL", password: "s3cret-s3cret" } as const;
 
-    await expect(createUser(database.db, { ...staff, role: "NOT_A_ROLE" })).rejects.toThrow(/NOT_A_ROLE/);
-    await expect(createUser(database.db, { ...staff, role: "PARTNER_SUPPLIER" })).rejects.toThrow(/PARTNER_SUPPLIER/);
     await expect(createUser(database.db, { ...staff, partnerId: company })).rejects.toThrow(/partner/i);
-    await expect(createUser(database.db, { ...staff, kind: "PARTNER", role: "PARTNER_SUPPLIER" })).rejects.toThrow(/partner/i);
-    await expect(createUser(database.db, { ...staff, kind: "PARTNER", role: "PARTNER_SUPPLIER", partnerId: 999_999 })).rejects.toThrow(/999999/);
-    await expect(createUser(database.db, { ...staff, kind: "PARTNER", role: "SUPER_ADMIN", partnerId: company })).rejects.toThrow(/SUPER_ADMIN/);
+    await expect(createUser(database.db, { ...staff, kind: "PARTNER" })).rejects.toThrow(/partner/i);
+    await expect(createUser(database.db, { ...staff, kind: "PARTNER", partnerId: 999_999 })).rejects.toThrow(/999999/);
+    await expect(createUser(database.db, { ...staff, kind: "PARTNER", partnerId: company, admin: true })).rejects.toThrow(/--admin/);
     await expect(createUser(database.db, { ...staff, password: "short" })).rejects.toThrow(/8 characters/);
     expect(await database.query("select count(*)::int as n from users")).toEqual([{ n: 0 }]);
 
@@ -82,21 +100,22 @@ describe("createUser", () => {
 describe("user:create command", () => {
   it("takes the password from NEW_USER_PASSWORD and does not print it", async () => {
     const database = await freshDatabase();
-    const { code, output } = await cli(database, ["--username", "darurat", "--full-name", "Admin Darurat", "--kind", "INTERNAL", "--role", "SUPER_ADMIN"], {
+    const { code, output } = await cli(database, ["--username", "darurat", "--full-name", "Admin Darurat", "--kind", "INTERNAL", "--admin"], {
       NEW_USER_PASSWORD: "from-the-environment",
     });
     expect(code).toBe(0);
     expect(output).toContain("darurat");
     expect(output).not.toContain("from-the-environment");
-    const [row] = await database.query<{ password_hash: string }>("select password_hash from users where username = 'darurat'");
+    const [row] = await database.query<{ id: number; password_hash: string }>("select id::int as id, password_hash from users where username = 'darurat'");
     expect(await verifyPassword(row?.password_hash ?? "", "from-the-environment")).toBe(true);
+    expect(await permissionsOf(database, Number(row?.id))).toEqual(EVERY_ACTIVE_MODULE);
   });
 
   it("generates a password and prints it once when the variable is absent", async () => {
     const database = await freshDatabase();
     const company = await partnerId(database, "PKS A");
     const { code, output } = await cli(database, [
-      "--username", "pks-a", "--full-name", "Admin PKS A", "--kind", "PARTNER", "--partner-id", String(company), "--role", "PARTNER_SUPPLIER",
+      "--username", "pks-a", "--full-name", "Admin PKS A", "--kind", "PARTNER", "--partner-id", String(company),
     ]);
     expect(code).toBe(0);
     const generated = /^Password \(shown once\): (\S+)$/m.exec(output)?.[1] ?? "";
@@ -113,13 +132,16 @@ describe("user:create command", () => {
     expect(missing.output).toContain("--full-name");
     expect(missing.output).toContain("Usage");
 
-    const wrongKind = await cli(database, ["--username", "x", "--full-name", "X", "--kind", "ROBOT", "--role", "SUPER_ADMIN"]);
+    const wrongKind = await cli(database, ["--username", "x", "--full-name", "X", "--kind", "ROBOT"]);
     expect(wrongKind.code).toBe(1);
     expect(wrongKind.output).toContain("INTERNAL or PARTNER");
 
-    const wrongRole = await cli(database, ["--username", "x", "--full-name", "X", "--kind", "INTERNAL", "--role", "NOPE"]);
-    expect(wrongRole.code).toBe(1);
-    expect(wrongRole.output).toContain("NOPE");
+    // --role is gone; parseArgs refuses an option it does not know
+    const oldOption = await cli(database, ["--username", "x", "--full-name", "X", "--kind", "INTERNAL", "--role", "SUPER_ADMIN"]);
+    expect(oldOption.code).toBe(1);
+    expect(oldOption.output).toContain("--role");
+    const partnerAdmin = await cli(database, ["--username", "x", "--full-name", "X", "--kind", "PARTNER", "--partner-id", "1", "--admin"]);
+    expect(partnerAdmin.code).toBe(1);
     expect(await database.query("select count(*)::int as n from users")).toEqual([{ n: 0 }]);
   });
 });

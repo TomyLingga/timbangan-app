@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { testApp } from "./helpers/app.js";
 import { portalUser, startFakePortal } from "./helpers/fake-portal.js";
-import { bearer, PASSWORD, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, EVERYTHING, LOGISTICS, PASSWORD, seedPartner, seedPartnerUser, seedStaff, TRANSPORTER, VIEWER } from "./helpers/users.js";
 
 async function setup() {
   const context = await testApp();
   const { app, database } = context;
-  const rootId = await seedStaff(database, "root", "SUPER_ADMIN");
-  const qcId = await seedStaff(database, "qc", "QC_OPERATOR");
+  const rootId = await seedStaff(database, "root", EVERYTHING);
+  const qcId = await seedStaff(database, "qc", VIEWER);
   await database.query("update users set employee_no = 'E-0077' where id = $1", [qcId]);
-  const company = await seedPartner(database, "PT Angkut Satu");
-  const partnerUserId = await seedPartnerUser(database, "angkut", company, "PARTNER_TRANSPORTER");
+  const company = await seedPartner(database, "PT Angkut Satu", { transporter: true });
+  const partnerUserId = await seedPartnerUser(database, "angkut", company, TRANSPORTER);
   const root = await bearer(app, "root");
   const call = (method: "GET" | "PUT" | "PATCH", url: string, payload?: unknown, headers = root) =>
     app.inject({ method, url, headers, ...(payload === undefined ? {} : { payload: payload as object }) });
@@ -20,15 +20,15 @@ async function setup() {
 }
 
 describe("GET /api/admin/users", () => {
-  it("lists the accounts with their roles and company", async () => {
+  it("lists the accounts with their permissions and company", async () => {
     const { call, rootId, qcId, partnerUserId, company, clock } = await setup();
     const response = await call("GET", "/api/admin/users");
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       items: [
-        { id: partnerUserId, kind: "PARTNER", username: "angkut", fullName: "Partner angkut", employeeNo: null, partner: { id: company, name: "PT Angkut Satu" }, roles: ["PARTNER_TRANSPORTER"], isActive: true, lastLoginAt: null },
-        { id: qcId, kind: "INTERNAL", username: "qc", fullName: "Staff qc", employeeNo: "E-0077", partner: null, roles: ["QC_OPERATOR"], isActive: true, lastLoginAt: null },
-        { id: rootId, kind: "INTERNAL", username: "root", fullName: "Staff root", employeeNo: null, partner: null, roles: ["SUPER_ADMIN"], isActive: true, lastLoginAt: clock.now().toISOString() },
+        { id: partnerUserId, kind: "PARTNER", username: "angkut", fullName: "Partner angkut", employeeNo: null, partner: { id: company, name: "PT Angkut Satu" }, permissions: TRANSPORTER, isActive: true, lastLoginAt: null },
+        { id: qcId, kind: "INTERNAL", username: "qc", fullName: "Staff qc", employeeNo: "E-0077", partner: null, permissions: VIEWER, isActive: true, lastLoginAt: null },
+        { id: rootId, kind: "INTERNAL", username: "root", fullName: "Staff root", employeeNo: null, partner: null, permissions: EVERYTHING, isActive: true, lastLoginAt: clock.now().toISOString() },
       ],
       total: 3,
     });
@@ -46,77 +46,135 @@ describe("GET /api/admin/users", () => {
     expect((await call("GET", "/api/admin/users?limit=0")).statusCode).toBe(400);
   });
 
-  it("is for SUPER_ADMIN only, like every route under /api/admin/users and /api/admin/roles", async () => {
+  it("needs users:VIEW to read and users:EDIT to change, on every route under /api/admin/users and /api/admin/modules", async () => {
     const { app, call, database, qcId } = await setup();
-    await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
+    await seedStaff(database, "logistics", LOGISTICS);
+    await seedStaff(database, "reader", { users: "VIEW" });
     for (const username of ["logistics", "angkut"]) {
       const headers = await bearer(app, username);
       expect((await call("GET", "/api/admin/users", undefined, headers)).statusCode).toBe(403);
-      expect((await call("GET", "/api/admin/roles", undefined, headers)).statusCode).toBe(403);
-      expect((await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: [] }, headers)).statusCode).toBe(403);
+      expect((await call("GET", "/api/admin/modules", undefined, headers)).statusCode).toBe(403);
+    }
+    for (const username of ["logistics", "angkut", "reader"]) {
+      const headers = await bearer(app, username);
+      expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: {} }, headers)).statusCode).toBe(403);
       expect((await call("PATCH", `/api/admin/users/${qcId}`, { isActive: false }, headers)).statusCode).toBe(403);
     }
+    const reader = await bearer(app, "reader");
+    expect((await call("GET", "/api/admin/users", undefined, reader)).statusCode).toBe(200);
+    expect((await call("GET", "/api/admin/modules", undefined, reader)).statusCode).toBe(200);
     expect((await call("GET", "/api/admin/users", undefined, {} as never)).statusCode).toBe(401);
+    // the role routes are gone
+    expect((await call("GET", "/api/admin/roles")).statusCode).toBe(404);
+    expect((await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: [] })).statusCode).toBe(404);
     expect(await database.query("select count(*)::int as n from audit_log")).toEqual([{ n: 0 }]);
   });
 });
 
-describe("GET /api/admin/roles", () => {
-  it("lists the roles with their scope", async () => {
+describe("GET /api/admin/modules", () => {
+  it("lists the active modules in their order with the levels that mean something and the partner flag", async () => {
     const { call } = await setup();
-    const { items } = (await call("GET", "/api/admin/roles")).json() as { items: { code: string; name: string; scope: string }[] };
-    expect(items).toHaveLength(14);
-    expect(items.map((item) => item.code)).toEqual([...items.map((item) => item.code)].sort());
-    expect(items.find((item) => item.code === "PARTNER_CUSTOMER")).toEqual({ code: "PARTNER_CUSTOMER", name: "Akun customer", scope: "PARTNER" });
+    expect((await call("GET", "/api/admin/modules")).json()).toEqual({
+      items: [
+        { code: "contracts", name: "Kontrak", levels: ["VIEW", "EDIT"], partnerAllowed: true },
+        { code: "drivers", name: "Supir", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
+        { code: "vehicles", name: "Kendaraan", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
+        { code: "destinations", name: "Tujuan", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "delivery_orders", name: "Delivery Order", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
+        { code: "registrations", name: "Registrasi", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
+        { code: "gate", name: "Pos registrasi", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "rfid_cards", name: "Kartu RFID", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "users", name: "Pengguna dan hak akses", levels: ["VIEW", "EDIT"], partnerAllowed: false },
+      ],
+    });
   });
 });
 
-describe("PUT /api/admin/users/:id/roles", () => {
-  it("replaces the roles and writes one audit row", async () => {
+describe("PUT /api/admin/users/:id/permissions", () => {
+  it("replaces every permission of the account and writes one audit row", async () => {
     const { call, database, qcId, rootId, audit, clock } = await setup();
-    const response = await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: ["LOGISTICS_ADMIN", "QC_SUPERVISOR", "LOGISTICS_ADMIN"] });
+    const response = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "CREATE", contracts: "VIEW", vehicles: null } });
     expect(response.statusCode).toBe(200);
-    expect(response.json().user).toMatchObject({ id: qcId, roles: ["LOGISTICS_ADMIN", "QC_SUPERVISOR"] });
-    expect(await database.query("select role_code, site_id, granted_by::int as granted_by from user_roles where user_id = $1 order by role_code", [qcId])).toEqual([
-      { role_code: "LOGISTICS_ADMIN", site_id: null, granted_by: rootId },
-      { role_code: "QC_SUPERVISOR", site_id: null, granted_by: rootId },
+    expect(response.json().user).toMatchObject({ id: qcId, permissions: { contracts: "VIEW", gate: "CREATE" } });
+    expect(
+      await database.query("select module_code, level, granted_by::int as granted_by, granted_at from user_permissions where user_id = $1 order by module_code", [qcId]),
+    ).toEqual([
+      { module_code: "contracts", level: "VIEW", granted_by: null, granted_at: expect.any(Date) },
+      { module_code: "gate", level: "CREATE", granted_by: rootId, granted_at: clock.now() },
     ]);
     expect(await audit()).toEqual([
-      { user_id: rootId, action: "USER_ROLES_SET", entity_type: "user", entity_id: qcId, before: { roles: ["QC_OPERATOR"] }, after: { roles: ["LOGISTICS_ADMIN", "QC_SUPERVISOR"] }, at: clock.now() },
+      {
+        user_id: rootId,
+        action: "USER_PERMISSIONS_SET",
+        entity_type: "user",
+        entity_id: qcId,
+        before: { permissions: VIEWER },
+        after: { permissions: { contracts: "VIEW", gate: "CREATE" } },
+        at: clock.now(),
+      },
     ]);
 
-    // the same roles again are not a change
-    expect((await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: ["QC_SUPERVISOR", "LOGISTICS_ADMIN"] })).statusCode).toBe(200);
+    // the same permissions again, in another order, are not a change
+    expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "CREATE", contracts: "VIEW" } })).statusCode).toBe(200);
     expect(await audit()).toHaveLength(1);
-    // an empty list takes every role away
-    expect((await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: [] })).json().user.roles).toEqual([]);
+    // an empty object takes every permission away
+    expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: {} })).json().user.permissions).toEqual({});
     expect(await audit()).toHaveLength(2);
+    expect(await database.query("select count(*)::int as n from user_permissions where user_id = $1", [qcId])).toEqual([{ n: 0 }]);
   });
 
-  it("answers 400 VALIDATION for a role that does not exist or belongs to the other kind of account", async () => {
-    const { call, qcId, partnerUserId, audit } = await setup();
-    const unknown = await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: ["QC_OPERATOR", "NOT_A_ROLE"] });
+  it("answers 400 VALIDATION for an unknown module, a level the module does not have, or a module partners may not get", async () => {
+    const { call, qcId, partnerUserId, audit, database } = await setup();
+    const unknown = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "VIEW", nope: "VIEW", weighbridge: "VIEW" } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toEqual({
-      error: { code: "VALIDATION", message: "Data yang dikirim tidak valid.", fields: [{ field: "roles", message: "Peran NOT_A_ROLE tidak ada." }] },
+      error: {
+        code: "VALIDATION",
+        message: "Data yang dikirim tidak valid.",
+        fields: [
+          { field: "permissions.nope", message: "Modul nope tidak ada." },
+          // a module of a later phase cannot be granted yet
+          { field: "permissions.weighbridge", message: "Modul weighbridge tidak ada." },
+        ],
+      },
     });
-    const wrongScope = await call("PUT", `/api/admin/users/${partnerUserId}/roles`, { roles: ["LOGISTICS_ADMIN"] });
-    expect(wrongScope.statusCode).toBe(400);
-    expect(wrongScope.json().error.fields).toEqual([{ field: "roles", message: "Peran LOGISTICS_ADMIN bukan untuk akun PARTNER." }]);
-    expect((await call("PUT", `/api/admin/users/${qcId}/roles`, { roles: "QC_OPERATOR" })).statusCode).toBe(400);
-    expect((await call("PUT", "/api/admin/users/999999/roles", { roles: [] })).statusCode).toBe(404);
-    expect((await call("PUT", "/api/admin/users/abc/roles", { roles: [] })).statusCode).toBe(400);
+    const level = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { contracts: "CREATE", users: "CREATE" } });
+    expect(level.json().error.fields).toEqual([
+      { field: "permissions.contracts", message: "Tingkat CREATE tidak berlaku untuk modul contracts." },
+      { field: "permissions.users", message: "Tingkat CREATE tidak berlaku untuk modul users." },
+    ]);
+    const partner = await call("PUT", `/api/admin/users/${partnerUserId}/permissions`, { permissions: { registrations: "CREATE", gate: "VIEW" } });
+    expect(partner.statusCode).toBe(400);
+    expect(partner.json().error.fields).toEqual([{ field: "permissions.gate", message: "Modul gate tidak bisa diberikan ke akun partner." }]);
+
+    expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "ADMIN" } })).statusCode).toBe(400);
+    expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: ["gate"] })).statusCode).toBe(400);
+    expect((await call("PUT", `/api/admin/users/${qcId}/permissions`, {})).statusCode).toBe(400);
+    expect((await call("PUT", "/api/admin/users/999999/permissions", { permissions: {} })).statusCode).toBe(404);
+    expect((await call("PUT", "/api/admin/users/abc/permissions", { permissions: {} })).statusCode).toBe(400);
     expect(await audit()).toEqual([]);
+    expect(await database.query("select count(*)::int as n from user_permissions where user_id = $1", [partnerUserId])).toEqual([{ n: 4 }]);
   });
 
-  it("does not let an admin remove SUPER_ADMIN from their own account", async () => {
-    const { call, rootId, database } = await setup();
-    const response = await call("PUT", `/api/admin/users/${rootId}/roles`, { roles: ["LOGISTICS_ADMIN"] });
-    expect(response.statusCode).toBe(409);
-    expect(response.json()).toEqual({ error: { code: "LAST_ADMIN_SELF", message: "Anda tidak dapat mencabut peran SUPER_ADMIN dari akun sendiri." } });
-    expect(await database.query("select role_code from user_roles where user_id = $1", [rootId])).toEqual([{ role_code: "SUPER_ADMIN" }]);
-    // adding a role to oneself is fine
-    expect((await call("PUT", `/api/admin/users/${rootId}/roles`, { roles: ["SUPER_ADMIN", "MANAGEMENT"] })).statusCode).toBe(200);
+  it("refuses with 409 LAST_ADMIN a change that leaves no active staff account with users:EDIT", async () => {
+    const { app, call, rootId, database, audit } = await setup();
+    const LAST_ADMIN = { error: { code: "LAST_ADMIN", message: "Harus ada sedikitnya satu akun internal aktif yang bisa mengatur hak akses." } };
+    const own = await call("PUT", `/api/admin/users/${rootId}/permissions`, { permissions: { ...EVERYTHING, users: "VIEW" } });
+    expect(own.statusCode).toBe(409);
+    expect(own.json()).toEqual(LAST_ADMIN);
+    expect((await call("PUT", `/api/admin/users/${rootId}/permissions`, { permissions: {} })).json()).toEqual(LAST_ADMIN);
+    expect(await database.query("select level from user_permissions where user_id = $1 and module_code = 'users'", [rootId])).toEqual([{ level: "EDIT" }]);
+    expect(await audit()).toEqual([]);
+
+    // an inactive admin does not count; an active second admin does
+    const other = await seedStaff(database, "other-admin", { users: "EDIT" });
+    await database.query("update users set is_active = false where id = $1", [other]);
+    expect((await call("PUT", `/api/admin/users/${rootId}/permissions`, { permissions: { gate: "EDIT" } })).statusCode).toBe(409);
+    await database.query("update users set is_active = true where id = $1", [other]);
+    expect((await call("PUT", `/api/admin/users/${rootId}/permissions`, { permissions: { gate: "EDIT" } })).statusCode).toBe(200);
+    // the other admin cannot now take its own access away either
+    const otherHeaders = await bearer(app, "other-admin");
+    expect((await call("PUT", `/api/admin/users/${other}/permissions`, { permissions: {} }, otherHeaders)).json()).toEqual(LAST_ADMIN);
   });
 });
 
@@ -160,12 +218,12 @@ describe("portal sign-in when the email is already a username", () => {
   it("gives the new portal account the username <email>#sso instead of failing", async () => {
     const portal = await startFakePortal();
     const { app, database } = await testApp({ PORTAL_API_URL: portal.apiUrl, PORTAL_WEB_URL: "http://portal.test", PORTAL_APP_NAME: "Timbangan" });
-    const localId = await seedStaff(database, "Budi.Santoso@example.test", "QC_OPERATOR");
+    const localId = await seedStaff(database, "Budi.Santoso@example.test", VIEWER);
     portal.ticket("ticket-1", portalUser());
 
     const response = await app.inject({ method: "POST", url: "/api/auth/sso/exchange", payload: { token: "ticket-1", appId: "0f3a8e9c-2b4d-4c6e-8f10-123456789abc" } });
     expect(response.statusCode).toBe(200);
-    expect(response.json().user).toMatchObject({ username: "budi.santoso@example.test#sso", roles: [] });
+    expect(response.json().user).toMatchObject({ username: "budi.santoso@example.test#sso", permissions: {} });
     expect(response.json().user.id).not.toBe(localId);
     expect(await database.query("select username from users order by id")).toEqual([{ username: "Budi.Santoso@example.test" }, { username: "budi.santoso@example.test#sso" }]);
 

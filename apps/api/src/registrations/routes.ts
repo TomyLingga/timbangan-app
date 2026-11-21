@@ -2,7 +2,7 @@ import { and, count, desc, eq, ilike, or, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
-import { type Account, accountOf, type Guards } from "../auth/guard.js";
+import { type Account, accountOf, can, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import { partners, registrations } from "../db/schema.js";
@@ -15,7 +15,6 @@ import {
   cancelTrips,
   hasArrived,
   mayWrite,
-  REVIEWERS,
   registrationBody,
   storeFindings,
   submitRegistration,
@@ -36,8 +35,10 @@ const reasonBody = z.object({ reason: z.string("Alasan wajib diisi.").trim().min
 
 export function registerRegistrationRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const signedIn = { preHandler: [guards.authenticate, guards.requireRole()] };
-  const reviewers = { preHandler: [guards.authenticate, guards.requireRole(...REVIEWERS)] };
+  const readers = { preHandler: [guards.authenticate, guards.requirePermission("registrations", "VIEW")] };
+  const writers = { preHandler: [guards.authenticate, guards.requirePermission("registrations", "CREATE")] };
+  // a partner account never approves or rejects, whatever its level
+  const reviewers = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("registrations", "EDIT")] };
 
   const one = async (db: Orm, id: number) => {
     const [registration] = await loadRegistrations(db, [id]);
@@ -57,7 +58,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     for (const id of ids) await pushNewDriver(context, id, request.log);
   };
 
-  app.get("/api/registrations", signedIn, async (request) => {
+  app.get("/api/registrations", readers, async (request) => {
     const query = listQuery.parse(request.query);
     const account = accountOf(request);
     await expireDueTrips(orm, context.now());
@@ -89,7 +90,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return { items: await loadRegistrations(orm, ids.map((row) => row.id), false), total: counted?.total ?? 0 };
   });
 
-  app.get("/api/registrations/:id", signedIn, async (request) => {
+  app.get("/api/registrations/:id", readers, async (request) => {
     const { id } = idParams.parse(request.params);
     await expireDueTrips(orm, context.now());
     const [visible] = await orm.select({ id: registrations.id }).from(registrations).where(and(eq(registrations.id, id), registrationsVisibleTo(accountOf(request))));
@@ -97,7 +98,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return { registration: await one(orm, id) };
   });
 
-  app.post("/api/registrations", signedIn, async (request, reply) => {
+  app.post("/api/registrations", writers, async (request, reply) => {
     const body = registrationBody.parse(request.body);
     const account = accountOf(request);
     if (!mayWrite(account, body.direction)) throw forbidden();
@@ -112,7 +113,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return reply.code(201).send({ registration: newDrivers.length ? await one(orm, registration.id) : registration });
   });
 
-  app.put("/api/registrations/:id", signedIn, async (request) => {
+  app.put("/api/registrations/:id", writers, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = registrationBody.parse(request.body);
     const account = accountOf(request);
@@ -131,7 +132,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return { registration: await one(orm, id) };
   });
 
-  app.post("/api/registrations/:id/submit", signedIn, async (request) => {
+  app.post("/api/registrations/:id/submit", writers, async (request) => {
     const { id } = idParams.parse(request.params);
     const account = accountOf(request);
     const now = context.now();
@@ -175,14 +176,14 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return { registration };
   });
 
-  app.post("/api/registrations/:id/cancel", signedIn, async (request) => {
+  app.post("/api/registrations/:id/cancel", writers, async (request) => {
     const { id } = idParams.parse(request.params);
     const account = accountOf(request);
     const now = context.now();
     const registration = await orm.transaction(async (tx) => {
       const current = await lock(tx, id, account);
-      // a partner account reaches here only for its own registrations; staff need to be the creator or an admin
-      if (account.kind === "INTERNAL" && current.createdBy !== account.id && !account.roles.some((role) => REVIEWERS.includes(role))) throw forbidden();
+      // a partner account reaches here only for its own registrations; staff with CREATE only for the ones they made
+      if (account.kind === "INTERNAL" && current.createdBy !== account.id && !can(account, "registrations", "EDIT")) throw forbidden();
       const { reason } = reasonBody.parse(request.body ?? {});
       if (!["DRAFT", "SUBMITTED", "APPROVED"].includes(current.status)) throw invalidState("Registrasi ini sudah selesai, ditolak, atau dibatalkan.");
       if (await hasArrived(tx, id)) throw invalidState("Registrasi tidak bisa dibatalkan: sudah ada truk yang check-in.");

@@ -1,4 +1,6 @@
-// npm run user:create -- --username <u> --full-name <n> --kind INTERNAL|PARTNER [--partner-id <id>] --role <ROLE_CODE>
+// npm run user:create -- --username <u> --full-name <n> --kind INTERNAL|PARTNER [--partner-id <id>] [--admin]
+// --admin gives EDIT on every active module (INTERNAL only). Without it an INTERNAL account starts without access
+// and a PARTNER account gets the defaults of its company (supplier, transporter, customer).
 // The password comes from NEW_USER_PASSWORD; without it a random one is generated and printed once.
 import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
@@ -6,7 +8,7 @@ import { loadConfig } from "../config.js";
 import { createDb, type Database } from "../db/client.js";
 import { createUser } from "../users/create-user.js";
 
-const USAGE = "Usage: npm run user:create -- --username <u> --full-name <n> --kind INTERNAL|PARTNER [--partner-id <id>] --role <ROLE_CODE>";
+const USAGE = "Usage: npm run user:create -- --username <u> --full-name <n> --kind INTERNAL|PARTNER [--partner-id <id>] [--admin]";
 
 export type Env = Record<string, string | undefined>;
 export type Print = (line: string) => void;
@@ -21,10 +23,10 @@ export async function runUserCreate(args: string[], env: Env, print: Print, open
         "full-name": { type: "string" },
         kind: { type: "string" },
         "partner-id": { type: "string" },
-        role: { type: "string" },
+        admin: { type: "boolean" },
       },
     });
-    const missing = (["username", "full-name", "kind", "role"] as const).filter((key) => !values[key]);
+    const missing = (["username", "full-name", "kind"] as const).filter((key) => !values[key]);
     if (missing.length > 0) throw new Error(`Missing ${missing.map((key) => `--${key}`).join(", ")}.\n${USAGE}`);
     if (values.kind !== "INTERNAL" && values.kind !== "PARTNER") throw new Error("--kind must be INTERNAL or PARTNER.");
     const partnerId = values["partner-id"] === undefined ? undefined : Number(values["partner-id"]);
@@ -37,10 +39,10 @@ export async function runUserCreate(args: string[], env: Env, print: Print, open
       fullName: values["full-name"] as string,
       kind: values.kind,
       partnerId,
-      role: values.role as string,
+      admin: values.admin === true,
       password: env.NEW_USER_PASSWORD ?? (generated as string),
     });
-    print(`Created user ${values.username} (id ${id}, ${values.kind}, role ${values.role}).`);
+    print(`Created user ${values.username} (id ${id}, ${values.kind}${values.admin ? ", EDIT on every active module" : ""}).`);
     if (generated) print(`Password (shown once): ${generated}`);
     return 0;
   } catch (error) {

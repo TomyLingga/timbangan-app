@@ -41,11 +41,11 @@ describe("migrate command", () => {
     const lines: string[] = [];
 
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Applied 3 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql"]);
+    expect(lines).toEqual(["Applied 4 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql"]);
 
     lines.length = 0;
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Nothing to apply: 3 migrations were applied before."]);
+    expect(lines).toEqual(["Nothing to apply: 4 migrations were applied before."]);
   });
 
   it("prints the reason and exits with 1 when it cannot run", async () => {

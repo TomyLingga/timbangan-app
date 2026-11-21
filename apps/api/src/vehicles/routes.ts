@@ -81,8 +81,11 @@ function plateNoOf(plateDisplay: string): string {
 
 export function registerVehicleRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const readers = { preHandler: [guards.authenticate, guards.requireRole()] };
-  const writers = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR")] };
+  const readers = { preHandler: [guards.authenticate, guards.requirePermission("vehicles", "VIEW")] };
+  // Staff only: a vehicle entered here is verified at once and may belong to any company. Partner accounts add
+  // their vehicles inside a registration.
+  const creators = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("vehicles", "CREATE")] };
+  const editors = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("vehicles", "EDIT")] };
 
   const one = async (db: Orm, id: number) => {
     const [vehicle] = await listVehicles(db, eq(vehicles.id, id), 1, todayAtPlant(context.now()));
@@ -108,7 +111,7 @@ export function registerVehicleRoutes(app: FastifyInstance, context: AppContext,
     }
   }
 
-  app.get("/api/vehicle-types", readers, async () => ({ items: await orm.select().from(vehicleTypes).orderBy(asc(vehicleTypes.code)) }));
+  app.get("/api/vehicle-types", { preHandler: [guards.authenticate, guards.requireAnyPermission(["vehicles", "VIEW"], ["registrations", "VIEW"])] }, async () => ({ items: await orm.select().from(vehicleTypes).orderBy(asc(vehicleTypes.code)) }));
 
   app.get("/api/vehicles", readers, async (request) => {
     const query = listQuery.parse(request.query);
@@ -123,7 +126,7 @@ export function registerVehicleRoutes(app: FastifyInstance, context: AppContext,
     return { items: await listVehicles(orm, where, query.limit, todayAtPlant(context.now())), total: counted?.total ?? 0 };
   });
 
-  app.post("/api/vehicles", writers, async (request, reply) => {
+  app.post("/api/vehicles", creators, async (request, reply) => {
     const { tareReason, ...body } = createBody.parse(request.body);
     const plateNo = plateNoOf(body.plateDisplay);
     const actor = accountOf(request).id;
@@ -144,7 +147,7 @@ export function registerVehicleRoutes(app: FastifyInstance, context: AppContext,
     return reply.code(201).send({ vehicle });
   });
 
-  app.patch("/api/vehicles/:id", writers, async (request) => {
+  app.patch("/api/vehicles/:id", editors, async (request) => {
     const { id } = idParams.parse(request.params);
     const { tareReason, ...body } = patchBody.parse(request.body);
     const plateNo = body.plateDisplay === undefined ? undefined : plateNoOf(body.plateDisplay);

@@ -5,7 +5,7 @@ import { AppError, notConfigured } from "../errors.js";
 import { syncVcf } from "./sync.js";
 
 export function registerVcfRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
-  const admin = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN")] };
+  const admin = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("drivers", "EDIT")] };
   // One run at a time in this process. `npm run sync:vcf` in another process is not seen here.
   let running = false;
 

@@ -40,7 +40,6 @@ async function listDestinations(orm: Orm, where: SQL | undefined, limit: number)
 
 export function registerDestinationRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const writers = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN")] };
 
   const one = async (db: Orm, id: number) => {
     const [destination] = await listDestinations(db, eq(destinations.id, id), 1);
@@ -53,7 +52,7 @@ export function registerDestinationRoutes(app: FastifyInstance, context: AppCont
     if (!partner) throw invalid("partnerId", "Partner tidak ditemukan.");
   };
 
-  app.get("/api/destinations", { preHandler: [guards.authenticate, guards.requireStaff] }, async (request) => {
+  app.get("/api/destinations", { preHandler: [guards.authenticate, guards.requirePermission("destinations", "VIEW")] }, async (request) => {
     const query = listQuery.parse(request.query);
     const pattern = query.q ? likeText(query.q) : null;
     const where = and(
@@ -65,7 +64,7 @@ export function registerDestinationRoutes(app: FastifyInstance, context: AppCont
     return { items: await listDestinations(orm, where, query.limit), total: counted?.total ?? 0 };
   });
 
-  app.post("/api/destinations", writers, async (request, reply) => {
+  app.post("/api/destinations", { preHandler: [guards.authenticate, guards.requirePermission("destinations", "CREATE")] }, async (request, reply) => {
     const body = createBody.parse(request.body);
     const destination = await orm.transaction(async (tx) => {
       await checkPartner(tx, body.partnerId);
@@ -76,7 +75,7 @@ export function registerDestinationRoutes(app: FastifyInstance, context: AppCont
     return reply.code(201).send({ destination });
   });
 
-  app.patch("/api/destinations/:id", writers, async (request) => {
+  app.patch("/api/destinations/:id", { preHandler: [guards.authenticate, guards.requirePermission("destinations", "EDIT")] }, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = patchBody.parse(request.body);
     const destination = await orm.transaction(async (tx) => {

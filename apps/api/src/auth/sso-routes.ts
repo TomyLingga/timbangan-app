@@ -5,6 +5,7 @@ import type { AppContext } from "../app.js";
 import { users } from "../db/schema.js";
 import { AppError, notConfigured } from "../errors.js";
 import { loadAccount } from "./guard.js";
+import { grantEverything } from "./permissions.js";
 import { verifyPortalToken } from "./portal.js";
 import { issueSession } from "./sessions.js";
 
@@ -13,7 +14,7 @@ const exchangeBody = z.object({
   appId: z.uuid("appId tidak valid."),
 });
 
-/** Staff sign in through the company portal: the portal vouches for the user, this application keeps the roles. */
+/** Staff sign in through the company portal: the portal vouches for the user, this application keeps the permissions. */
 export function registerSsoRoutes(app: FastifyInstance, context: AppContext): void {
   const orm = context.database.db;
   const portalConfig = () => {
@@ -42,7 +43,7 @@ export function registerSsoRoutes(app: FastifyInstance, context: AppContext): vo
       if (existing && !existing.isActive) return null;
       let userId = existing?.id;
       if (userId === undefined) {
-        // First sign-in: the account starts without roles; an admin grants them. When the email is already
+        // First sign-in: the account starts without permissions; an admin grants them. When the email is already
         // the username of another account (a local one), the portal account gets its own username.
         const email = identity.email.toLowerCase();
         const [taken] = await tx
@@ -58,6 +59,8 @@ export function registerSsoRoutes(app: FastifyInstance, context: AppContext): vo
         await tx.update(users).set(seen).where(eq(users.id, userId));
       }
       if (userId === undefined) return null;
+      // the bootstrap admins get every active module again at each sign-in, so a module added later reaches them
+      if (context.config.bootstrapAdminEmails.includes(identity.email.toLowerCase())) await grantEverything(tx, userId, now);
       const accessToken = await issueSession(context, tx, request, reply, userId);
       return { accessToken, user: await loadAccount(tx, userId) };
     });

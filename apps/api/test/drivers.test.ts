@@ -2,15 +2,15 @@ import { describe, expect, it, vi } from "vitest";
 import { runSyncVcf } from "../src/cli/sync-vcf.js";
 import { freshDatabase, TEST_JWT_SECRET, testApp } from "./helpers/app.js";
 import { registryDriver, registryTransporter, startFakeVcf } from "./helpers/fake-vcf.js";
-import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
+import { bearer, DESK, LOGISTICS, seedPartner, seedPartnerUser, seedStaff, TRANSPORTER, VIEWER } from "./helpers/users.js";
 
 async function setup(env: Record<string, string> = {}) {
   const context = await testApp(env);
   const { app, database } = context;
-  const adminId = await seedStaff(database, "logistics", "LOGISTICS_ADMIN");
-  await seedStaff(database, "qc", "QC_OPERATOR");
-  await seedStaff(database, "pos", "REGISTRATION_OPERATOR");
-  await seedPartnerUser(database, "angkut", await seedPartner(database, "PT Angkut Satu"), "PARTNER_TRANSPORTER");
+  const adminId = await seedStaff(database, "logistics", LOGISTICS);
+  await seedStaff(database, "qc", VIEWER);
+  await seedStaff(database, "pos", DESK);
+  await seedPartnerUser(database, "angkut", await seedPartner(database, "PT Angkut Satu"), TRANSPORTER);
   const as = async (username: string) => bearer(app, username);
   const call = async (method: "GET" | "POST", url: string, username: string | null = "logistics", payload?: object) =>
     app.inject({ method, url, headers: username ? await as(username) : {}, ...(payload ? { payload } : {}) });
@@ -157,14 +157,14 @@ describe("GET /api/drivers", () => {
     expect(invalid.json().error.fields).toEqual([{ field: "push", message: "Status kirim harus NONE, PENDING, SENT, atau FAILED." }]);
   });
 
-  it("is for staff with a role: partner accounts and staff without a role get 403", async () => {
+  it("is for staff with drivers:VIEW: partner accounts and staff without any permission get 403", async () => {
     const { call, database } = await withDrivers();
     expect((await call("GET", "/api/drivers", null)).statusCode).toBe(401);
     const partner = await call("GET", "/api/drivers", "angkut");
     expect(partner.statusCode).toBe(403);
     expect(partner.json().error.code).toBe("FORBIDDEN");
-    await database.query("delete from user_roles where user_id = (select id from users where username = 'qc')");
-    expect((await call("GET", "/api/drivers", "qc")).json().error.code).toBe("NO_ROLE");
+    await database.query("delete from user_permissions where user_id = (select id from users where username = 'qc')");
+    expect((await call("GET", "/api/drivers", "qc")).json().error.code).toBe("NO_ACCESS");
   });
 });
 
