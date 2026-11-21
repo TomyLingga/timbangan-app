@@ -38,7 +38,7 @@ export function LoginScreen() {
   const passwordErrorId = `${ids}-password-error`;
   const formErrorId = `${ids}-form-error`;
 
-  const signedIn = state.status === "authenticated" || state.status === "no-role";
+  const signedIn = state.status === "authenticated" || state.status === "no-access";
 
   // Someone who already has a session has no business on this page.
   useEffect(() => {

@@ -20,9 +20,9 @@ describe("errorMessage", () => {
     );
   });
 
-  it("explains an ended session and a missing role", () => {
+  it("explains an ended session and an account without access", () => {
     expect(errorMessage(error(401, "SIGNED_OUT"))).toBe("Sesi berakhir. Masuk lagi untuk melanjutkan.");
-    expect(errorMessage(error(403, "NO_ROLE"))).toBe("Akun ini belum punya peran. Hubungi admin sistem.");
+    expect(errorMessage(error(403, "NO_ACCESS"))).toBe("Akun ini belum diberi hak akses. Hubungi admin sistem.");
     expect(errorMessage(error(403, "FORBIDDEN"))).toBe("Akun ini tidak punya izin untuk data ini.");
   });
 
@@ -91,17 +91,19 @@ describe("saveErrorMessage", () => {
 });
 
 describe("userAdminErrorMessage", () => {
-  it("explains the two protections on the admin's own account", () => {
-    expect(userAdminErrorMessage(error(409, "LAST_ADMIN_SELF"))).toBe(
-      "Anda admin sistem terakhir, jadi peran Admin sistem tidak bisa dilepas dari akun Anda sendiri.",
+  it("explains the last admin and the admin's own account", () => {
+    expect(userAdminErrorMessage(error(409, "LAST_ADMIN"))).toBe(
+      "Harus tetap ada satu akun karyawan aktif yang bisa mengatur hak akses. Beri tingkat ubah pada modul Pengguna ke akun lain dulu.",
     );
     expect(userAdminErrorMessage(error(409, "SELF_CHANGE"))).toBe("Anda tidak bisa menonaktifkan akun Anda sendiri.");
   });
 
-  it("explains a refused role selection", () => {
-    expect(userAdminErrorMessage(error(400, "VALIDATION"))).toBe(
-      "Pilihan peran ditolak server. Periksa lagi peran yang dicentang.",
-    );
+  it("shows the reasons the server gives for refused permissions", () => {
+    const refused = new ApiError(400, "VALIDATION", "Data yang dikirim tidak valid.", [], {
+      "permissions.gate": "Modul gate tidak bisa diberikan ke akun partner.",
+    });
+    expect(userAdminErrorMessage(refused)).toBe("Hak akses ditolak server: Modul gate tidak bisa diberikan ke akun partner.");
+    expect(userAdminErrorMessage(error(400, "VALIDATION"))).toBe("Hak akses ditolak server. Periksa lagi pilihan tiap modul.");
   });
 });
 

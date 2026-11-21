@@ -23,10 +23,10 @@ import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { cardSaveErrorMessage } from "@/lib/messages";
-import { canManageCards } from "@/lib/roles";
+import { canCreate, canEdit, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { cardStatusInfo } from "@/lib/status";
-import type { Page, RfidCard } from "@/lib/types";
+import type { Page, RfidCard, User } from "@/lib/types";
 import { cardPayload, validateCard, type CardValues } from "@/lib/workflow-forms";
 
 const LIST_LIMIT = 50;
@@ -169,7 +169,7 @@ function CardFormSheet({
   );
 }
 
-function CardsPage() {
+function CardsPage({ user }: { user: User }) {
   const ids = useId();
   const [searchText, setSearchText] = useState("");
   const [status, setStatus] = useState("");
@@ -188,10 +188,12 @@ function CardsPage() {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Kartu RFID" description="Kartu yang dibawa truk selama di dalam pabrik. Kartu terikat ke truk saat check-in di pos.">
-        <Button onClick={() => setEditing(null)}>
-          <Plus aria-hidden="true" />
-          Kartu baru
-        </Button>
+        {canCreate(user, "rfid_cards") ? (
+          <Button onClick={() => setEditing(null)}>
+            <Plus aria-hidden="true" />
+            Kartu baru
+          </Button>
+        ) : null}
       </PageHeader>
 
       <div aria-live="polite" className="empty:hidden">
@@ -229,18 +231,22 @@ function CardsPage() {
             rows={list.data.items}
             rowKey={(card) => card.id}
             stale={list.isStale}
-            actions={(card) => (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-10 md:h-8"
-                onClick={() => setEditing(card)}
-                aria-label={`Ubah kartu ${card.uid}`}
-              >
-                <Pencil aria-hidden="true" />
-                Ubah
-              </Button>
-            )}
+            actions={
+              canEdit(user, "rfid_cards")
+                ? (card) => (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-10 md:h-8"
+                      onClick={() => setEditing(card)}
+                      aria-label={`Ubah kartu ${card.uid}`}
+                    >
+                      <Pencil aria-hidden="true" />
+                      Ubah
+                    </Button>
+                  )
+                : undefined
+            }
           />
         </div>
       )}
@@ -263,6 +269,6 @@ function CardsPage() {
 export function CardsScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canManageCards(state.user)) return <AccessDenied reason="Kartu RFID hanya diatur admin logistik." />;
-  return <CardsPage />;
+  if (!canView(state.user, "rfid_cards")) return <AccessDenied module="rfid_cards" />;
+  return <CardsPage user={state.user} />;
 }

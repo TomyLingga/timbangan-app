@@ -25,7 +25,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { destinationPayload, EMPTY_DESTINATION, validateDestination, type DestinationValues } from "@/lib/forms";
 import { saveErrorMessage } from "@/lib/messages";
-import { canWriteDestinations, isStaff } from "@/lib/roles";
+import { canAddDestination, canEditDestination, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { Destination, Page, PartnerRef, User } from "@/lib/types";
 
@@ -178,7 +178,8 @@ function DestinationFormSheet({
 }
 
 function DestinationsPage({ user }: { user: User }) {
-  const mayWrite = canWriteDestinations(user);
+  const mayAdd = canAddDestination(user);
+  const mayEdit = canEditDestination(user);
   const ids = useId();
   const [searchText, setSearchText] = useState("");
   const [customer, setCustomer] = useState<PartnerRef | null>(null);
@@ -203,7 +204,7 @@ function DestinationsPage({ user }: { user: User }) {
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Tujuan" description="Alamat tujuan pengiriman untuk tiap customer.">
-        {mayWrite ? (
+        {mayAdd ? (
           <Button onClick={() => setEditing(null)}>
             <Plus aria-hidden="true" />
             Tujuan baru
@@ -257,7 +258,7 @@ function DestinationsPage({ user }: { user: User }) {
             rowKey={(destination) => destination.id}
             stale={list.isStale}
             actions={
-              mayWrite
+              mayEdit
                 ? (destination) => (
                     <Button
                       variant="ghost"
@@ -294,6 +295,6 @@ function DestinationsPage({ user }: { user: User }) {
 export function DestinationsScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!isStaff(state.user)) return <AccessDenied reason="Data tujuan hanya bisa dibuka karyawan." />;
+  if (!canView(state.user, "destinations")) return <AccessDenied module="destinations" />;
   return <DestinationsPage user={state.user} />;
 }

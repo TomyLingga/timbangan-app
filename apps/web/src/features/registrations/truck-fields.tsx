@@ -12,8 +12,8 @@ import { formatQuantity } from "@/lib/format";
 import { LICENCE_CLASSES } from "@/lib/forms";
 import { plateError, plateKey } from "@/lib/plate";
 import { api } from "@/lib/session";
-import { registryStatusInfo } from "@/lib/status";
-import type { Driver, Page, Vehicle, VehicleType } from "@/lib/types";
+import { expirySummary, registryStatusInfo } from "@/lib/status";
+import type { LookupDriver, LookupVehicle, VehicleType } from "@/lib/types";
 import {
   currentLookup,
   isBlacklisted,
@@ -25,16 +25,19 @@ import {
 
 type Update = (update: (truck: TruckValues) => TruckValues) => void;
 
-/** Looks a plate up in the vehicle master. The answer is kept only if the plate did not change meanwhile. */
-async function lookUpVehicle(truck: TruckValues, update: Update) {
+/**
+ * Looks a plate up with GET /api/lookup/vehicle, which finds one vehicle by
+ * its whole plate for any account that may register. The answer is kept only
+ * if the plate did not change meanwhile.
+ */
+export async function lookUpVehicle(truck: TruckValues, update: Update) {
   const key = plateKey(truck.plate);
   if (plateError(truck.plate)) return;
   const current = currentLookup(truck.vehicle, key);
   if (current.state === "found" || current.state === "missing" || current.state === "loading") return;
   update((t) => ({ ...t, vehicle: { state: "loading", key } }));
   try {
-    const page = await api.request<Page<Vehicle>>("/api/vehicles", { query: { q: key, limit: 10 } });
-    const match = page.items.find((vehicle) => plateKey(vehicle.plateNo) === key) ?? null;
+    const { vehicle: match } = await api.request<{ vehicle: LookupVehicle | null }>("/api/lookup/vehicle", { query: { plate: key } });
     update((t) =>
       plateKey(t.plate) === key
         ? { ...t, vehicle: match ? { state: "found", key, item: match } : { state: "missing", key } }
@@ -45,15 +48,15 @@ async function lookUpVehicle(truck: TruckValues, update: Update) {
   }
 }
 
-async function lookUpDriver(truck: TruckValues, update: Update) {
+/** GET /api/lookup/driver: one driver by its whole licence number. */
+export async function lookUpDriver(truck: TruckValues, update: Update) {
   const key = licenceKey(truck.licenceNo);
   if (!key) return;
   const current = currentLookup(truck.driver, key);
   if (current.state === "found" || current.state === "missing" || current.state === "loading") return;
   update((t) => ({ ...t, driver: { state: "loading", key } }));
   try {
-    const page = await api.request<Page<Driver>>("/api/drivers", { query: { q: key, limit: 10 } });
-    const match = page.items.find((driver) => licenceKey(driver.licenceNo) === key) ?? null;
+    const { driver: match } = await api.request<{ driver: LookupDriver | null }>("/api/lookup/driver", { query: { licenceNo: key } });
     update((t) =>
       licenceKey(t.licenceNo) === key
         ? { ...t, driver: match ? { state: "found", key, item: match } : { state: "missing", key } }
@@ -162,22 +165,15 @@ export function TruckFields({
                 <span className="font-medium">{vehicle.item.plateDisplay}</span>
                 <span className="text-muted-foreground">{typeName(vehicle.item.vehicleTypeCode)}</span>
                 {vehicle.item.verified ? null : <StatusBadge info={{ label: "Belum diverifikasi", tone: "warning" }} />}
+                {vehicle.item.isActive ? null : <StatusBadge info={{ label: "Nonaktif", tone: "destructive" }} />}
               </p>
               <p className="mt-1 text-muted-foreground">
                 {[vehicle.item.owner?.name, vehicle.item.capacityKg ? `Daya angkut ${formatQuantity(vehicle.item.capacityKg, "kg")}` : null]
                   .filter(Boolean)
                   .join(" · ") || "Pemilik belum tercatat"}
               </p>
-              <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
-                <span>
-                  STNK <ExpiryDate value={vehicle.item.stnkValidUntil} expired={vehicle.item.expired.includes("STNK")} />
-                </span>
-                <span>
-                  Pajak <ExpiryDate value={vehicle.item.taxValidUntil} expired={vehicle.item.expired.includes("TAX")} />
-                </span>
-                <span>
-                  KIR <ExpiryDate value={vehicle.item.kirValidUntil} expired={vehicle.item.expired.includes("KIR")} />
-                </span>
+              <p className="mt-1">
+                Surat kendaraan: {expirySummary(vehicle.item.expired) ?? "STNK, pajak, dan KIR masih berlaku"}.
               </p>
             </Found>
           ) : vehicle.state === "missing" ? (
@@ -293,6 +289,10 @@ export function TruckFields({
               </Found>
               {isBlacklisted(driver.item) ? (
                 <Notice tone="error">Supir ini masuk daftar hitam VCF dan tidak bisa didaftarkan. Ganti supirnya.</Notice>
+              ) : driver.item.blocked ? (
+                <Notice tone="error">Supir ini sedang diblokir di pabrik dan tidak bisa didaftarkan. Ganti supirnya.</Notice>
+              ) : !driver.item.isActive ? (
+                <Notice tone="error">Supir ini tidak aktif. Hubungi admin logistik.</Notice>
               ) : driver.item.registryStatus?.toUpperCase() === "WARNING" ? (
                 <Notice tone="warning">
                   Supir ini berstatus Warning di VCF. Registrasi tetap bisa dikirim, tetapi ditinjau admin logistik dulu.

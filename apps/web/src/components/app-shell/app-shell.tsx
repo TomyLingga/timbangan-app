@@ -6,7 +6,6 @@ import { CircleAlert, Loader2, LogOut, Menu } from "lucide-react";
 import { AppMark } from "@/components/app-mark";
 import { SidebarNav } from "@/components/app-shell/sidebar-nav";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -20,7 +19,6 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { useAuth } from "@/features/auth/auth-provider";
 import { APP_NAME } from "@/lib/config";
 import { errorMessage } from "@/lib/messages";
-import { roleLabels } from "@/lib/roles";
 import type { User } from "@/lib/types";
 
 function initials(fullName: string): string {
@@ -35,9 +33,8 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
   const [leaving, setLeaving] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
 
-  const roles = roleLabels(user.roles);
-  // Second line under the name: the company for partner accounts, then the roles.
-  const identityLine = [user.partner?.name, roles.join(", ")].filter(Boolean).join(" · ");
+  // Second line under the name: the company for partner accounts, otherwise the account kind.
+  const identityLine = user.partner?.name ?? (user.kind === "INTERNAL" ? "Karyawan" : null);
 
   async function handleSignOut() {
     if (leaving) return;
@@ -123,15 +120,6 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
                 <span className="text-sm font-semibold text-foreground">{user.fullName}</span>
                 <span className="text-xs text-muted-foreground">{user.username}</span>
                 {user.partner ? <span className="text-sm text-foreground">{user.partner.name}</span> : null}
-                {roles.length > 0 ? (
-                  <span className="mt-1 flex flex-wrap gap-1">
-                    {roles.map((role) => (
-                      <Badge key={role} variant="outline">
-                        {role}
-                      </Badge>
-                    ))}
-                  </span>
-                ) : null}
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem className="min-h-11" disabled={leaving} onSelect={() => void handleSignOut()}>

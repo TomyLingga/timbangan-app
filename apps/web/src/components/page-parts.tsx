@@ -9,6 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatNumber } from "@/lib/format";
+import { MODULE_LABELS } from "@/lib/permissions";
+import type { ModuleCode } from "@/lib/types";
 import { errorMessage } from "@/lib/messages";
 import { cn } from "@/lib/utils";
 
@@ -192,13 +194,15 @@ export function ResultCount({ shown, total, noun }: { shown: number; total: numb
   );
 }
 
-/** Shown when a signed-in account opens a page its role does not allow. */
-export function AccessDenied({ reason }: { reason: string }) {
+/** Shown when a signed-in account opens a page of a module it has no access to. */
+export function AccessDenied({ module, reason }: { module: ModuleCode; /** Replaces the default sentence. */ reason?: string }) {
   return (
-    <div className="flex flex-col items-center rounded-lg border bg-card px-4 py-12 text-center">
+    <div className="flex flex-col items-center rounded-lg border bg-card px-4 py-12 text-center" data-testid="access-denied">
       <Lock className="size-6 text-muted-foreground" aria-hidden="true" />
-      <h1 className="mt-3 text-base font-semibold">Halaman ini tidak tersedia untuk akun Anda</h1>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">{reason}</p>
+      <h1 className="mt-3 text-base font-semibold">Anda tidak punya akses ke halaman ini</h1>
+      <p className="mt-1 max-w-md text-sm text-muted-foreground">
+        {reason ?? `Halaman ini bagian dari modul ${MODULE_LABELS[module]}. Minta admin sistem memberi Anda hak akses ke modul itu.`}
+      </p>
       <Button asChild variant="secondary" className="mt-5">
         <Link href="/">Kembali ke Beranda</Link>
       </Button>

@@ -42,6 +42,8 @@ describe("cardUidError", () => {
   it("explains an empty or malformed UID", () => {
     expect(cardUidError("")).toBe("Tempelkan kartu ke pembaca, atau ketik UID kartu.");
     expect(cardUidError("XYZ123")).toBe("UID kartu hanya berisi angka 0 sampai 9 dan huruf A sampai F.");
-    expect(cardUidError("0A1")).toBe("UID kartu terdiri dari 4 sampai 32 karakter.");
+    // the API takes 8 to 20 hexadecimal digits (gate/routes.ts, rfid-cards/routes.ts)
+    expect(cardUidError("0A1B2C3")).toBe("UID kartu terdiri dari 8 sampai 20 karakter.");
+    expect(cardUidError("0A1B2C3D4E5F6A7B8C9D0")).toBe("UID kartu terdiri dari 8 sampai 20 karakter.");
   });
 });

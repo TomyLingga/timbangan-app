@@ -156,6 +156,9 @@ const TRIP_STATUSES: Record<string, StatusInfo> = {
   ready: AWAITING_REVIEW,
   issued: { label: "SPJ terbit", tone: "success" },
   checked_in: { label: "Sudah check-in", tone: "success" },
+  in_process: { label: "Dalam proses", tone: "success" },
+  completed: { label: "Selesai", tone: "neutral" },
+  rejected: { label: "Ditolak", tone: "destructive" },
   cancelled: CANCELLED,
   expired: { label: "SPJ kedaluwarsa", tone: "destructive" },
 };
@@ -199,11 +202,9 @@ const CHECK_SENTENCES: Record<string, string> = {
   ALREADY_CHECKED_IN: "Truk ini sudah check-in.",
   VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
   DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik.",
-  TRIP_CANCELLED: "Perjalanan ini sudah dibatalkan.",
-  TRIP_NOT_ISSUED: "SPJ truk ini belum terbit.",
 };
 
-export function checkSentence(check: { code: string; message: string | null }): string {
+export function checkSentence(check: { code: string; message: string }): string {
   return CHECK_SENTENCES[check.code] ?? (check.message?.trim() || check.code);
 }
 
@@ -217,8 +218,8 @@ export function findingWhere(finding: Pick<Finding, "tripSeq" | "allocationSeq">
   return parts.length > 0 ? parts.join(", ") : null;
 }
 
-export function isBlocking(check: Pick<GateCheck, "level"> & Partial<GateCheck>): boolean {
-  return check.level.trim().toUpperCase() === "BLOCK";
+export function isBlocking(check: GateCheck): boolean {
+  return check.level === "BLOCK";
 }
 
 export function syncEntityLabel(entity: string): string {

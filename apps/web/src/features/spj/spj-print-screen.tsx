@@ -9,21 +9,13 @@ import { Barcode } from "@/components/barcode";
 import { ListError } from "@/components/page-parts";
 import { Button } from "@/components/ui/button";
 import { useApiQuery } from "@/hooks/use-api-query";
-import { formatDateTime, formatQuantity } from "@/lib/format";
+import { formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { api } from "@/lib/session";
-import type { PartnerRef, SpjLine, SpjPrint } from "@/lib/types";
+import type { SpjLine, SpjPrint } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Paper = "A5" | "A4";
 
-const nameOf = (value: PartnerRef | { name: string } | string | null | undefined) =>
-  value === null || value === undefined ? null : typeof value === "string" ? value : value.name;
-
-function siteName(site: SpjPrint["site"]): string | null {
-  if (!site) return null;
-  if (typeof site === "string") return site;
-  return site.name ?? site.code ?? null;
-}
 
 /** "AB3D EF7H 9KMN": groups of four are easier to read aloud and type. */
 const grouped = (token: string) => token.replace(/(.{4})(?=.)/g, "$1 ");
@@ -40,8 +32,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function destinationText(line: SpjLine): string {
   const destination = line.destination;
   if (!destination) return "-";
-  if (typeof destination === "string") return destination;
-  return [destination.name, destination.address].filter(Boolean).join(", ");
+  return [destination.name, destination.address, destination.regency].filter(Boolean).join(", ");
 }
 
 function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
@@ -56,7 +47,7 @@ function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
     >
       <header className="flex items-start justify-between gap-4 border-b border-neutral-300 pb-3">
         <div className="min-w-0">
-          <p className="text-xs text-neutral-600">{siteName(spj.site) ?? "-"}</p>
+          <p className="text-xs text-neutral-600">{spj.site.name}</p>
           <h1 className="text-lg leading-tight font-semibold">Surat Pengantar Jalan</h1>
           <p className="text-xs text-neutral-600">{incoming ? "Incoming (pembelian)" : "Outgoing (penjualan)"}</p>
         </div>
@@ -75,14 +66,15 @@ function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
 
       <dl className="grid grid-cols-2 gap-x-5 gap-y-3">
         <Field label="Supir">
-          {spj.driver?.fullName ?? "-"}
-          <span className="block text-xs font-normal">SIM {spj.driver?.licenceNo ?? "-"}</span>
+          {spj.driver.fullName ?? "-"}
+          <span className="block text-xs font-normal">SIM {spj.driver.licenceNo ?? "-"}</span>
         </Field>
         <Field label="Kendaraan">
-          {spj.vehicle?.plateDisplay ?? "-"}
-          {spj.vehicle?.vehicleType ? <span className="block text-xs font-normal">{spj.vehicle.vehicleType}</span> : null}
+          {spj.vehicle.plateDisplay ?? "-"}
+          {spj.vehicle.vehicleType ? <span className="block text-xs font-normal">{spj.vehicle.vehicleType}</span> : null}
+          {spj.containerNo ? <span className="block text-xs font-normal">Kontainer {spj.containerNo}</span> : null}
         </Field>
-        <Field label="Transporter">{nameOf(spj.transporter) ?? "-"}</Field>
+        <Field label="Transporter">{spj.transporter?.name ?? "-"}</Field>
         <Field label="Berlaku">
           {formatDateTime(spj.issuedAt)}
           <span className="block text-xs font-normal">sampai {formatDateTime(spj.validUntil)}</span>
@@ -113,12 +105,12 @@ function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
                 {line.doNo ? <span className="block font-medium">{line.doNo}</span> : null}
                 <span className="block">{line.contractNo ?? "-"}</span>
               </td>
-              <td className="py-1.5 pr-2">{nameOf(line.product) ?? "-"}</td>
+              <td className="py-1.5 pr-2">{line.product.name}</td>
               <td className="py-1.5 pr-2 text-right whitespace-nowrap tabular-nums">{formatQuantity(line.qtyPlanned, line.uom)}</td>
               <td className="py-1.5">
-                {incoming ? (nameOf(line.partner) ?? "-") : (
+                {incoming ? line.partner.name : (
                   <>
-                    <span className="block">{nameOf(line.partner) ?? "-"}</span>
+                    <span className="block">{line.partner.name}</span>
                     <span className="block">{destinationText(line)}</span>
                   </>
                 )}
@@ -138,6 +130,8 @@ function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
 export function SpjPrintScreen() {
   const { tripId } = useParams<{ tripId: string }>();
   const [paper, setPaper] = useState<Paper>("A5");
+  // POST .../spj/printed answers the new count; until then the count of the SPJ itself is shown.
+  const [printed, setPrinted] = useState<number | null>(null);
   const query = useApiQuery(`spj|${tripId}`, (signal) =>
     api.request<{ spj: SpjPrint }>(`/api/trips/${encodeURIComponent(tripId)}/spj`, { signal }),
   );
@@ -145,7 +139,10 @@ export function SpjPrintScreen() {
   // Every print, from the button or from the browser menu, is counted once.
   useEffect(() => {
     const counted = () => {
-      void api.request(`/api/trips/${encodeURIComponent(tripId)}/spj/printed`, { method: "POST" }).catch(() => {});
+      void api
+        .request<{ printCount: number }>(`/api/trips/${encodeURIComponent(tripId)}/spj/printed`, { method: "POST" })
+        .then((answer) => setPrinted(answer.printCount))
+        .catch(() => {});
     };
     window.addEventListener("beforeprint", counted);
     return () => window.removeEventListener("beforeprint", counted);
@@ -162,6 +159,11 @@ export function SpjPrintScreen() {
           </Link>
         </Button>
         <div className="flex flex-wrap items-center gap-2">
+          {query.data ? (
+            <p className="text-sm text-muted-foreground" data-testid="spj-print-count">
+              Sudah dicetak {formatNumber(printed ?? query.data.spj.printCount)} kali
+            </p>
+          ) : null}
           <div role="group" aria-label="Ukuran kertas" className="flex rounded-md border bg-background p-0.5">
             {(["A5", "A4"] as const).map((size) => (
               <button

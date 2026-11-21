@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Contract, DeliveryOrder, Driver, QualityParameter, Vehicle, VehicleType } from "@/lib/types";
+import type { Contract, DeliveryOrder, LookupDriver, LookupVehicle, QualityParameter, Registration, Trip, VehicleType } from "@/lib/types";
 import {
   cardPayload,
   decimalNumber,
@@ -8,9 +8,12 @@ import {
   EMPTY_DELIVERY_ORDER,
   emptyLetter,
   emptyTruck,
+  incomingFromDraft,
   incomingPayload,
   letterPayload,
+  outgoingFromDraft,
   outgoingPayload,
+  registrationFieldErrors,
   validateCard,
   validateDeliveryOrder,
   validateIncoming,
@@ -29,33 +32,29 @@ const TYPES: VehicleType[] = [
 
 const PARAMS: QualityParameter[] = [
   { code: "FFA", name: "FFA", unit: "%", decimals: 2, minValid: 0, maxValid: 20 },
-  { code: "MOISTURE", name: "Moisture", unit: "%", decimals: 3, minValid: "0", maxValid: "5" },
+  { code: "MOISTURE", name: "Moisture", unit: "%", decimals: 3, minValid: 0, maxValid: 5 },
 ];
 
 const CONTEXT = { types: TYPES, parameters: PARAMS, currentYear: 2026 };
 
-function vehicle(overrides: Partial<Vehicle> = {}): Vehicle {
+function vehicle(overrides: Partial<LookupVehicle> = {}): LookupVehicle {
   return {
     id: "v-1",
     plateNo: "ZZ0001CTH",
     plateDisplay: "ZZ 0001 CTH",
     vehicleTypeCode: "TANGKI",
-    owner: null,
-    ownership: null,
+    needsContainerNo: false,
     capacityKg: 10000,
-    productionYear: 2020,
     tareKg: 5000,
-    stnkValidUntil: null,
-    taxValidUntil: null,
-    kirValidUntil: null,
     expired: [],
-    isActive: true,
     verified: true,
+    owner: null,
+    isActive: true,
     ...overrides,
   };
 }
 
-function driver(overrides: Partial<Driver> = {}): Driver {
+function driver(overrides: Partial<LookupDriver> = {}): LookupDriver {
   return {
     id: "d-1",
     fullName: "Supir Contoh",
@@ -64,9 +63,7 @@ function driver(overrides: Partial<Driver> = {}): Driver {
     licenceValidUntil: "2027-06-30",
     licenceExpired: false,
     registryStatus: "NORMAL",
-    registrySyncedAt: null,
-    registryPush: "NONE",
-    registryPushError: null,
+    blocked: false,
     isActive: true,
     ...overrides,
   };
@@ -116,7 +113,7 @@ function order(id: string, overrides: Partial<DeliveryOrder> = {}): DeliveryOrde
     qty: 40000,
     uom: "Kg",
     tolerancePct: 0.2,
-    destination: null,
+    destination: { id: "t-1", name: "Gudang", address: null, district: null, regency: null, province: null },
     deliveryFrom: "2026-11-20",
     deliveryUntil: null,
     transportTerms: null,
@@ -195,6 +192,15 @@ describe("validateTruck", () => {
     expect(errors.licenceNo).toBe("Supir ini masuk daftar hitam VCF dan tidak bisa didaftarkan.");
   });
 
+  it("refuses a driver blocked at the plant and an inactive driver or vehicle", () => {
+    const blocked = knownTruck({ driver: { state: "found", key: "CONTOH0001", item: driver({ blocked: true }) } });
+    expect(validateTruck(blocked, CONTEXT).licenceNo).toBe("Supir ini sedang diblokir di pabrik dan tidak bisa didaftarkan.");
+    const inactiveDriver = knownTruck({ driver: { state: "found", key: "CONTOH0001", item: driver({ isActive: false }) } });
+    expect(validateTruck(inactiveDriver, CONTEXT).licenceNo).toBe("Supir ini tidak aktif. Hubungi admin logistik.");
+    const inactiveVehicle = knownTruck({ vehicle: { state: "found", key: "ZZ0001CTH", item: vehicle({ isActive: false }) } });
+    expect(validateTruck(inactiveVehicle, CONTEXT).plate).toBe("Kendaraan ini tidak aktif. Hubungi admin logistik.");
+  });
+
   it("lets a driver with a warning through", () => {
     const errors = validateTruck(
       knownTruck({ driver: { state: "found", key: "CONTOH0001", item: driver({ registryStatus: "WARNING" }) } }),
@@ -205,7 +211,7 @@ describe("validateTruck", () => {
 
   it("needs a container number when the vehicle type asks for one", () => {
     const found = knownTruck({
-      vehicle: { state: "found", key: "ZZ0001CTH", item: vehicle({ vehicleTypeCode: "KONTAINER" }) },
+      vehicle: { state: "found", key: "ZZ0001CTH", item: vehicle({ vehicleTypeCode: "KONTAINER", needsContainerNo: true }) },
     });
     expect(validateTruck(found, CONTEXT).containerNo).toBe("Isi nomor kontainer.");
     expect(validateTruck({ ...found, containerNo: "ABCU1234567" }, CONTEXT)).toEqual({});
@@ -509,5 +515,174 @@ describe("validateCard and cardPayload", () => {
       note: "retak",
       status: "LOST",
     });
+  });
+});
+
+describe("registrationFieldErrors", () => {
+  it("puts the API's field messages on the fields of the incoming form", () => {
+    const { errors, unplaced } = registrationFieldErrors("IN", {
+      "trips.0.vehicle.plateDisplay": "Plat nomor harus 3 sampai 12 huruf atau angka.",
+      "trips.0.driver.licenceValidUntil": "Masa berlaku SIM wajib diisi.",
+      "trips.0.letters.1.originNetKg": "Netto asal harus sama dengan bruto dikurangi tarra.",
+      "trips.0.letters.0.quality.FFA": "FFA harus antara 0 dan 20.",
+      allocations: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang.",
+      transporterId: "Transporter harus partner transporter.",
+    });
+    expect(errors).toEqual({
+      "truck.plate": "Plat nomor harus 3 sampai 12 huruf atau angka.",
+      "truck.licenceValidUntil": "Masa berlaku SIM wajib diisi.",
+      "letters.1.originNetKg": "Netto asal harus sama dengan bruto dikurangi tarra.",
+      "letters.0.quality.FFA": "FFA harus antara 0 dan 20.",
+      contracts: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang.",
+      transporter: "Transporter harus partner transporter.",
+    });
+    expect(unplaced).toEqual([]);
+  });
+
+  it("puts them on the trucks and orders of the outgoing form and keeps what has no field", () => {
+    const { errors, unplaced } = registrationFieldErrors("OUT", {
+      "trips.2.driver.id": "Supir tidak ditemukan.",
+      "trips.1.containerNo": "Nomor kontainer wajib diisi untuk jenis kendaraan ini.",
+      "allocations.0.qtyPlanned": "Quantity terlalu kecil untuk 4 truk.",
+      closeCargo: "Close cargo wajib dijawab sebelum dikirim.",
+      direction: "Arah registrasi tidak bisa diubah.",
+    });
+    expect(errors).toEqual({
+      "trucks.2.licenceNo": "Supir tidak ditemukan.",
+      "trucks.1.containerNo": "Nomor kontainer wajib diisi untuk jenis kendaraan ini.",
+      "orders.0.qty": "Quantity terlalu kecil untuk 4 truk.",
+      closeCargo: "Close cargo wajib dijawab sebelum dikirim.",
+    });
+    expect(unplaced).toEqual(["Arah registrasi tidak bisa diubah."]);
+  });
+});
+
+describe("drafts back into the forms", () => {
+  function trip(overrides: Partial<Trip> = {}): Trip {
+    return {
+      id: "trip-1",
+      registrationId: "r-1",
+      seq: 1,
+      tripNo: null,
+      status: "DRAFT",
+      direction: "IN",
+      flowCode: "IN_CPO",
+      partner: { id: "p-1", name: "Partner p-1" },
+      transporter: null,
+      currentStep: null,
+      vehicle: { id: "v-1", plateNo: "ZZ0001CTH", plateDisplay: "ZZ 0001 CTH", vehicleTypeCode: "TANGKI" },
+      driver: { id: "d-1", fullName: "Supir Contoh", licenceNo: "CONTOH0001", registryStatus: "NORMAL" },
+      containerNo: null,
+      plannedArrival: "2026-11-21",
+      qtyPlanned: null,
+      docGrossKg: null,
+      docTareKg: null,
+      docNetKg: null,
+      allocations: [],
+      spj: null,
+      card: null,
+      checkedInAt: null,
+      cancelReason: null,
+      ...overrides,
+    };
+  }
+
+  function registration(overrides: Partial<Registration> = {}): Registration {
+    return {
+      id: "r-1",
+      regNo: "REG/1",
+      direction: "IN",
+      flowCode: "IN_CPO",
+      status: "DRAFT",
+      partner: { id: "p-1", name: "Partner p-1" },
+      transporter: { id: "p-3", name: "Transporter" },
+      plannedDate: "2026-11-21",
+      truckCount: 1,
+      qtyTotal: null,
+      uom: "Kg",
+      closeCargo: null,
+      flexiBag: null,
+      remark: "catatan",
+      createdVia: "PORTAL",
+      createdBy: { id: "u-1", fullName: "Pembuat" },
+      createdAt: "2026-11-21T01:00:00Z",
+      submittedAt: null,
+      reviewedAt: null,
+      reviewNote: null,
+      findings: [],
+      allocations: [],
+      trips: [],
+      ...overrides,
+    };
+  }
+
+  const allocation = (seq: number, extra: Record<string, unknown>) => ({
+    seq,
+    contract: null,
+    deliveryOrder: null,
+    contractNo: `K-c-${seq}`,
+    doNo: null,
+    qtyPlanned: null,
+    tolerancePct: 0.25,
+    product: { id: "g-1", name: "CPO", category: "CPO" },
+    partner: { id: "p-1", name: "Partner p-1" },
+    ...extra,
+  });
+
+  const line = (seq: number, extra: Record<string, unknown> = {}) => ({
+    seq,
+    qtyPlanned: null,
+    handoverNo: null,
+    spbNo: null,
+    spbDate: null,
+    originTicketNo: null,
+    originGrossKg: null,
+    originTareKg: null,
+    originNetKg: null,
+    quality: {},
+    ...extra,
+  });
+
+  it("fills the incoming form from a draft, with the plate and licence still to be looked up", () => {
+    const values = incomingFromDraft(
+      registration({
+        allocations: [
+          allocation(1, { contract: { id: "c-1", contractNo: "K-c-1" } }),
+          allocation(2, { contract: { id: "c-2", contractNo: "K-c-2" } }),
+        ],
+        trips: [trip({ containerNo: "ABCU1", allocations: [line(1, { spbNo: "S1", originNetKg: 20000, quality: { FFA: 3.5 } }), line(2)] })],
+      }),
+      PARAMS,
+    );
+    expect(values.contracts.map((item) => [item.id, item.contractNo, item.partner.id])).toEqual([
+      ["c-1", "K-c-1", "p-1"],
+      ["c-2", "K-c-2", "p-1"],
+    ]);
+    expect(values.transporter).toEqual({ id: "p-3", name: "Transporter" });
+    expect(values.plannedDate).toBe("2026-11-21");
+    expect(values.remark).toBe("catatan");
+    expect(values.truck).toMatchObject({ plate: "ZZ 0001 CTH", licenceNo: "CONTOH0001", containerNo: "ABCU1" });
+    expect(values.truck.vehicle).toEqual({ state: "idle" });
+    expect(values.letters[0]).toMatchObject({ spbNo: "S1", originNetKg: "20000", quality: { FFA: "3.5", MOISTURE: "" } });
+    expect(values.letters[1]).toEqual(emptyLetter(PARAMS));
+  });
+
+  it("fills the outgoing form from a draft with the orders it names", () => {
+    const values = outgoingFromDraft(
+      registration({
+        direction: "OUT",
+        closeCargo: true,
+        flexiBag: false,
+        allocations: [allocation(1, { deliveryOrder: { id: "do-1", doNo: "DO-do-1" }, qtyPlanned: 38002 })],
+        trips: [trip({ allocations: [line(1, { handoverNo: "H-1" })] }), trip({ id: "trip-2", seq: 2, vehicle: null, driver: null })],
+      }),
+      [order("do-1")],
+    );
+    expect(values.orders).toEqual([{ order: order("do-1"), qty: "38002" }]);
+    expect(values.trucks.map((truck) => [truck.plate, truck.licenceNo, truck.handoverNo])).toEqual([
+      ["ZZ 0001 CTH", "CONTOH0001", "H-1"],
+      ["", "", ""],
+    ]);
+    expect([values.closeCargo, values.flexiBag]).toEqual(["yes", "no"]);
   });
 });

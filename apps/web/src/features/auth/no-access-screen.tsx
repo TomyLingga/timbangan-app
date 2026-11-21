@@ -9,8 +9,8 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { errorMessage } from "@/lib/messages";
 import type { User } from "@/lib/types";
 
-/** Shown to a staff account that exists but has no role yet. */
-export function NoRoleScreen({ user }: { user: User | null }) {
+/** Shown to a staff account that exists but has no permission on any module yet. */
+export function NoAccessScreen({ user }: { user: User | null }) {
   const { signOut, restore } = useAuth();
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,11 +31,11 @@ export function NoRoleScreen({ user }: { user: User | null }) {
       <div className="rounded-lg border bg-card p-5 sm:p-6">
         <h1 className="flex items-center gap-2 text-base font-semibold">
           <UserRoundCog className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-          Akun belum punya peran
+          Menunggu hak akses
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Akun Anda sudah terdaftar di aplikasi ini, tetapi admin sistem belum menetapkan peran. Hubungi admin sistem,
-          lalu periksa lagi setelah peran ditetapkan.
+          Akun Anda sudah terdaftar, tetapi belum diberi akses ke modul mana pun. Minta admin sistem mengatur hak akses
+          Anda, lalu periksa lagi.
         </p>
 
         {user ? (

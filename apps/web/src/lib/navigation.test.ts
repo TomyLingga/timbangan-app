@@ -1,76 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import { navigationFor } from "@/lib/navigation";
-import {
-  canCreateIncoming,
-  canCreateOutgoing,
-  canManageCards,
-  canManageDeliveryOrders,
-  canReviewRegistrations,
-  canSeeDeliveryOrders,
-  canSeeRegistrations,
-  canUseGate,
-} from "@/lib/roles";
-import type { User } from "@/lib/types";
+import type { Permissions, User } from "@/lib/types";
 
-function staff(...roles: string[]): User {
-  return { id: "u-1", kind: "INTERNAL", username: "staf", fullName: "Staf Contoh", roles, partner: null };
+function staff(permissions: Permissions): User {
+  return { id: "u-1", kind: "INTERNAL", username: "staf", fullName: "Staf Contoh", permissions, partner: null };
 }
 
-function partner(...roles: string[]): User {
+function partner(permissions: Permissions): User {
   return {
     id: "u-2",
     kind: "PARTNER",
     username: "mitra",
     fullName: "Mitra Contoh",
-    roles,
-    partner: { id: "p-1", name: "Mitra Contoh" },
+    permissions,
+    partner: { id: "p-1", name: "Mitra Contoh", isSupplier: true, isTransporter: false, isCustomer: false },
   };
 }
 
+const EVERYTHING: Permissions = {
+  contracts: "EDIT",
+  drivers: "EDIT",
+  vehicles: "EDIT",
+  destinations: "EDIT",
+  delivery_orders: "EDIT",
+  registrations: "EDIT",
+  gate: "EDIT",
+  rfid_cards: "EDIT",
+  users: "EDIT",
+};
+
 describe("navigationFor", () => {
-  it("gives a supplier Registrasi and the pages it had", () => {
-    expect(navigationFor(partner("PARTNER_SUPPLIER"))).toEqual(["/", "/registrasi", "/kontrak", "/kendaraan"]);
-  });
-
-  it("gives a transporter Delivery Order and Registrasi", () => {
-    expect(navigationFor(partner("PARTNER_TRANSPORTER"))).toEqual([
-      "/",
-      "/registrasi",
-      "/delivery-order",
-      "/kontrak",
-      "/kendaraan",
-    ]);
-  });
-
-  it("gives a registration operator the post and Registrasi", () => {
-    expect(navigationFor(staff("REGISTRATION_OPERATOR"))).toEqual([
-      "/",
-      "/registrasi",
-      "/pos",
-      "/kontrak",
-      "/supir",
-      "/kendaraan",
-      "/tujuan",
-    ]);
-  });
-
-  it("gives a logistics admin every phase 3 page", () => {
-    expect(navigationFor(staff("LOGISTICS_ADMIN"))).toEqual([
-      "/",
-      "/registrasi",
-      "/delivery-order",
-      "/pos",
-      "/kontrak",
-      "/supir",
-      "/kendaraan",
-      "/tujuan",
-      "/kartu",
-    ]);
-  });
-
-  it("gives the system admin everything, user administration included", () => {
-    expect(navigationFor(staff("SUPER_ADMIN"))).toEqual([
+  it("shows a module from level view, in menu order", () => {
+    expect(navigationFor(staff(EVERYTHING))).toEqual([
       "/",
       "/registrasi",
       "/delivery-order",
@@ -84,46 +46,26 @@ describe("navigationFor", () => {
     ]);
   });
 
-  it("gives other staff roles no phase 3 page", () => {
-    expect(navigationFor(staff("QC_OPERATOR"))).toEqual(["/", "/kontrak", "/supir", "/kendaraan", "/tujuan"]);
-    expect(navigationFor(partner("PARTNER_CUSTOMER"))).toEqual(["/", "/kontrak", "/kendaraan"]);
-  });
-});
-
-describe("phase 3 role checks", () => {
-  it("lets suppliers and staff start an incoming registration, not transporters", () => {
-    expect(canCreateIncoming(partner("PARTNER_SUPPLIER"))).toBe(true);
-    expect(canCreateIncoming(staff("REGISTRATION_OPERATOR"))).toBe(true);
-    expect(canCreateIncoming(partner("PARTNER_TRANSPORTER"))).toBe(false);
-    expect(canCreateIncoming(staff("QC_OPERATOR"))).toBe(false);
+  it("shows only the modules the account may view", () => {
+    expect(navigationFor(staff({ gate: "VIEW", registrations: "VIEW" }))).toEqual(["/", "/registrasi", "/pos"]);
+    expect(navigationFor(staff({ users: "VIEW" }))).toEqual(["/", "/pengguna"]);
   });
 
-  it("lets transporters and staff fill the trucks of a delivery order, not suppliers", () => {
-    expect(canCreateOutgoing(partner("PARTNER_TRANSPORTER"))).toBe(true);
-    expect(canCreateOutgoing(staff("LOGISTICS_ADMIN"))).toBe(true);
-    expect(canCreateOutgoing(partner("PARTNER_SUPPLIER"))).toBe(false);
+  it("gives a supplier the pages of its default access", () => {
+    expect(navigationFor(partner({ contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" }))).toEqual([
+      "/",
+      "/registrasi",
+      "/kontrak",
+      "/kendaraan",
+    ]);
   });
 
-  it("keeps review, cards and delivery order writing with the admins", () => {
-    for (const check of [canReviewRegistrations, canManageCards, canManageDeliveryOrders]) {
-      expect(check(staff("LOGISTICS_ADMIN"))).toBe(true);
-      expect(check(staff("SUPER_ADMIN"))).toBe(true);
-      expect(check(staff("REGISTRATION_OPERATOR"))).toBe(false);
-      expect(check(partner("PARTNER_TRANSPORTER"))).toBe(false);
-    }
+  it("keeps the staff-only pages from partner accounts whatever their level", () => {
+    // the driver list and the post list trips of every company, so the API refuses partners
+    expect(navigationFor(partner({ drivers: "EDIT", gate: "EDIT" }))).toEqual(["/"]);
   });
 
-  it("opens the post to operators and admins only", () => {
-    expect(canUseGate(staff("REGISTRATION_OPERATOR"))).toBe(true);
-    expect(canUseGate(staff("LOGISTICS_ADMIN"))).toBe(true);
-    expect(canUseGate(partner("PARTNER_SUPPLIER"))).toBe(false);
-  });
-
-  it("shows lists to the roles that work with them", () => {
-    expect(canSeeRegistrations(partner("PARTNER_SUPPLIER"))).toBe(true);
-    expect(canSeeRegistrations(staff("QC_OPERATOR"))).toBe(false);
-    expect(canSeeDeliveryOrders(partner("PARTNER_TRANSPORTER"))).toBe(true);
-    expect(canSeeDeliveryOrders(partner("PARTNER_SUPPLIER"))).toBe(false);
-    expect(canSeeRegistrations(null)).toBe(false);
+  it("gives an account without access only the start page", () => {
+    expect(navigationFor(staff({}))).toEqual(["/"]);
   });
 });

@@ -64,7 +64,7 @@ export function SsoCallback() {
 
   const message =
     failure ?? "Tautan masuk ini tidak lengkap. Buka aplikasi ini dari Portal INL, atau masuk dari halaman masuk.";
-  const hasSession = state.status === "authenticated" || state.status === "no-role";
+  const hasSession = state.status === "authenticated" || state.status === "no-access";
 
   return (
     <StatusScreen>

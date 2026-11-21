@@ -41,6 +41,9 @@ describe("status labels", () => {
     expect(tripStatusInfo("ISSUED")).toEqual({ label: "SPJ terbit", tone: "success" });
     expect(tripStatusInfo("CHECKED_IN")).toEqual({ label: "Sudah check-in", tone: "success" });
     expect(tripStatusInfo("EXPIRED")).toEqual({ label: "SPJ kedaluwarsa", tone: "destructive" });
+    expect(tripStatusInfo("IN_PROCESS")).toEqual({ label: "Dalam proses", tone: "success" });
+    expect(tripStatusInfo("COMPLETED")).toEqual({ label: "Selesai", tone: "neutral" });
+    expect(tripStatusInfo("REJECTED")).toEqual({ label: "Ditolak", tone: "destructive" });
     expect(tripStatusInfo("WEIGHING_1")).toEqual({ label: "WEIGHING_1", tone: "neutral" });
   });
 
@@ -55,36 +58,42 @@ describe("status labels", () => {
 describe("checkSentence", () => {
   it("turns finding codes into plain sentences", () => {
     expect(checkSentence({ code: "DRIVER_WARNING", message: "x" })).toBe("Supir berstatus Warning di VCF.");
-    expect(checkSentence({ code: "OVER_CONTRACT", message: null })).toBe("Netto surat melebihi sisa kontrak.");
-    expect(checkSentence({ code: "VEHICLE_UNVERIFIED", message: null })).toBe(
+    expect(checkSentence({ code: "OVER_CONTRACT", message: "x" })).toBe("Netto surat melebihi sisa kontrak.");
+    expect(checkSentence({ code: "VEHICLE_UNVERIFIED", message: "x" })).toBe(
       "Kendaraan baru dan belum diverifikasi admin.",
     );
   });
 
   it("turns post check codes into plain sentences", () => {
-    expect(checkSentence({ code: "ALREADY_CHECKED_IN", message: null })).toBe("Truk ini sudah check-in.");
-    expect(checkSentence({ code: "SPJ_EXPIRED", message: null })).toBe("Masa berlaku SPJ sudah lewat.");
+    expect(checkSentence({ code: "ALREADY_CHECKED_IN", message: "x" })).toBe("Truk ini sudah check-in.");
+    expect(checkSentence({ code: "SPJ_EXPIRED", message: "x" })).toBe("Masa berlaku SPJ sudah lewat.");
+    expect(checkSentence({ code: "DRIVER_BLOCKED", message: "x" })).toBe("Supir sedang diblokir di pabrik ini.");
+  });
+
+  it("has no sentence for codes the API does not send", () => {
+    // the scan answers SPJ_REVOKED for a cancelled trip; an SPJ that is not issued has no token
+    expect(checkSentence({ code: "TRIP_CANCELLED", message: "Teks server" })).toBe("Teks server");
+    expect(checkSentence({ code: "TRIP_NOT_ISSUED", message: "Teks server" })).toBe("Teks server");
   });
 
   it("shows the server text for a code it does not know, or the code itself", () => {
     expect(checkSentence({ code: "NEW_RULE", message: "Aturan baru" })).toBe("Aturan baru");
-    expect(checkSentence({ code: "NEW_RULE", message: null })).toBe("NEW_RULE");
+    expect(checkSentence({ code: "NEW_RULE", message: " " })).toBe("NEW_RULE");
   });
 });
 
 describe("findingWhere", () => {
   it("names the truck and the contract a finding is about", () => {
-    expect(findingWhere({ code: "X", message: null, tripSeq: 2, allocationSeq: 1 })).toBe("Truk 2, alokasi 1");
-    expect(findingWhere({ code: "X", message: null, tripSeq: 3 })).toBe("Truk 3");
-    expect(findingWhere({ code: "X", message: null })).toBeNull();
+    expect(findingWhere({ code: "X", message: "x", tripSeq: 2, allocationSeq: 1 })).toBe("Truk 2, alokasi 1");
+    expect(findingWhere({ code: "X", message: "x", tripSeq: 3 })).toBe("Truk 3");
+    expect(findingWhere({ code: "X", message: "x" })).toBeNull();
   });
 });
 
 describe("isBlocking", () => {
-  it("is true only for BLOCK, whatever the letter case", () => {
-    expect(isBlocking({ code: "X", level: "BLOCK", message: null })).toBe(true);
-    expect(isBlocking({ code: "X", level: "block", message: null })).toBe(true);
-    expect(isBlocking({ code: "X", level: "WARN", message: null })).toBe(false);
+  it("is true only for BLOCK", () => {
+    expect(isBlocking({ code: "X", level: "BLOCK", message: "x" })).toBe(true);
+    expect(isBlocking({ code: "X", level: "WARN", message: "x" })).toBe(false);
   });
 });
 
@@ -112,37 +121,55 @@ describe("gateErrorMessage", () => {
       "Supir ini masih tercatat di dalam pabrik. Selesaikan perjalanan sebelumnya dulu.",
     );
     expect(gateErrorMessage(error(409, "DRIVER_BLACKLISTED"))).toBe("Supir masuk daftar hitam VCF. Truk tidak boleh check-in.");
+    expect(gateErrorMessage(error(409, "DRIVER_BLOCKED"))).toBe("Supir sedang diblokir di pabrik ini. Truk tidak boleh check-in.");
+    expect(gateErrorMessage(error(409, "INVALID_STATE"))).toBe("Status truk ini tidak memungkinkan tindakan itu. Scan ulang SPJ-nya.");
+  });
+
+  it("shows the server sentence for a refusal code it does not know", () => {
+    const refused = new ApiError(409, "DRIVER_WARNING", "Supir Contoh berstatus peringatan di VCF.");
+    expect(gateErrorMessage(refused)).toBe("Supir Contoh berstatus peringatan di VCF.");
   });
 
   it("falls back to the general wording", () => {
     expect(gateErrorMessage(error(0, "NETWORK_ERROR"))).toBe("Server tidak bisa dihubungi. Periksa jaringan, lalu coba lagi.");
-    expect(gateErrorMessage(error(409, "SOMETHING_ELSE"))).toBe("Permintaan gagal (kode 409).");
+    expect(gateErrorMessage(error(403, "FORBIDDEN"))).toBe("Akun ini tidak punya izin untuk data ini.");
   });
 });
 
 describe("registrationErrorMessage", () => {
-  it("explains the hard refusals of a registration", () => {
-    expect(registrationErrorMessage(error(422, "DRIVER_BLACKLISTED"))).toBe(
+  it("explains the refusals of a registration with the codes the API uses", () => {
+    expect(registrationErrorMessage(error(409, "DRIVER_BLACKLISTED"))).toBe(
       "Supir ini masuk daftar hitam VCF, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
     );
-    expect(registrationErrorMessage(error(422, "DRIVER_BLOCKED"))).toBe(
+    expect(registrationErrorMessage(error(409, "DRIVER_BLOCKED"))).toBe(
       "Supir ini sedang diblokir di pabrik, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
     );
-    expect(registrationErrorMessage(error(400, "FLOW_MISMATCH"))).toBe(
-      "Kontrak yang dipilih tidak bisa digabung dalam satu registrasi karena alur barangnya berbeda.",
+    expect(registrationErrorMessage(error(409, "CONTRACT_NOT_AVAILABLE"))).toBe(
+      "Ada kontrak yang tidak terbuka lagi atau bukan milik perusahaan Anda. Hapus kontrak itu dari registrasi.",
     );
-    expect(registrationErrorMessage(error(400, "TOO_MANY_ALLOCATIONS"))).toBe(
-      "Terlalu banyak kontrak atau DO untuk satu registrasi.",
+    expect(registrationErrorMessage(error(409, "DO_NOT_AVAILABLE"))).toBe(
+      "Ada DO yang belum diterima, sudah ditutup, atau bukan untuk perusahaan Anda. Hapus DO itu dari registrasi.",
     );
-    expect(registrationErrorMessage(error(409, "DUPLICATE_IN_REGISTRATION"))).toBe(
-      "Kendaraan atau supir yang sama dipakai dua kali dalam registrasi ini.",
+    expect(registrationErrorMessage(error(409, "DUPLICATE_VEHICLE"))).toBe("Satu kendaraan dipakai dua kali dalam registrasi ini.");
+    expect(registrationErrorMessage(error(409, "DUPLICATE_DRIVER"))).toBe("Satu supir dipakai dua kali dalam registrasi ini.");
+    expect(registrationErrorMessage(error(409, "INVALID_STATE"))).toBe(
+      "Registrasi ini sudah berubah status. Muat ulang halaman, lalu coba lagi.",
     );
   });
 
-  it("asks to check the marked fields on a validation error", () => {
+  it("no longer knows the codes only the mock had", () => {
+    for (const code of ["FLOW_MISMATCH", "TOO_MANY_ALLOCATIONS", "CONTRACT_NOT_OPEN", "DELIVERY_ORDER_NOT_OPEN", "DUPLICATE_IN_REGISTRATION"]) {
+      expect(registrationErrorMessage(new ApiError(409, code, "Teks server."))).toBe("Teks server.");
+    }
+  });
+
+  it("gives the reasons of a validation error that have no field on the form", () => {
     expect(registrationErrorMessage(error(400, "VALIDATION"))).toBe(
       "Server menolak isian ini. Periksa kolom yang ditandai, lalu kirim lagi.",
     );
+    expect(
+      registrationErrorMessage(error(400, "VALIDATION"), ["Satu truk paling banyak membawa 2 kontrak atau DO pada jalur ini."]),
+    ).toBe("Server menolak isian ini: Satu truk paling banyak membawa 2 kontrak atau DO pada jalur ini.");
   });
 });
 
@@ -158,7 +185,7 @@ describe("transitionErrorMessage", () => {
 describe("cardSaveErrorMessage", () => {
   it("explains a UID that is already registered and a card that is in use", () => {
     expect(cardSaveErrorMessage(error(409, "DUPLICATE"))).toBe("UID kartu ini sudah terdaftar.");
-    expect(cardSaveErrorMessage(error(409, "CARD_IN_USE"))).toBe(
+    expect(cardSaveErrorMessage(error(409, "INVALID_STATE"))).toBe(
       "Kartu ini sedang terikat ke truk, jadi statusnya belum bisa diubah.",
     );
   });

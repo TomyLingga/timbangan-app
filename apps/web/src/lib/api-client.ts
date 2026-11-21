@@ -17,13 +17,16 @@ export class ApiError extends Error {
 
   /** Names of the request fields the API refused (from `error.fields`), if it said. */
   readonly fields: string[];
+  /** Field path to the API's message for it. The API writes these in Indonesian for users. */
+  readonly fieldMessages: Record<string, string>;
 
-  constructor(status: number, code: string, message: string, fields: string[] = []) {
+  constructor(status: number, code: string, message: string, fields: string[] = [], fieldMessages: Record<string, string> = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.fields = fields;
+    this.fieldMessages = fieldMessages;
   }
 }
 
@@ -46,6 +49,22 @@ function readFieldNames(fields: unknown): string[] {
   }
   if (typeof fields === "object" && fields !== null) return Object.keys(fields);
   return [];
+}
+
+/** Field to message, for the entries that carry a text message. */
+function readFieldMessages(fields: unknown): Record<string, string> {
+  const found: Record<string, string> = {};
+  if (Array.isArray(fields)) {
+    for (const entry of fields) {
+      if (typeof entry !== "object" || entry === null) continue;
+      const { field, path, message } = entry as { field?: unknown; path?: unknown; message?: unknown };
+      const name = typeof field === "string" && field ? field : typeof path === "string" && path ? path : null;
+      if (name && typeof message === "string" && message) found[name] = message;
+    }
+  } else if (typeof fields === "object" && fields !== null) {
+    for (const [name, message] of Object.entries(fields)) if (typeof message === "string" && message) found[name] = message;
+  }
+  return found;
 }
 
 export function isApiError(value: unknown): value is ApiError {
@@ -120,6 +139,7 @@ function toApiError(status: number, body: unknown): ApiError {
           code,
           typeof message === "string" && message ? message : code,
           readFieldNames(fields),
+          readFieldMessages(fields),
         );
       }
     }

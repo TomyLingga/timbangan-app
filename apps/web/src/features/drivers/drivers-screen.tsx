@@ -26,7 +26,7 @@ import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { driverPayload, EMPTY_DRIVER, LICENCE_CLASSES, validateDriver, type DriverValues } from "@/lib/forms";
 import { saveErrorMessage, vcfSyncErrorMessage } from "@/lib/messages";
-import { canSyncVcf, canWriteDrivers, isStaff } from "@/lib/roles";
+import { canAddDriver, canSeeDrivers, canSyncVcf } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { latestRunPerEntity, registryStatusInfo, runsBySource } from "@/lib/status";
 import type { Driver, Page, RegistryPush, RegistryStatus, SyncRunList, User, VcfSyncResult } from "@/lib/types";
@@ -359,7 +359,7 @@ function DriversPage({ user }: { user: User }) {
             {sync.phase === "running" ? "Mengambil dari VCF" : "Ambil dari VCF"}
           </Button>
         ) : null}
-        {canWriteDrivers(user) ? (
+        {canAddDriver(user) ? (
           <Button onClick={() => setFormOpen(true)}>
             <Plus aria-hidden="true" />
             Supir baru
@@ -446,6 +446,6 @@ function DriversPage({ user }: { user: User }) {
 export function DriversScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!isStaff(state.user)) return <AccessDenied reason="Data supir hanya bisa dibuka karyawan." />;
+  if (!canSeeDrivers(state.user)) return <AccessDenied module="drivers" />;
   return <DriversPage user={state.user} />;
 }

@@ -9,10 +9,11 @@
 // to dev/.smoke/. Exit code 0 means every check passed.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { Browser, findBrowser, sleep, waitForHttp } from "./browser.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(root, "dev", ".smoke");
@@ -26,18 +27,8 @@ const API = `http://localhost:${API_PORT}`;
 const DEV_MODE = process.env.SMOKE_MODE === "dev";
 const WAIT_MS = DEV_MODE ? 30000 : 8000;
 
-const BROWSERS = [
-  process.env.SMOKE_BROWSER,
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "/usr/bin/google-chrome",
-  "/usr/bin/chromium",
-].filter(Boolean);
-
 const children = [];
 const results = [];
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function start(command, args, options = {}) {
   const child = spawn(command, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], ...options });
@@ -45,225 +36,27 @@ function start(command, args, options = {}) {
   return child;
 }
 
-async function waitForHttp(url, label) {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    try {
-      await fetch(url);
-      return;
-    } catch {
-      await sleep(200);
-    }
-  }
-  throw new Error(`${label} did not start at ${url}`);
-}
-
 function check(name, passed, detail = "") {
   results.push({ name, passed });
   console.log(`${passed ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 }
 
-// --- DevTools protocol ------------------------------------------------------
-
-class Browser {
-  static async launch(executable, profileDir) {
-    const child = start(executable, [
-      "--headless=new",
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profileDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-gpu",
-      "--window-size=1366,900",
-      "about:blank",
-    ]);
-    const endpoint = await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("the browser gave no DevTools address")), 20000);
-      child.stderr.on("data", (chunk) => {
-        const match = /DevTools listening on (ws:\/\/\S+)/.exec(String(chunk));
-        if (match) {
-          clearTimeout(timer);
-          resolve(match[1]);
-        }
-      });
-    });
-    const socket = new WebSocket(endpoint);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve, { once: true });
-      socket.addEventListener("error", reject, { once: true });
-    });
-    return new Browser(socket);
-  }
-
-  constructor(socket) {
-    this.socket = socket;
-    this.nextId = 1;
-    this.pending = new Map();
-    this.sessionId = undefined;
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      const waiter = this.pending.get(message.id);
-      if (!waiter) return;
-      this.pending.delete(message.id);
-      if (message.error) waiter.reject(new Error(`${waiter.method}: ${message.error.message}`));
-      else waiter.resolve(message.result);
-    });
-  }
-
-  send(method, params = {}, sessionId = this.sessionId) {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, method });
-      this.socket.send(JSON.stringify({ id, method, params, sessionId }));
-    });
-  }
-
-  async openPage() {
-    const { targetId } = await this.send("Target.createTarget", { url: "about:blank" }, undefined);
-    const { sessionId } = await this.send("Target.attachToTarget", { targetId, flatten: true }, undefined);
-    this.sessionId = sessionId;
-    await this.send("Page.enable");
-    await this.send("Runtime.enable");
-  }
-
-  async evaluate(expression) {
-    const { result, exceptionDetails } = await this.send("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: true,
-    });
-    if (exceptionDetails) throw new Error(`page script failed: ${exceptionDetails.text} in ${expression.slice(0, 80)}`);
-    return result.value;
-  }
-
-  /** Polls until the expression is truthy. Returns its value, or null on timeout. */
-  async waitFor(expression, timeoutMs = WAIT_MS) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const value = await this.evaluate(expression);
-        if (value) return value;
-      } catch {
-        // The page is navigating; try again.
-      }
-      await sleep(100);
-    }
-    return null;
-  }
-
-  async goto(url) {
-    await this.send("Page.navigate", { url });
-    await this.waitFor("document.readyState === 'complete'");
-  }
-
-  hasText(text) {
-    return this.waitFor(`document.body.innerText.includes(${JSON.stringify(text)})`);
-  }
-
-  /** Clicks with real mouse events, by CSS selector or by the visible label. */
-  async click(selectorOrText) {
-    const locate = `(() => {
-      const wanted = ${JSON.stringify(selectorOrText)};
-      let el = null;
-      try { el = document.querySelector(wanted); } catch {}
-      el ??= [...document.querySelectorAll('button, a, [role="tab"], [role="menuitem"], [role="switch"]')]
-        .find((node) => node.offsetParent !== null && node.innerText.trim() === wanted);
-      if (!el) return null;
-      el.scrollIntoView({ block: "center" });
-      const box = el.getBoundingClientRect();
-      return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-    })()`;
-    let point = await this.waitFor(locate);
-    if (!point) throw new Error(`nothing to click for ${selectorOrText}`);
-    // A sheet that is still sliding in moves its content; wait until the target rests.
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      await sleep(80);
-      const next = (await this.evaluate(locate)) ?? point;
-      const resting = Math.abs(next.x - point.x) < 0.5 && Math.abs(next.y - point.y) < 0.5;
-      point = next;
-      if (resting) break;
-    }
-    const mouse = { x: point.x, y: point.y, button: "left", clickCount: 1 };
-    await this.send("Input.dispatchMouseEvent", { ...mouse, type: "mouseMoved", button: "none" });
-    await this.send("Input.dispatchMouseEvent", { ...mouse, type: "mousePressed" });
-    await this.send("Input.dispatchMouseEvent", { ...mouse, type: "mouseReleased" });
-  }
-
-  async type(selector, text, { perKey = false } = {}) {
-    const focused = await this.waitFor(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return false;
-      el.focus();
-      return document.activeElement === el;
-    })()`);
-    if (!focused) throw new Error(`no field ${selector}`);
-    for (const piece of perKey ? [...text] : [text]) {
-      await this.send("Input.insertText", { text: piece });
-      if (perKey) await sleep(40);
-    }
-  }
-
-  /** Sets a field the way React expects: the native setter, then the event React listens to. */
-  async fill(selector, value) {
-    const done = await this.waitFor(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) return false;
-      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
-        : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, ${JSON.stringify(value)});
-      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
-      return true;
-    })()`);
-    if (!done) throw new Error(`no field ${selector}`);
-  }
-
-  async screenshot(name) {
-    await sleep(450); // let entrance animations finish
-    const { data } = await this.send("Page.captureScreenshot", { format: "png" });
-    await writeFile(path.join(outDir, `${name}.png`), Buffer.from(data, "base64"));
-  }
-
-  async viewport(width, height, mobile = false) {
-    await this.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile });
-  }
-
-  async colorScheme(value) {
-    await this.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value }] });
-  }
-
-  async historyUrls() {
-    const { entries } = await this.send("Page.getNavigationHistory");
-    return entries.map((entry) => entry.url);
-  }
-
-  /** Presses Enter in the focused element, the way a barcode or RFID reader ends its input. */
-  async pressEnter() {
-    const key = { key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 };
-    await this.send("Input.dispatchKeyEvent", { ...key, type: "keyDown", text: "\r" });
-    await this.send("Input.dispatchKeyEvent", { ...key, type: "keyUp" });
-  }
-
-  async pressEscape() {
-    const key = { key: "Escape", code: "Escape", windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 };
-    await this.send("Input.dispatchKeyEvent", { ...key, type: "keyDown" });
-    await this.send("Input.dispatchKeyEvent", { ...key, type: "keyUp" });
-  }
-
-  /** Types into the focused element key by key, fast, like a reader does. */
-  async typeFocused(text) {
-    for (const piece of text) await this.send("Input.insertText", { text: piece });
-  }
-
-  async media(value) {
-    await this.send("Emulation.setEmulatedMedia", { media: value });
-  }
-
-  async close() {
-    await this.send("Browser.close", {}, undefined).catch(() => {});
-  }
-}
-
 // --- checks -----------------------------------------------------------------
+
+const menuLinks = (browser) =>
+  browser.evaluate(`[...document.querySelectorAll('aside nav a')].map((a) => a.getAttribute('href')).join(' ')`);
+
+/** An access token for direct API calls, through the same portal round trip the browser uses. */
+async function apiSession(username) {
+  const start = await fetch(`${API}/api/auth/sso/start?as=${username}`, { redirect: "manual" });
+  const ticket = new URL(start.headers.get("location") ?? "").searchParams;
+  const exchange = await fetch(`${API}/api/auth/sso/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: ticket.get("token"), appId: ticket.get("appId") }),
+  });
+  return (await exchange.json()).accessToken;
+}
 
 const visibleRows = `[...document.querySelectorAll('tbody tr')].filter((row) => row.offsetParent !== null).length`;
 const stat = async (route) => (await (await fetch(`${API}/__mock/stats`)).json()).requests[route] ?? 0;
@@ -317,10 +110,14 @@ async function run(browser) {
   await browser.type('input[name="password"]', "contoh-123");
   await browser.click('button[type="submit"]');
   check("partner sign-in lands on Beranda", Boolean(await browser.waitFor("location.pathname === '/'")) && Boolean(await browser.hasText("Akun yang sedang masuk")));
-  check("header shows name, company and role label", Boolean(await browser.waitFor(`(() => {
+  check("header shows name and company, no role label", Boolean(await browser.waitFor(`(() => {
     const text = document.querySelector('[data-testid="header-identity"]')?.innerText ?? '';
-    return text.includes('Admin PKS Contoh A') && text.includes('PKS Contoh A') && text.includes('PKS / supplier');
+    return text.includes('Admin PKS Contoh A') && text.includes('PKS Contoh A') && !text.includes('PKS / supplier');
   })()`)));
+  check(
+    "Beranda summarises the access of the account",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="access-summary"]')?.innerText.includes('Kontrak: lihat')`)),
+  );
   check("Beranda shows API health", Boolean(await browser.hasText("Terhubung")));
   check("partner account gets no Odoo panel", !(await browser.evaluate("document.body.innerText.includes('Salinan data dari Odoo')")));
   check("access token is not in web storage", await browser.evaluate("JSON.stringify({...localStorage, ...sessionStorage}).length < 40"));
@@ -451,12 +248,12 @@ async function run(browser) {
   await browser.goto(`${WEB}/auth/sso`);
   check("/auth/sso without a ticket says the link is incomplete", Boolean(await browser.hasText("Tautan masuk ini tidak lengkap.")));
 
-  // 14. Staff account without a role.
+  // 14. Staff account without any permission.
   await browser.goto(`${API}/api/auth/sso/start?as=staf.baru`);
-  check("staff without a role sees the waiting page with the name", Boolean(await browser.hasText("Akun belum punya peran")) && Boolean(await browser.hasText("Staf Baru Contoh")));
-  await browser.screenshot("10-no-role");
+  check("staff without access sees the waiting page with the name", Boolean(await browser.hasText("Menunggu hak akses")) && Boolean(await browser.hasText("Staf Baru Contoh")));
+  await browser.screenshot("10-no-access");
   await browser.click("Keluar");
-  check("sign-out works from the no-role page", Boolean(await browser.waitFor("location.pathname === '/login'")));
+  check("sign-out works from the waiting page", Boolean(await browser.waitFor("location.pathname === '/login'")));
 
   // 15. Supir, as a logistics admin: totals per status, search, filter, VCF sync, new driver.
   await browser.goto(`${API}/api/auth/sso/start?as=admin.contoh`);
@@ -642,51 +439,130 @@ async function run(browser) {
   check("new destination is listed with its customer", ["Customer Contoh C", "Jalan Uji No. 1", "Kota Uji"].every((part) => newDestination.includes(part)), newDestination);
   await browser.screenshot("15-tujuan-light");
 
-  // 18. Beranda shows the VCF sync next to the Odoo sync; /pengguna is refused for a non-admin.
+  // 18. Beranda shows the VCF sync next to the Odoo sync; /pengguna is refused without the users module.
   await browser.goto(`${WEB}/`);
   check("Beranda shows the last VCF sync", Boolean(await browser.hasText("Salinan data dari VCF")) && Boolean(await browser.waitFor(`${pageText}.includes('Supir Berhasil')`)));
   await browser.goto(`${WEB}/pengguna`);
   check(
-    "/pengguna is refused for an account that is not system admin",
-    Boolean(await browser.hasText("Pengaturan pengguna hanya untuk admin sistem.")) && (await stat("GET /api/admin/users")) === 0,
+    "/pengguna shows the no-access page to an account without the users module",
+    Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) &&
+      Boolean(await browser.hasText("modul Pengguna dan hak akses")) &&
+      (await stat("GET /api/admin/users")) === 0,
   );
   await signOut(browser);
 
-  // 19. System admin gives a role to the staff account that had none.
+  // 19. An account with users EDIT gives levels per module, within what the account kind allows.
   await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Sistem Contoh')");
   await browser.click('a[href="/pengguna"]');
-  check("/pengguna lists the accounts for the system admin", (await browser.waitFor(visibleRows)) === 6);
-  check("the page says what it is for", Boolean(await browser.hasText("belum punya peran: tetapkan perannya di sini")));
+  check("/pengguna lists the accounts", (await browser.waitFor(visibleRows)) === 7);
+  check("the page says what it is for", Boolean(await browser.hasText("belum punya hak akses")));
   await browser.type('input[type="search"]', "staf.baru", { perKey: true });
   await browser.waitFor(`${visibleRows} === 1 && ${rowText("Staf Baru Contoh")} !== ''`);
-  check("an account without roles is marked", (await browser.evaluate(rowText("Staf Baru Contoh"))).includes("Belum ada peran"));
-  await browser.click('button[aria-label="Atur peran Staf Baru Contoh"]');
-  const offered = (await browser.waitFor(`document.querySelector('[role="dialog"] fieldset')?.innerText.replace(/\\s+/g, ' ')`)) ?? "";
-  check("a staff account is offered staff roles only", offered.includes("Pos registrasi") && offered.includes("Admin sistem") && !offered.includes("Transporter") && !offered.includes("PKS / supplier"), offered);
-  await browser.click(inSheet('input[name="role-REGISTRATION_OPERATOR"]'));
-  await browser.screenshot("16-pengguna-peran-light");
+  check("an account without access is marked", (await browser.evaluate(rowText("Staf Baru Contoh"))).includes("Belum ada akses"));
+  await browser.click('button[aria-label="Atur hak akses Staf Baru Contoh"]');
+  const staffModules = await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].map((s) => s.name).join(' ')`);
+  check(
+    "a staff account is offered every module, each with its own levels",
+    ["contracts", "drivers", "vehicles", "destinations", "delivery_orders", "registrations", "gate", "rfid_cards", "users"].every((code) =>
+      (staffModules ?? "").includes(`permission-${code}`),
+    ) &&
+      (await browser.evaluate(`[...document.querySelector('[role="dialog"] select[name="permission-contracts"]').options].map((o) => o.value).join(',') === ',VIEW,EDIT'`)),
+    staffModules ?? "",
+  );
+  await browser.fill(inSheet('select[name="permission-registrations"]'), "VIEW");
+  await browser.fill(inSheet('select[name="permission-vehicles"]'), "VIEW");
+  await browser.fill(inSheet('select[name="permission-gate"]'), "VIEW");
+  await browser.screenshot("16-pengguna-hak-akses-light");
   await browser.click(inSheet('button[type="submit"]'));
-  check("the role is saved and shown with its Indonesian label", Boolean(await browser.hasText("Peran Staf Baru Contoh disimpan.")) && Boolean(await browser.waitFor(`${rowText("Staf Baru Contoh")}.includes('Pos registrasi')`)));
+  check(
+    "the levels are saved and summarised in the list",
+    Boolean(await browser.hasText("Hak akses Staf Baru Contoh disimpan.")) &&
+      Boolean(await browser.waitFor(`${rowText("Staf Baru Contoh")}.includes('Kendaraan: lihat · Registrasi: lihat · Pos registrasi: lihat')`)),
+  );
+
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.type('input[type="search"]', "pks.contoh.a", { perKey: true });
+  await browser.waitFor(`${visibleRows} === 1 && ${rowText("Admin PKS Contoh A")} !== ''`);
+  await browser.click('button[aria-label="Atur hak akses Admin PKS Contoh A"]');
+  const partnerModules = (await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].map((s) => s.name).join(' ')`)) ?? "";
+  check(
+    "a partner account is offered only the modules allowed for partners",
+    partnerModules === "permission-contracts permission-drivers permission-vehicles permission-delivery_orders permission-registrations",
+    partnerModules,
+  );
+  await browser.click("Beri semua");
+  check(
+    "give all raises every offered module to its highest level",
+    Boolean(await browser.waitFor(`document.querySelector('[role="dialog"] select[name="permission-delivery_orders"]').value === 'EDIT' && document.querySelector('[role="dialog"] select[name="permission-contracts"]').value === 'EDIT'`)),
+  );
+  await browser.click("Cabut semua");
+  check("revoke all empties every module", Boolean(await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].every((s) => s.value === '')`)));
+  await browser.click("Batal");
+  const admin = await apiSession("super.contoh");
+  const refusedForPartner = await fetch(`${API}/api/admin/users/u-4/permissions`, {
+    method: "PUT",
+    headers: { authorization: `Bearer ${admin}`, "content-type": "application/json" },
+    body: JSON.stringify({ permissions: { contracts: "VIEW", gate: "VIEW" } }),
+  });
+  const refusedBody = await refusedForPartner.json();
+  check(
+    "the API refuses a module that is not allowed for partners",
+    refusedForPartner.status === 400 && refusedBody.error.fields.some((field) => field.field === "permissions.gate"),
+    `${refusedForPartner.status}`,
+  );
+
+  // The emergency local account also holds users EDIT; switched off, the system admin is the last one.
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.type('input[type="search"]', "petugas.lokal", { perKey: true });
+  await browser.waitFor(`${visibleRows} === 1 && ${rowText("Petugas Lokal Contoh")} !== ''`);
+  await browser.click('tbody [role="switch"]');
+  check("another account is switched off", Boolean(await browser.hasText("Akun Petugas Lokal Contoh dinonaktifkan.")));
   await browser.click('button[aria-label="Hapus pencarian"]');
   await browser.type('input[type="search"]', "super.contoh", { perKey: true });
   await browser.waitFor(`${visibleRows} === 1 && ${rowText("Admin Sistem Contoh")} !== ''`);
   await browser.click('tbody [role="switch"]');
   check("switching off one's own account is explained", Boolean(await browser.hasText("Anda tidak bisa menonaktifkan akun Anda sendiri.")));
-  await browser.click('button[aria-label="Atur peran Admin Sistem Contoh"]');
-  await browser.click(inSheet('input[name="role-SUPER_ADMIN"]'));
+  await browser.click('button[aria-label="Atur hak akses Admin Sistem Contoh"]');
+  await browser.click("Cabut semua");
   await browser.click(inSheet('button[type="submit"]'));
-  check("dropping the last admin role from one's own account is explained", Boolean(await browser.hasText("Anda admin sistem terakhir")));
+  check("taking the access of the last admin away is explained", Boolean(await browser.hasText("Harus tetap ada satu akun karyawan aktif yang bisa mengatur hak akses.")));
   await browser.click("Batal");
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.type('input[type="search"]', "petugas.lokal", { perKey: true });
+  await browser.waitFor(`${visibleRows} === 1 && ${rowText("Petugas Lokal Contoh")} !== ''`);
+  await browser.click('tbody [role="switch"]');
+  await browser.hasText("Akun Petugas Lokal Contoh diaktifkan.");
   await signOut(browser);
 
+  // 19b. The account with view levels: its menu follows the levels, and view gives no add or change button.
   await browser.goto(`${API}/api/auth/sso/start?as=staf.baru`);
   check(
-    "the account that got a role no longer sees the no-role page",
+    "the account that got access no longer sees the waiting page",
     Boolean(await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')")) &&
-      !(await browser.evaluate("document.body.innerText.includes('Akun belum punya peran')")) &&
-      (await browser.evaluate(`document.querySelector('[data-testid="header-identity"]').innerText.includes('Pos registrasi')`)),
+      !(await browser.evaluate("document.body.innerText.includes('Menunggu hak akses')")) &&
+      (await browser.evaluate(`document.querySelector('[data-testid="header-identity"]').innerText.includes('Karyawan')`)),
   );
+  const viewerMenu = await menuLinks(browser);
+  check("its menu shows exactly the modules it may view", viewerMenu === "/ /registrasi /pos /kendaraan", viewerMenu);
+  await browser.click('a[href="/kendaraan"]');
+  await browser.waitFor(`location.pathname === '/kendaraan' && ${visibleRows} > 0`);
+  check(
+    "view level on Kendaraan shows the list without add or change buttons",
+    !(await browser.evaluate("document.body.innerText.includes('Kendaraan baru')")) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('button[aria-label^="Ubah "]'))`)),
+  );
+  await browser.click('a[href="/registrasi"]');
+  await browser.waitFor(`location.pathname === '/registrasi' && ${visibleRows} > 0`);
+  check(
+    "view level on Registrasi shows the list without add buttons",
+    !(await browser.evaluate("document.body.innerText.includes('Registrasi incoming')")) &&
+      !(await browser.evaluate("document.body.innerText.includes('Registrasi outgoing')")),
+  );
+  await browser.goto(`${WEB}/kontrak`);
+  check("opening a page of a module without access shows the no-access page", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && Boolean(await browser.hasText("modul Kontrak")));
+  await browser.screenshot("16b-tanpa-akses-light");
+  await browser.goto(`${WEB}/`);
   await signOut(browser);
 
   await phaseThree(browser);
@@ -694,8 +570,6 @@ async function run(browser) {
 
 // --- phase 3: registration, delivery order, SPJ, the post ---------------------
 
-const menuLinks = (browser) =>
-  browser.evaluate(`[...document.querySelectorAll('aside nav a')].map((a) => a.getAttribute('href')).join(' ')`);
 const noHorizontalScroll = "document.documentElement.scrollWidth <= window.innerWidth";
 const textOf = (selector) => `(document.querySelector(${JSON.stringify(selector)})?.innerText ?? '').replace(/\\s+/g, ' ')`;
 
@@ -724,7 +598,7 @@ async function pickOption(browser, inputSelector, text) {
 async function fillTruck(browser, { scope, prefix, plate, licence, newVehicle, newDriver }) {
   await browser.fill(`input[name="${prefix}.plate"]`, plate);
   await browser.click(`${scope} button[aria-label="Periksa plat"]`);
-  await browser.waitFor(`${textOf(scope)}.includes(${JSON.stringify(newVehicle ? "Plat ini belum terdaftar" : "STNK")})`);
+  await browser.waitFor(`${textOf(scope)}.includes(${JSON.stringify(newVehicle ? "Plat ini belum terdaftar" : "Surat kendaraan")})`);
   if (newVehicle) await browser.fill(`select[name="${prefix}.vehicleTypeCode"]`, newVehicle.type);
   await browser.fill(`input[name="${prefix}.licenceNo"]`, licence);
   await browser.click(`${scope} button[aria-label="Periksa nomor sim"]`);
@@ -838,6 +712,32 @@ async function phaseThree(browser) {
   );
   check("the registration detail has no horizontal scroll on a phone", await browser.evaluate(noHorizontalScroll));
   await browser.viewport(1366, 900);
+
+  // 22b. A draft is opened again in its form, looked up again, changed and sent with PUT.
+  await browser.goto(`${WEB}/registrasi/baru?arah=in`);
+  await browser.waitFor(`document.querySelector('input[name="contractLookup"]')`);
+  await pickOption(browser, 'input[name="contractLookup"]', "0124/CONTOH");
+  await fillTruck(browser, { scope: "main", prefix: "truck", plate: "ZZ 0001 CTH", licence: "CONTOH0002" });
+  await browser.fill('input[name="letters.0.originNetKg"]', "1000");
+  await browser.click("Simpan draf");
+  const draftPath = await browser.waitFor("location.pathname.startsWith('/registrasi/r-') && location.pathname");
+  check("a registration is saved as a draft", Boolean(draftPath) && Boolean(await browser.hasText("Registrasi disimpan sebagai draf.")));
+  await browser.click("Ubah draf");
+  check(
+    "the draft opens in its form with the contract, the truck looked up again and the letter",
+    Boolean(await browser.waitFor(`location.pathname.endsWith('/ubah') && document.querySelectorAll('[aria-label="Kontrak terpilih"] li').length === 1`)) &&
+      Boolean(await browser.waitFor(`${textOf("main")}.includes('Surat kendaraan') && ${textOf("main")}.includes('Supir Contoh 02')`)) &&
+      (await browser.evaluate(`document.querySelector('input[name="letters.0.originNetKg"]').value === '1000'`)),
+  );
+  await browser.fill('input[name="letters.0.originNetKg"]', "1500");
+  await browser.click("Kirim registrasi");
+  check(
+    "the changed draft is sent with PUT and gets its SPJ",
+    Boolean(await browser.waitFor(`location.pathname === ${JSON.stringify(draftPath)}`)) &&
+      Boolean(await browser.hasText("Registrasi dikirim.")) &&
+      Boolean(await browser.hasText("Netto asal 1.500 kg")) &&
+      (await stat("PUT /api/registrations/:id")) === 1,
+  );
   await browser.goto(`${WEB}/`);
   await signOut(browser);
 
@@ -923,10 +823,12 @@ async function phaseThree(browser) {
     newDriver: { fullName: "Supir Uji Tiga" },
   });
   await fillTruck(browser, { scope: '[data-truck="4"]', prefix: "trucks.3", plate: "ZZ 9102 UJI", licence: "CONTOH0006", newVehicle: { type: "TANGKI" } });
+  const postsBefore = await stat("POST /api/registrations");
   await browser.click("Kirim registrasi");
   check(
     "close cargo and flexi bag are required when sending",
-    Boolean(await browser.waitFor(`document.querySelectorAll('fieldset[aria-invalid="true"]').length === 2`)) && (await stat("POST /api/registrations")) === 2,
+    Boolean(await browser.waitFor(`document.querySelectorAll('fieldset[aria-invalid="true"]').length === 2`)) &&
+      (await stat("POST /api/registrations")) === postsBefore,
   );
   await browser.click('label:has(input[name="closeCargo"][value="yes"])');
   await browser.click('label:has(input[name="flexiBag"][value="no"])');
@@ -955,6 +857,13 @@ async function phaseThree(browser) {
   check("four SPJ exist with the split quantities", plans === "9.500 SPJ, 9.500 SPJ, 9.500 SPJ, 9.502 SPJ", plans);
   await browser.click('a[href="/delivery-order"]');
   check("the delivery order shows four trucks and nothing left", Boolean(await browser.waitFor(`${rowText(doNo)}.includes('4 dari 4') && ${rowText(doNo)}.includes('Sisa 0 Kg')`)));
+  await browser.click(doNo);
+  check(
+    "the delivery order page lists its four trucks with their SPJ",
+    Boolean(await browser.waitFor(`location.pathname.startsWith('/delivery-order/') && [...document.querySelectorAll('[data-testid="do-trucks"] tbody tr')].length === 4`)) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="do-trucks"]')}.includes('ZZ 9101 UJI') && ${textOf('[data-testid="do-trucks"]')}.includes('SPJ/CTH/')`)),
+  );
+  await browser.screenshot("25b-do-detail-light");
   await signOut(browser);
 
   // 26. The post: scan plus card, a second scan refused, an unknown card refused, replace a card.
@@ -994,7 +903,10 @@ async function phaseThree(browser) {
   check("an unknown SPJ is refused in plain words", Boolean(await browser.hasText("Kode SPJ ini tidak dikenal.")));
   await browser.click('button[aria-label="Periksa ZZ 9101 UJI"]');
   await browser.waitFor("document.activeElement?.id === 'gate-card'");
-  check("a warning is shown apart from blocking checks", Boolean(await browser.waitFor(`${textOf('[data-testid="gate-warnings"]')}.includes('Supir belum ada di VCF.') && !document.querySelector('[data-testid="gate-blocks"]')`)));
+  check(
+    "a warning is shown apart from blocking checks",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="gate-warnings"]')}.includes('Kendaraan baru dan belum diverifikasi admin.') && !document.querySelector('[data-testid="gate-blocks"]')`)),
+  );
   await browser.typeFocused("deadbeef");
   await browser.pressEnter();
   check(
@@ -1024,7 +936,7 @@ async function phaseThree(browser) {
 
 // --- main -------------------------------------------------------------------
 
-const executable = BROWSERS.find((candidate) => existsSync(candidate));
+const executable = findBrowser();
 if (!executable) {
   console.error("No Edge or Chrome found. Set SMOKE_BROWSER to the executable.");
   process.exit(2);
@@ -1045,7 +957,7 @@ try {
   await waitForHttp(`${API}/api/health`, "mock API");
   await waitForHttp(`${WEB}/login`, "web app");
 
-  browser = await Browser.launch(executable, path.join(outDir, "profile"));
+  browser = await Browser.launch(executable, { profileDir: path.join(outDir, "profile"), outDir, waitMs: WAIT_MS, spawnChild: start });
   await browser.openPage();
   await run(browser);
 } catch (error) {

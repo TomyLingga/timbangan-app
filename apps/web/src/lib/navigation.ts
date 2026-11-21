@@ -1,15 +1,8 @@
-// Which menu entries an account gets, in menu order. The page behind each
-// entry applies the same rule on a direct visit.
+// Which menu entries an account gets, in menu order: a module shows from level
+// view. The page behind each entry applies the same rule on a direct visit.
 
-import {
-  canManageCards,
-  canManageUsers,
-  canSeeDeliveryOrders,
-  canSeeRegistrations,
-  canUseGate,
-  isStaff,
-} from "@/lib/roles";
-import type { User } from "@/lib/types";
+import { canSeeDrivers, canView, isStaff } from "@/lib/permissions";
+import type { ModuleCode, User } from "@/lib/types";
 
 export type NavHref =
   | "/"
@@ -23,19 +16,20 @@ export type NavHref =
   | "/kartu"
   | "/pengguna";
 
-const everyone = () => true;
+const view = (module: ModuleCode) => (user: User) => canView(user, module);
 
 const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> = [
-  { href: "/", visible: everyone },
-  { href: "/registrasi", visible: canSeeRegistrations },
-  { href: "/delivery-order", visible: canSeeDeliveryOrders },
-  { href: "/pos", visible: canUseGate },
-  { href: "/kontrak", visible: everyone },
-  { href: "/supir", visible: isStaff },
-  { href: "/kendaraan", visible: everyone },
-  { href: "/tujuan", visible: isStaff },
-  { href: "/kartu", visible: canManageCards },
-  { href: "/pengguna", visible: canManageUsers },
+  { href: "/", visible: () => true },
+  { href: "/registrasi", visible: view("registrations") },
+  { href: "/delivery-order", visible: view("delivery_orders") },
+  // the lists of the post (GET /api/trips) are staff only
+  { href: "/pos", visible: (user) => isStaff(user) && canView(user, "gate") },
+  { href: "/kontrak", visible: view("contracts") },
+  { href: "/supir", visible: canSeeDrivers },
+  { href: "/kendaraan", visible: view("vehicles") },
+  { href: "/tujuan", visible: view("destinations") },
+  { href: "/kartu", visible: view("rfid_cards") },
+  { href: "/pengguna", visible: view("users") },
 ];
 
 export function navigationFor(user: User): NavHref[] {

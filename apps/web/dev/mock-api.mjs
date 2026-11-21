@@ -15,9 +15,10 @@
 //   MOCK_VCF       "off" makes the driver registry sync answer 503, "fail" makes it answer 502
 //   MOCK_SYNC_MS   how long a sync takes (default 1200)
 //
-// Phase 3 (docs/fase-3-rancangan.md, section 3): RFID cards, delivery orders,
-// registrations, trips and SPJ, and the registration post. Routes the design
-// does not list but the screens need are marked "not in the contract" below.
+// Access follows docs/rancangan-hak-akses.md: every account holds a level per
+// module (VIEW, CREATE, EDIT), and each route checks the module and level that
+// apps/api/test/route-permissions.test.ts lists for it. Phase 3 routes, codes
+// and answers follow apps/api (docs/fase-3-penyelarasan.md).
 //
 // Helpers that the real API does not have (used by dev/smoke.mjs):
 //   GET  /api/auth/sso/start?as=<username>&to=root|callback   plays the portal: redirects back with a ticket
@@ -39,8 +40,6 @@ const SYNC_MS = Number(process.env.MOCK_SYNC_MS ?? 1200);
 const REFRESH_COOKIE = "mock_refresh";
 const APP_ID = "mock-app";
 const TICKET_TTL_MS = 5 * 60 * 1000;
-const SYNC_ROLES = ["SUPER_ADMIN", "LOGISTICS_ADMIN"];
-const MASTER_WRITE_ROLES = [...SYNC_ROLES, "REGISTRATION_OPERATOR"];
 const VCF_MODE = process.env.MOCK_VCF ?? "on";
 
 // --- made-up data -----------------------------------------------------------
@@ -62,44 +61,81 @@ const products = {
   pfad: { id: "g-5", name: "PFAD", category: "OUTGOING_LIQUID" },
 };
 
-// Staff accounts sign in through the portal only, so they carry no password.
-// The partner passwords are fixtures for this mock, not credentials of anything.
+partners.transporterB = { id: "p-302", name: "Transporter Contoh B" };
+partners.customerC = { id: "p-203", name: "Customer Contoh C" };
+
+/** The id prefix says what a made-up partner is: p-1 supplier, p-2 customer, p-3 transporter. */
+const partnerRole = (partner) => ({ 1: "supplier", 2: "customer", 3: "transporter" })[partner.id[2]];
+
+/** The company of a partner account as GET /api/me shows it, with its kinds. */
+const accountPartner = (partner) =>
+  partner
+    ? {
+        id: partner.id,
+        name: partner.name,
+        isSupplier: partnerRole(partner) === "supplier",
+        isTransporter: partnerRole(partner) === "transporter",
+        isCustomer: partnerRole(partner) === "customer",
+      }
+    : null;
+
+// The active modules of migration 0004 in apps/api, with the levels each has.
+const modules = [
+  ["contracts", "Kontrak", ["VIEW", "EDIT"], true],
+  ["drivers", "Supir", ["VIEW", "CREATE", "EDIT"], true],
+  ["vehicles", "Kendaraan", ["VIEW", "CREATE", "EDIT"], true],
+  ["destinations", "Tujuan", ["VIEW", "CREATE", "EDIT"], false],
+  ["delivery_orders", "Delivery Order", ["VIEW", "CREATE", "EDIT"], true],
+  ["registrations", "Registrasi", ["VIEW", "CREATE", "EDIT"], true],
+  ["gate", "Pos registrasi", ["VIEW", "CREATE", "EDIT"], false],
+  ["rfid_cards", "Kartu RFID", ["VIEW", "CREATE", "EDIT"], false],
+  ["users", "Pengguna dan hak akses", ["VIEW", "EDIT"], false],
+].map(([code, name, levels, partnerAllowed]) => ({ code, name, levels, partnerAllowed }));
+
+const everything = () => Object.fromEntries(modules.map((item) => [item.code, item.levels.at(-1)]));
+const allBut = (...codes) => Object.fromEntries(Object.entries(everything()).filter(([code]) => !codes.includes(code)));
+
+// Staff accounts sign in through the portal; `petugas.lokal` stands for the
+// emergency local account (npm run user:create -- --admin) and signs in with a
+// password. The passwords are fixtures for this mock, not credentials of anything.
 const users = [
-  { id: "u-1", kind: "INTERNAL", username: "admin.contoh", fullName: "Admin Contoh", roles: ["LOGISTICS_ADMIN"], partner: null },
-  { id: "u-2", kind: "INTERNAL", username: "pos.contoh", fullName: "Petugas Pos Contoh", roles: ["REGISTRATION_OPERATOR"], partner: null },
-  { id: "u-3", kind: "INTERNAL", username: "staf.baru", fullName: "Staf Baru Contoh", roles: [], partner: null },
-  { id: "u-4", kind: "PARTNER", username: "pks.contoh.a", fullName: "Admin PKS Contoh A", roles: ["PARTNER_SUPPLIER"], partner: partners.pksA, password: "contoh-123" },
-  { id: "u-5", kind: "PARTNER", username: "transporter.contoh", fullName: "Admin Transporter Contoh A", roles: ["PARTNER_TRANSPORTER"], partner: partners.transporterA, password: "contoh-123" },
-  { id: "u-6", kind: "INTERNAL", username: "super.contoh", fullName: "Admin Sistem Contoh", roles: ["SUPER_ADMIN"], partner: null },
+  { id: "u-1", kind: "INTERNAL", username: "admin.contoh", fullName: "Admin Contoh", permissions: allBut("users"), partner: null },
+  {
+    id: "u-2",
+    kind: "INTERNAL",
+    username: "pos.contoh",
+    fullName: "Petugas Pos Contoh",
+    permissions: { contracts: "VIEW", drivers: "CREATE", vehicles: "CREATE", destinations: "VIEW", registrations: "CREATE", gate: "EDIT" },
+    partner: null,
+  },
+  { id: "u-3", kind: "INTERNAL", username: "staf.baru", fullName: "Staf Baru Contoh", permissions: {}, partner: null },
+  // partner defaults of rancangan-hak-akses.md section 3
+  {
+    id: "u-4",
+    kind: "PARTNER",
+    username: "pks.contoh.a",
+    fullName: "Admin PKS Contoh A",
+    permissions: { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" },
+    partner: partners.pksA,
+    password: "contoh-123",
+  },
+  {
+    id: "u-5",
+    kind: "PARTNER",
+    username: "transporter.contoh",
+    fullName: "Admin Transporter Contoh A",
+    permissions: { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" },
+    partner: partners.transporterA,
+    password: "contoh-123",
+  },
+  { id: "u-6", kind: "INTERNAL", username: "super.contoh", fullName: "Admin Sistem Contoh", permissions: everything(), partner: null },
+  { id: "u-7", kind: "INTERNAL", username: "petugas.lokal", fullName: "Petugas Lokal Contoh", permissions: everything(), partner: null, password: "contoh-123" },
 ];
 users.forEach((user, index) => {
   user.employeeNo = user.kind === "INTERNAL" ? `EMP-CONTOH-${String(index + 1).padStart(2, "0")}` : null;
   user.isActive = true;
   user.lastLoginAt = null;
 });
-
-const roleDefinitions = [
-  ["SUPER_ADMIN", "System admin", "INTERNAL"],
-  ["LOGISTICS_ADMIN", "Logistics admin", "INTERNAL"],
-  ["REGISTRATION_OPERATOR", "Registration post", "INTERNAL"],
-  ["LOGISTICS_SUPERVISOR", "Logistics supervisor", "INTERNAL"],
-  ["QC_OPERATOR", "QC", "INTERNAL"],
-  ["QC_SUPERVISOR", "QC supervisor", "INTERNAL"],
-  ["SECURITY", "Security", "INTERNAL"],
-  ["UNLOADING_OPERATOR", "Unloading", "INTERNAL"],
-  ["LOADING_OPERATOR", "Loading", "INTERNAL"],
-  ["SEAL_OPERATOR", "Seal", "INTERNAL"],
-  ["MANAGEMENT", "Management", "INTERNAL"],
-  ["PARTNER_SUPPLIER", "Supplier", "PARTNER"],
-  ["PARTNER_TRANSPORTER", "Transporter", "PARTNER"],
-  ["PARTNER_CUSTOMER", "Customer", "PARTNER"],
-].map(([code, name, scope]) => ({ code, name, scope }));
-
-partners.transporterB = { id: "p-302", name: "Transporter Contoh B" };
-partners.customerC = { id: "p-203", name: "Customer Contoh C" };
-
-/** The id prefix says what a made-up partner is: p-1 supplier, p-2 customer, p-3 transporter. */
-const partnerRole = (partner) => ({ 1: "supplier", 2: "customer", 3: "transporter" })[partner.id[2]];
 
 /** A date some days from today, so "expired" rows stay expired whenever the mock runs. */
 const daysFromNow = (days) => new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
@@ -256,8 +292,8 @@ let nextRunId = 1;
 const newId = () => randomBytes(18).toString("base64url");
 
 function publicUser(user) {
-  const { id, kind, username, fullName, roles, partner } = user;
-  return { id, kind, username, fullName, roles, partner };
+  const { id, kind, username, fullName, permissions } = user;
+  return { id, kind, username, fullName, permissions: { ...permissions }, partner: accountPartner(user.partner) };
 }
 
 function issueAccessToken(userId) {
@@ -294,6 +330,9 @@ function send(request, response, status, body, headers = {}) {
 
 const fail = (request, response, status, code, message) =>
   send(request, response, status, { error: { code, message } });
+
+/** `fields` as the API sends them: a list of { field, message }. */
+const fieldList = (fields) => (Array.isArray(fields) ? fields : Object.entries(fields).map(([field, message]) => ({ field, message })));
 
 function refreshCookie(value, maxAgeSeconds) {
   return `${REFRESH_COOKIE}=${value}; HttpOnly; SameSite=Lax; Path=/api/auth; Max-Age=${maxAgeSeconds}`;
@@ -332,41 +371,39 @@ function authenticate(request, response) {
   return users.find((user) => user.id === entry.userId) ?? null;
 }
 
-/** Like authenticate, and also refuses a staff account that has no role. */
-function authorize(request, response) {
+const LEVEL_RANK = { VIEW: 1, CREATE: 2, EDIT: 3 };
+/** Whether the account holds `level` or higher on the module: EDIT covers CREATE, CREATE covers VIEW. */
+const can = (user, code, level) => {
+  const held = user.permissions[code];
+  return held !== undefined && LEVEL_RANK[held] >= LEVEL_RANK[level];
+};
+
+/**
+ * The guards of the API, in their order: a signed-in account; on staff routes a
+ * partner account is refused; a staff account without any permission gets
+ * NO_ACCESS; then one of the module levels in `needs` ([code, level] pairs).
+ * Returns the account, or null after answering.
+ */
+function guard(request, response, needs = [], { staffOnly = false } = {}) {
   const user = authenticate(request, response);
   if (!user) return null;
-  if (user.kind === "INTERNAL" && user.roles.length === 0) {
-    fail(request, response, 403, "NO_ROLE", "The account has no role yet");
+  if (staffOnly && user.kind !== "INTERNAL") {
+    fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
     return null;
   }
-  return user;
-}
-
-/** Answers 403 unless the signed-in account is staff with a role. */
-function authorizeStaff(request, response) {
-  const user = authorize(request, response);
-  if (!user) return null;
-  if (user.kind !== "INTERNAL") {
-    fail(request, response, 403, "FORBIDDEN", "Staff only");
+  if (user.kind === "INTERNAL" && Object.keys(user.permissions).length === 0) {
+    fail(request, response, 403, "NO_ACCESS", "Akun Anda belum diberi hak akses. Hubungi admin sistem.");
     return null;
   }
-  return user;
-}
-
-/** Answers 403 unless the account holds one of the roles. */
-function authorizeRoles(request, response, roles) {
-  const user = authorize(request, response);
-  if (!user) return null;
-  if (!user.roles.some((role) => roles.includes(role))) {
-    fail(request, response, 403, "FORBIDDEN", "This role may not do that");
+  if (needs.length > 0 && !needs.some(([code, level]) => can(user, code, level))) {
+    fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
     return null;
   }
   return user;
 }
 
 const invalid = (request, response, fields) =>
-  send(request, response, 400, { error: { code: "VALIDATION", message: "Invalid request body", fields } });
+  send(request, response, 400, { error: { code: "VALIDATION", message: "Data yang dikirim tidak valid.", fields: fieldList(fields) } });
 
 /** Lists take `limit` (default 20, at most 50) and have no offset. */
 function page(request, response, url, items) {
@@ -394,9 +431,12 @@ function startSession(request, response, user) {
 // --- shapes and checks of the master data -----------------------------------
 
 function adminUser(user) {
-  const { id, kind, username, fullName, employeeNo, partner, roles, isActive, lastLoginAt } = user;
-  return { id, kind, username, fullName, employeeNo, partner, roles, isActive, lastLoginAt };
+  const { id, kind, username, fullName, employeeNo, permissions, isActive, lastLoginAt } = user;
+  return { id, kind, username, fullName, employeeNo, partner: ref(user.partner), permissions: { ...permissions }, isActive, lastLoginAt };
 }
+
+/** Active staff accounts that can manage access (users EDIT); there must always be one. */
+const adminCount = () => users.filter((user) => user.isActive && user.kind === "INTERNAL" && can(user, "users", "EDIT")).length;
 
 function publicDriver(item) {
   // The phone number is accepted on create but is not part of the list answer.
@@ -509,9 +549,13 @@ function applyDestination(target, body, creating) {
 // --- phase 3: settings, numbering, cards, delivery orders, registrations -----
 
 const SITE = { code: "CTH", name: "Pabrik Contoh" };
-const ADMIN_ROLES = ["SUPER_ADMIN", "LOGISTICS_ADMIN"];
-const REGISTERING_STAFF = [...ADMIN_ROLES, "REGISTRATION_OPERATOR"];
-const DEAD_TRIP = ["CANCELLED", "EXPIRED"];
+/** Trips that no longer hold quantity (RELEASED_STATUSES in apps/api trips/view.ts). */
+const DEAD_TRIP = ["CANCELLED", "EXPIRED", "REJECTED"];
+/** A truck inside the plant, and one that has checked in whatever happened after. */
+const INSIDE = ["CHECKED_IN", "IN_PROCESS"];
+const ARRIVED = ["CHECKED_IN", "IN_PROCESS", "COMPLETED", "REJECTED"];
+/** settings.driver_registry_policy as the API defaults it: BLACKLIST blocks, WARNING warns, the rest passes. */
+const DRIVER_POLICY = { BLACKLIST: "BLOCK", WARNING: "WARN", UNKNOWN: "ALLOW", NORMAL: "ALLOW" };
 
 // The mock product categories differ from the seed; this maps them the same way.
 const settings = {
@@ -530,7 +574,7 @@ const flowSteps = {
   OUT_BULK: ["CHECK_IN", "WEIGH_1", "LOADING", "SEAL", "WEIGH_2", "CHECK_OUT"],
 };
 
-// Not in the contract: the incoming form reads the declared quality parameters here.
+// GET /api/quality-parameters: the active parameters with their plausible range.
 const qualityParameters = [
   { code: "FFA", name: "FFA", unit: "%", decimals: 2, minValid: 0, maxValid: 20 },
   { code: "MOISTURE", name: "Moisture (kadar air)", unit: "%", decimals: 3, minValid: 0, maxValid: 5 },
@@ -555,7 +599,6 @@ function plantDate(date = new Date()) {
 const newToken = () => Array.from({ length: 12 }, () => TOKEN_ALPHABET[randomInt(TOKEN_ALPHABET.length)]).join("");
 const normalizeToken = (value) => String(value ?? "").toUpperCase().replace(/[\s-]+/g, "").replace(/[IL]/g, "1").replace(/O/g, "0");
 const normalizeUid = (value) => String(value ?? "").toUpperCase().replace(/[\s:-]+/g, "");
-const isStaffWith = (user, roles) => user.kind === "INTERNAL" && user.roles.some((role) => roles.includes(role));
 const findPartner = (id) => Object.values(partners).find((partner) => partner.id === id) ?? null;
 const ref = (partner) => (partner ? { id: partner.id, name: partner.name } : null);
 const numberOrNull = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
@@ -693,7 +736,7 @@ function publicOrder(order) {
     contract: contractRow ? { id: contractRow.id, contractNo: contractRow.contractNo } : null,
     customerPoNo: order.customerPoNo,
     partner: ref(order.partner),
-    product: order.product,
+    product: { id: order.product.id, name: order.product.name, category: order.product.category },
     qty: order.qty,
     uom: order.uom,
     tolerancePct: order.tolerancePct,
@@ -709,24 +752,35 @@ function publicOrder(order) {
     qtyPlanned: planned,
     qtyRemaining: Math.max(order.qty - planned, 0),
     tripCount: orderTrips.filter((trip) => !DEAD_TRIP.includes(trip.status)).length,
+    tolerancePct: order.tolerancePct ?? 0,
     remark: order.remark,
     sentAt: order.sentAt,
     acceptedAt: order.acceptedAt,
   };
 }
 
+/** A trip the way every route of the API answers it (TripView in apps/api trips/view.ts). */
 function publicTrip(trip) {
   refreshTrip(trip);
+  const registration = registrationOf(trip);
   const vehicleRow = vehicleOf(trip);
   const driverRow = driverOf(trip);
   const card = rfidCards.find((item) => item.tripId === trip.id) ?? null;
   return {
     id: trip.id,
+    registrationId: trip.registrationId,
     seq: trip.seq,
     tripNo: trip.tripNo,
     status: trip.status,
-    vehicle: { id: vehicleRow.id, plateNo: vehicleRow.plateNo, plateDisplay: vehicleRow.plateDisplay, vehicleTypeCode: vehicleRow.vehicleTypeCode },
-    driver: { id: driverRow.id, fullName: driverRow.fullName, licenceNo: driverRow.licenceNo, registryStatus: driverRow.registryStatus },
+    direction: registration.direction,
+    flowCode: registration.flowCode,
+    partner: ref(registration.partner),
+    transporter: ref(findPartner(registration.transporterId)),
+    currentStep: trip.currentStep,
+    vehicle: vehicleRow
+      ? { id: vehicleRow.id, plateNo: vehicleRow.plateNo, plateDisplay: vehicleRow.plateDisplay, vehicleTypeCode: vehicleRow.vehicleTypeCode }
+      : null,
+    driver: driverRow ? { id: driverRow.id, fullName: driverRow.fullName, licenceNo: driverRow.licenceNo, registryStatus: driverRow.registryStatus } : null,
     containerNo: trip.containerNo,
     plannedArrival: trip.plannedArrival,
     qtyPlanned: trip.qtyPlanned,
@@ -737,22 +791,12 @@ function publicTrip(trip) {
     spj: trip.spj,
     card: card ? { uid: card.uid, label: card.label } : null,
     checkedInAt: trip.checkedInAt,
+    cancelReason: trip.cancelReason ?? null,
   };
 }
 
-function tripSummary(trip) {
-  const registration = registrationOf(trip);
-  return {
-    ...publicTrip(trip),
-    direction: registration.direction,
-    flowCode: registration.flowCode,
-    partner: ref(registration.partner),
-    transporter: ref(findPartner(registration.transporterId)),
-    currentStep: trip.currentStep,
-  };
-}
-
-function publicRegistration(registration) {
+/** A registration as GET /api/registrations/:id answers it; lists leave the trips out. */
+function publicRegistration(registration, withTrips = true) {
   const own = tripsOf(registration);
   const allocations = registration.allocations.map((allocation) => {
     const contractRow = contracts.find((item) => item.id === allocation.contractId) ?? null;
@@ -763,12 +807,12 @@ function publicRegistration(registration) {
       seq: allocation.seq,
       contract: contractRow ? { id: contractRow.id, contractNo: contractRow.contractNo } : null,
       deliveryOrder: order ? { id: order.id, doNo: order.doNo } : null,
-      contractNo: contractRow?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? null,
+      contractNo: contractRow?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? "-",
       doNo: order?.doNo ?? null,
       qtyPlanned,
-      tolerancePct: source?.tolerancePct ?? null,
-      product: source?.product ?? null,
-      partner: ref(source?.partner),
+      tolerancePct: source?.tolerancePct ?? 0,
+      product: { id: source.product.id, name: source.product.name, category: source.product.category },
+      partner: ref(source.partner),
     };
   });
   return {
@@ -788,12 +832,13 @@ function publicRegistration(registration) {
     remark: registration.remark,
     createdVia: registration.createdVia,
     createdBy: registration.createdBy,
+    createdAt: registration.createdAt,
     submittedAt: registration.submittedAt,
     reviewedAt: registration.reviewedAt,
     reviewNote: registration.reviewNote,
     findings: registration.findings,
     allocations,
-    trips: own.map(publicTrip),
+    ...(withTrips ? { trips: own.map(publicTrip) } : {}),
   };
 }
 
@@ -822,13 +867,13 @@ function computeFindings(registration) {
     const tripSeq = trip.seq;
     const driverRow = driverOf(trip);
     const vehicleRow = vehicleOf(trip);
-    if (driverRow.registryStatus === "WARNING") add("DRIVER_WARNING", "Driver has WARNING status in the registry", { tripSeq });
-    if (driverRow.registryStatus === "UNKNOWN") add("DRIVER_NOT_IN_REGISTRY", "Driver is not in the registry yet", { tripSeq });
-    if (driverRow.licenceValidUntil < today()) add("LICENCE_EXPIRED", "Driving licence has expired", { tripSeq });
-    if (!vehicleRow.verified) add("VEHICLE_UNVERIFIED", "Vehicle is not verified", { tripSeq });
-    for (const code of publicVehicle(vehicleRow).expired) add(`${code}_EXPIRED`, `${code} has expired`, { tripSeq });
+    // with the default policy only WARNING is a finding; BLACKLIST is refused before
+    if (DRIVER_POLICY[driverRow.registryStatus] === "WARN") add("DRIVER_WARNING", `Supir ${driverRow.fullName} berstatus peringatan di VCF.`, { tripSeq });
+    if (driverRow.licenceValidUntil < today()) add("LICENCE_EXPIRED", `SIM ${driverRow.fullName} habis berlaku ${driverRow.licenceValidUntil}.`, { tripSeq });
+    if (!vehicleRow.verified) add("VEHICLE_UNVERIFIED", `Kendaraan ${vehicleRow.plateDisplay} belum diverifikasi logistik.`, { tripSeq });
+    for (const code of publicVehicle(vehicleRow).expired) add(`${code}_EXPIRED`, `Surat ${code} kendaraan ${vehicleRow.plateDisplay} habis berlaku.`, { tripSeq });
     if (registration.direction === "OUT" && vehicleRow.capacityKg && trip.qtyPlanned > vehicleRow.capacityKg) {
-      add("OVER_CAPACITY", "Planned load is above the vehicle capacity", { tripSeq });
+      add("OVER_CAPACITY", `Rencana ${trip.qtyPlanned} kg melebihi daya angkut ${vehicleRow.plateDisplay}.`, { tripSeq });
     }
   }
   for (const allocation of registration.allocations) {
@@ -845,15 +890,17 @@ function computeFindings(registration) {
       const remaining = contractRow.qtyContract - others;
       for (const trip of tripsOf(registration)) {
         const net = trip.allocations[allocationSeq - 1]?.originNetKg ?? 0;
-        if (net > remaining) add("OVER_CONTRACT", "Origin net is above what is left on the contract", { tripSeq: trip.seq, allocationSeq });
+        if (net > remaining) add("OVER_CONTRACT", `Netto surat melebihi sisa kontrak ${contractRow.contractNo}.`, { tripSeq: trip.seq, allocationSeq });
       }
     } else {
       const order = deliveryOrders.find((item) => item.id === allocation.deliveryOrderId);
       const remaining = order.qty - orderPlanned(order, registration.id);
-      if (allocation.qtyPlanned > remaining) add("OVER_DO", "Planned quantity is above what is left on the delivery order", { allocationSeq });
-      const arrival = registration.plannedDate;
-      if (arrival && (arrival < order.deliveryFrom || (order.deliveryUntil && arrival > order.deliveryUntil))) {
-        add("OUTSIDE_DELIVERY_WINDOW", "Planned arrival is outside the delivery window", { allocationSeq });
+      if (allocation.qtyPlanned > remaining) add("OVER_DO", `Rencana melebihi sisa DO ${order.doNo}.`, { allocationSeq });
+      for (const trip of tripsOf(registration)) {
+        const arrival = trip.plannedArrival;
+        if (arrival && (arrival < order.deliveryFrom || (order.deliveryUntil && arrival > order.deliveryUntil))) {
+          add("OUTSIDE_DELIVERY_WINDOW", `Tanggal datang di luar masa kirim DO ${order.doNo}.`, { tripSeq: trip.seq, allocationSeq });
+        }
       }
     }
   }
@@ -881,7 +928,8 @@ function submitRegistration(registration) {
   }
 }
 
-const problem = (status, code, message, fields) => ({ status, body: { error: { code, message, ...(fields ? { fields } : {}) } } });
+const problem = (status, code, message, fields) => ({ status, body: { error: { code, message, ...(fields ? { fields: fieldList(fields) } : {}) } } });
+const validation = (fields) => problem(400, "VALIDATION", "Data yang dikirim tidak valid.", fields);
 
 /**
  * Checks a registration request (POST, and PUT of a draft) without writing
@@ -889,21 +937,21 @@ const problem = (status, code, message, fields) => ({ status, body: { error: { c
  */
 function planRegistration(user, body) {
   const direction = body.direction;
-  if (direction !== "IN" && direction !== "OUT") return { problem: problem(400, "VALIDATION", "direction must be IN or OUT", { direction: "IN or OUT" }) };
+  if (direction !== "IN" && direction !== "OUT") return { problem: validation({ direction: "Arah harus IN atau OUT." }) };
   const isPartner = user.kind === "PARTNER";
-  const mayIn = isStaffWith(user, REGISTERING_STAFF) || user.roles.includes("PARTNER_SUPPLIER");
-  const mayOut = isStaffWith(user, REGISTERING_STAFF) || user.roles.includes("PARTNER_TRANSPORTER");
-  if ((direction === "IN" && !mayIn) || (direction === "OUT" && !mayOut)) {
-    return { problem: problem(403, "FORBIDDEN", "This account may not register in this direction") };
+  // mayWrite in apps/api registrations/service.ts: a partner registers incoming as a supplier, outgoing as a transporter
+  const company = accountPartner(user.partner);
+  if (isPartner && !(direction === "IN" ? company?.isSupplier : company?.isTransporter)) {
+    return { problem: problem(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.") };
   }
   const submit = body.submit === true;
   const allocationsIn = Array.isArray(body.allocations) ? body.allocations : [];
   const tripsIn = Array.isArray(body.trips) ? body.trips : [];
   const fields = {};
-  if (allocationsIn.length === 0) fields.allocations = "At least one allocation";
-  if (tripsIn.length === 0) fields.trips = "At least one trip";
-  if (direction === "IN" && tripsIn.length > 1) fields.trips = "Incoming takes exactly one trip";
-  if (Object.keys(fields).length > 0) return { problem: problem(400, "VALIDATION", "Invalid request body", fields) };
+  if (allocationsIn.length === 0) fields.allocations = "Pilih minimal satu kontrak atau DO.";
+  if (tripsIn.length === 0) fields.trips = "Isi minimal satu truk.";
+  if (direction === "IN" && tripsIn.length !== 1) fields.trips = "Registrasi masuk berisi tepat satu truk.";
+  if (Object.keys(fields).length > 0) return { problem: validation(fields) };
 
   // allocations
   const allocations = [];
@@ -911,29 +959,32 @@ function planRegistration(user, body) {
     if (direction === "IN") {
       const row = contracts.find((item) => item.id === entry?.contractId);
       if (!row || row.direction !== "IN" || row.state !== "OPEN" || (isPartner && row.partner.id !== user.partner.id)) {
-        return { problem: problem(400, "CONTRACT_NOT_OPEN", "Contract is not open or not yours", { [`allocations.${index}.contractId`]: "Not open" }) };
+        return { problem: problem(409, "CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan milik perusahaan Anda.") };
       }
       allocations.push({ seq: index + 1, contractId: row.id, deliveryOrderId: null, qtyPlanned: null, source: row });
     } else {
       const order = deliveryOrders.find((item) => item.id === entry?.deliveryOrderId);
       if (!order || order.status !== "ACCEPTED" || (isPartner && order.transporterId !== user.partner.id)) {
-        return { problem: problem(400, "DELIVERY_ORDER_NOT_OPEN", "Delivery order is not accepted or not yours", { [`allocations.${index}.deliveryOrderId`]: "Not open" }) };
+        return { problem: problem(409, "DO_NOT_AVAILABLE", "DO tidak ditemukan, belum diterima, atau bukan untuk perusahaan Anda.") };
       }
       const qty = entry.qtyPlanned ?? publicOrder(order).qtyRemaining;
       if (!Number.isInteger(qty) || qty <= 0) {
-        return { problem: problem(400, "VALIDATION", "Invalid request body", { [`allocations.${index}.qtyPlanned`]: "Positive whole kg" }) };
+        return { problem: validation({ [`allocations.${index}.qtyPlanned`]: qty > 0 ? "Quantity harus angka lebih dari 0." : "Sisa DO sudah habis. Isi quantity." }) };
       }
       allocations.push({ seq: index + 1, contractId: null, deliveryOrderId: order.id, qtyPlanned: qty, source: order });
     }
   }
-  if (new Set(allocations.map((allocation) => allocation.source.partner.id)).size > 1) {
-    return { problem: problem(400, "VALIDATION", "Allocations belong to different partners", { allocations: "One partner per registration" }) };
-  }
+  const keys = allocations.map((allocation) => allocation.source.id);
+  if (new Set(keys).size !== keys.length) return { problem: validation({ allocations: "Kontrak atau DO yang sama dipilih dua kali." }) };
   const flows = new Set(allocations.map((allocation) => settings.flowByCategory[direction][allocation.source.product.category] ?? `${direction}_OTHER`));
-  if (flows.size > 1) return { problem: problem(400, "FLOW_MISMATCH", "Allocations lead to different flows") };
+  if (flows.size > 1) return { problem: validation({ allocations: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang." }) };
   const [flowCode] = flows;
-  if (allocations.length > (settings.maxContractsPerTrip[flowCode] ?? 1)) {
-    return { problem: problem(400, "TOO_MANY_ALLOCATIONS", "Too many allocations for this flow") };
+  const maxPerTrip = settings.maxContractsPerTrip[flowCode];
+  if (maxPerTrip !== undefined && allocations.length > maxPerTrip) {
+    return { problem: validation({ allocations: `Satu truk paling banyak membawa ${maxPerTrip} kontrak atau DO pada jalur ini.` }) };
+  }
+  if (direction === "OUT" && new Set(allocations.map((allocation) => allocation.source.transporterId)).size > 1) {
+    return { problem: validation({ allocations: "Semua DO dalam satu registrasi harus untuk transporter yang sama." }) };
   }
 
   // transporter
@@ -943,7 +994,7 @@ function planRegistration(user, body) {
   } else if (body.transporterId) {
     const transporter = findPartner(body.transporterId);
     if (!transporter || partnerRole(transporter) !== "transporter") {
-      return { problem: problem(400, "VALIDATION", "Unknown transporter", { transporterId: "Unknown transporter" }) };
+      return { problem: validation({ transporterId: "Transporter harus partner transporter." }) };
     }
     transporterId = transporter.id;
   }
@@ -958,46 +1009,52 @@ function planRegistration(user, body) {
     let vehicleRow = null;
     let newVehicle = null;
     if (entry?.vehicle?.id) {
-      vehicleRow = vehicles.find((item) => item.id === entry.vehicle.id) ?? null;
-      if (!vehicleRow) tripFields[`${at}.vehicle.id`] = "Unknown vehicle";
+      vehicleRow = vehicles.find((item) => item.id === entry.vehicle.id && item.isActive) ?? null;
+      if (!vehicleRow) tripFields[`${at}.vehicle.id`] = "Kendaraan tidak ditemukan.";
     } else {
       const key = plateKey(entry?.vehicle?.plateDisplay);
-      if (!/^[A-Z0-9]{3,12}$/.test(key)) tripFields[`${at}.vehicle.plateDisplay`] = "3 to 12 letters and digits";
-      // Not in the contract: a plate that already exists uses that vehicle, as a licence number does.
+      // a plate that already exists uses that vehicle, as a licence number does
       vehicleRow = vehicles.find((item) => item.plateNo === key) ?? null;
       if (!vehicleRow) {
-        if (!vehicleTypes.some((type) => type.code === entry?.vehicle?.vehicleTypeCode)) tripFields[`${at}.vehicle.vehicleTypeCode`] = "Unknown vehicle type";
+        if (!entry?.vehicle?.plateDisplay) tripFields[`${at}.vehicle.plateDisplay`] = "Plat nomor wajib diisi.";
+        else if (!/^[A-Z0-9]{3,12}$/.test(key)) tripFields[`${at}.vehicle.plateDisplay`] = "Plat nomor harus 3 sampai 12 huruf atau angka.";
+        if (!vehicleTypes.some((type) => type.code === entry?.vehicle?.vehicleTypeCode)) tripFields[`${at}.vehicle.vehicleTypeCode`] = "Jenis kendaraan wajib diisi.";
         newVehicle = entry?.vehicle ?? {};
       }
     }
     let driverRow = null;
     let newDriver = null;
     if (entry?.driver?.id) {
-      driverRow = drivers.find((item) => item.id === entry.driver.id) ?? null;
-      if (!driverRow) tripFields[`${at}.driver.id`] = "Unknown driver";
+      driverRow = drivers.find((item) => item.id === entry.driver.id && item.isActive) ?? null;
+      if (!driverRow) tripFields[`${at}.driver.id`] = "Supir tidak ditemukan.";
     } else {
       const licenceNo = plateKey(entry?.driver?.licenceNo);
       driverRow = licenceNo ? drivers.find((item) => item.licenceNo === licenceNo) ?? null : null;
       if (!driverRow) {
+        const labels = { licenceNo: "Nomor SIM", fullName: "Nama supir", licenceClass: "Jenis SIM" };
         for (const name of ["licenceNo", "fullName", "licenceClass"]) {
-          if (!optionalText(entry?.driver?.[name])) tripFields[`${at}.driver.${name}`] = "Required";
+          if (!optionalText(entry?.driver?.[name])) tripFields[`${at}.driver.${name}`] = `${labels[name]} wajib diisi.`;
         }
-        if (!isDate(entry?.driver?.licenceValidUntil)) tripFields[`${at}.driver.licenceValidUntil`] = "Must be a date";
+        if (!isDate(entry?.driver?.licenceValidUntil)) tripFields[`${at}.driver.licenceValidUntil`] = "Masa berlaku SIM wajib diisi.";
         newDriver = { ...(entry?.driver ?? {}), licenceNo };
       }
     }
     const typeCode = vehicleRow?.vehicleTypeCode ?? newVehicle?.vehicleTypeCode;
     if (vehicleTypes.find((type) => type.code === typeCode)?.needsContainerNo && !optionalText(entry?.containerNo)) {
-      tripFields[`${at}.containerNo`] = "Required for this vehicle type";
+      tripFields[`${at}.containerNo`] = "Nomor kontainer wajib diisi untuk jenis kendaraan ini.";
     }
     const letters = [];
     if (direction === "IN") {
       for (const allocation of allocations) {
-        const letter = (entry?.letters ?? []).find((item) => item?.allocationSeq === allocation.seq) ?? {};
+        const sent = entry?.letters ?? [];
+        const letterIndex = sent.findIndex((item) => item?.allocationSeq === allocation.seq);
+        const letter = sent[letterIndex] ?? {};
+        // the API names a letter by its place in the list it was sent in
+        const where = `${at}.letters.${letterIndex === -1 ? allocation.seq - 1 : letterIndex}`;
         const kg = (name) => {
           const value = letter[name];
           if (value === undefined || value === null) return null;
-          if (!Number.isInteger(value) || value < 0) tripFields[`${at}.letters.${allocation.seq}.${name}`] = "Whole kg";
+          if (!Number.isInteger(value) || value <= 0) tripFields[`${where}.${name}`] = "Harus bilangan bulat lebih dari 0.";
           return value;
         };
         const line = {
@@ -1013,28 +1070,29 @@ function planRegistration(user, body) {
           quality: {},
         };
         if (line.originGrossKg !== null && line.originTareKg !== null && line.originNetKg !== null && line.originNetKg !== line.originGrossKg - line.originTareKg) {
-          tripFields[`${at}.letters.${allocation.seq}.originNetKg`] = "Net must equal gross minus tare";
+          tripFields[`${where}.originNetKg`] = "Netto asal harus sama dengan bruto dikurangi tarra.";
         }
         for (const [code, value] of Object.entries(letter.quality ?? {})) {
           const parameter = qualityParameters.find((item) => item.code === code);
-          if (!parameter || typeof value !== "number" || value < parameter.minValid || value > parameter.maxValid) {
-            tripFields[`${at}.letters.${allocation.seq}.quality.${code}`] = "Outside the valid range";
+          if (!parameter) tripFields[`${where}.quality.${code}`] = `Parameter spek ${code} tidak dikenal.`;
+          else if (typeof value !== "number" || value < parameter.minValid || value > parameter.maxValid) {
+            tripFields[`${where}.quality.${code}`] = `${parameter.name} harus antara ${parameter.minValid} dan ${parameter.maxValid}.`;
           } else line.quality[code] = value;
         }
         line.qtyPlanned = line.originNetKg;
         letters.push(line);
       }
     }
-    if (Object.keys(tripFields).length > 0) return { problem: problem(400, "VALIDATION", "Invalid request body", tripFields) };
-    if (driverRow?.registryStatus === "BLACKLIST") {
-      return { problem: problem(422, "DRIVER_BLACKLISTED", "The driver is blacklisted in the registry", { [`${at}.driver`]: "Blacklisted" }) };
-    }
-    if (driverRow?.blocked) return { problem: problem(422, "DRIVER_BLOCKED", "The driver is blocked at this site") };
+    if (Object.keys(tripFields).length > 0) return { problem: validation(tripFields) };
     const vehicleKey = vehicleRow?.id ?? plateKey(newVehicle?.plateDisplay);
     const driverKey = driverRow?.id ?? newDriver?.licenceNo;
-    if (usedVehicles.has(vehicleKey) || usedDrivers.has(driverKey)) {
-      return { problem: problem(409, "DUPLICATE_IN_REGISTRATION", "The same vehicle or driver is used twice") };
+    if (usedVehicles.has(vehicleKey)) return { problem: problem(409, "DUPLICATE_VEHICLE", "Satu kendaraan dipakai dua kali dalam registrasi ini.") };
+    if (usedDrivers.has(driverKey)) return { problem: problem(409, "DUPLICATE_DRIVER", "Satu supir dipakai dua kali dalam registrasi ini.") };
+    // checkRegistration in apps/api: the registry policy, then a local block
+    if (driverRow && DRIVER_POLICY[driverRow.registryStatus] === "BLOCK") {
+      return { problem: problem(409, "DRIVER_BLACKLISTED", `Supir ${driverRow.fullName} masuk daftar hitam VCF.`) };
     }
+    if (driverRow?.blocked) return { problem: problem(409, "DRIVER_BLOCKED", `Supir ${driverRow.fullName} sedang diblokir.`) };
     usedVehicles.add(vehicleKey);
     usedDrivers.add(driverKey);
     planned.push({ entry, vehicleRow, newVehicle, driverRow, newDriver, letters });
@@ -1042,9 +1100,9 @@ function planRegistration(user, body) {
 
   if (direction === "OUT" && submit && (typeof body.closeCargo !== "boolean" || typeof body.flexiBag !== "boolean")) {
     const missing = {};
-    if (typeof body.closeCargo !== "boolean") missing.closeCargo = "Required at submit";
-    if (typeof body.flexiBag !== "boolean") missing.flexiBag = "Required at submit";
-    return { problem: problem(400, "VALIDATION", "Invalid request body", missing) };
+    if (typeof body.closeCargo !== "boolean") missing.closeCargo = "Close cargo wajib dijawab sebelum dikirim.";
+    if (typeof body.flexiBag !== "boolean") missing.flexiBag = "Flexi bag wajib dijawab sebelum dikirim.";
+    return { problem: validation(missing) };
   }
 
   return {
@@ -1054,7 +1112,7 @@ function planRegistration(user, body) {
       flowCode,
       partner: allocations[0].source.partner,
       transporterId,
-      plannedDate: isDate(body.plannedDate) ? body.plannedDate : plantDate().iso,
+      plannedDate: isDate(body.plannedDate) ? body.plannedDate : null,
       remark: optionalText(body.remark),
       closeCargo: typeof body.closeCargo === "boolean" ? body.closeCargo : null,
       flexiBag: typeof body.flexiBag === "boolean" ? body.flexiBag : null,
@@ -1147,7 +1205,7 @@ function writeRegistration(registration, plan, user) {
       vehicleId: vehicleRow.id,
       driverId: driverRow.id,
       containerNo: optionalText(item.entry.containerNo)?.toUpperCase() ?? null,
-      plannedArrival: isDate(item.entry.plannedArrival) ? item.entry.plannedArrival : null,
+      plannedArrival: isDate(item.entry.plannedArrival) ? item.entry.plannedArrival : plan.plannedDate,
       handoverNo: optionalText(item.entry.handoverNo),
       qtyPlanned: lines.reduce((sum, line) => sum + (line.qtyPlanned ?? 0), 0) || null,
       ...weights,
@@ -1168,6 +1226,7 @@ function seedRegistration({ partner, transporter, vehicleId, driverId, contractN
     status: "DRAFT",
     createdVia: "OPERATOR",
     createdBy: { id: "u-2", fullName: "Petugas Pos Contoh" },
+    createdAt: daysAgoIso(issuedDaysAgo),
     ownerPartnerId: partner.id,
     submittedAt: daysAgoIso(issuedDaysAgo),
     reviewedAt: null,
@@ -1200,26 +1259,58 @@ function seedRegistration({ partner, transporter, vehicleId, driverId, contractN
 seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-2", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: plantDate().iso, issuedDaysAgo: 0 });
 seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-6", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: daysFromNow(-9), issuedDaysAgo: 9 });
 
-/** Checks the post shows after a scan. */
+const GATE_MESSAGES = {
+  SPJ_EXPIRED: "SPJ sudah lewat masa berlaku. Minta terbit ulang.",
+  SPJ_REVOKED: "SPJ ini sudah dicabut. Pakai SPJ yang terbaru.",
+  ALREADY_CHECKED_IN: "Truk ini sudah check-in.",
+  CARD_UNKNOWN: "Kartu belum terdaftar.",
+  CARD_IN_USE: "Kartu sedang dipakai truk lain.",
+  CARD_NOT_AVAILABLE: "Kartu berstatus hilang atau tidak dipakai lagi.",
+  VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
+  DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik.",
+};
+
+/** The registry policy for a driver: { code, level, message } or null (registryVerdict in apps/api). */
+function registryVerdict(driverRow) {
+  const action = DRIVER_POLICY[driverRow.registryStatus] ?? "ALLOW";
+  if (action === "ALLOW") return null;
+  const code = { BLACKLIST: "DRIVER_BLACKLISTED", WARNING: "DRIVER_WARNING", UNKNOWN: "DRIVER_NOT_IN_REGISTRY" }[driverRow.registryStatus];
+  return { code, level: action, message: `Supir ${driverRow.fullName} ditandai ${driverRow.registryStatus} di VCF.` };
+}
+
+const insideElsewhere = (trip, key) => trips.some((other) => other !== trip && INSIDE.includes(other.status) && other[key] === trip[key]);
+
+/** Checks the post shows after a scan, in the order of GET /api/gate/spj/:token. */
 function gateChecks(trip) {
   const checks = [];
-  const add = (code, level, message) => checks.push({ code, level, message });
-  const driverRow = driverOf(trip);
-  const vehicleRow = vehicleOf(trip);
-  if (trip.revoked) add("SPJ_REVOKED", "BLOCK", "SPJ has been revoked");
-  if (trip.status === "CHECKED_IN") add("ALREADY_CHECKED_IN", "BLOCK", "Trip is already checked in");
-  if (trip.status === "EXPIRED") add("SPJ_EXPIRED", "BLOCK", "SPJ has expired");
-  if (trip.status === "CANCELLED") add("TRIP_CANCELLED", "BLOCK", "Trip is cancelled");
-  if (["DRAFT", "READY"].includes(trip.status)) add("TRIP_NOT_ISSUED", "BLOCK", "SPJ is not issued");
-  if (driverRow.registryStatus === "BLACKLIST") add("DRIVER_BLACKLISTED", "BLOCK", "Driver is blacklisted");
-  if (driverRow.registryStatus === "WARNING") add("DRIVER_WARNING", "WARN", "Driver has WARNING status");
-  if (driverRow.registryStatus === "UNKNOWN") add("DRIVER_NOT_IN_REGISTRY", "WARN", "Driver is not in the registry");
-  if (driverRow.licenceValidUntil < today()) add("LICENCE_EXPIRED", "WARN", "Licence has expired");
-  for (const code of publicVehicle(vehicleRow).expired) add(`${code}_EXPIRED`, "WARN", `${code} has expired`);
-  const inside = trips.filter((other) => other !== trip && other.status === "CHECKED_IN");
-  if (trip.status !== "CHECKED_IN" && inside.some((other) => other.vehicleId === trip.vehicleId)) add("VEHICLE_INSIDE", "BLOCK", "Vehicle is inside");
-  if (trip.status !== "CHECKED_IN" && inside.some((other) => other.driverId === trip.driverId)) add("DRIVER_INSIDE", "BLOCK", "Driver is inside");
+  const block = (code) => checks.push({ code, level: "BLOCK", message: GATE_MESSAGES[code] ?? code });
+  if (trip.revoked) block("SPJ_REVOKED");
+  else if (trip.status === "EXPIRED") block("SPJ_EXPIRED");
+  if (ARRIVED.includes(trip.status)) block("ALREADY_CHECKED_IN");
+  else if (!trip.revoked && trip.status === "ISSUED") {
+    const driverRow = driverOf(trip);
+    const vehicleRow = vehicleOf(trip);
+    const verdict = registryVerdict(driverRow);
+    if (verdict) checks.push(verdict);
+    if (driverRow.blocked) checks.push({ code: "DRIVER_BLOCKED", level: "BLOCK", message: `Supir ${driverRow.fullName} sedang diblokir.` });
+    if (driverRow.licenceValidUntil < today()) {
+      checks.push({ code: "LICENCE_EXPIRED", level: "WARN", message: `SIM ${driverRow.fullName} habis berlaku ${driverRow.licenceValidUntil}.` });
+    }
+    if (!vehicleRow.verified) checks.push({ code: "VEHICLE_UNVERIFIED", level: "WARN", message: `Kendaraan ${vehicleRow.plateDisplay} belum diverifikasi logistik.` });
+    for (const code of publicVehicle(vehicleRow).expired) {
+      checks.push({ code: `${code}_EXPIRED`, level: "WARN", message: `Surat ${code} kendaraan ${vehicleRow.plateDisplay} habis berlaku.` });
+    }
+    if (insideElsewhere(trip, "vehicleId")) block("VEHICLE_INSIDE");
+    if (insideElsewhere(trip, "driverId")) block("DRIVER_INSIDE");
+  }
   return checks;
+}
+
+/** Revokes the active SPJ of a trip: its token stays known so a scan answers SPJ_REVOKED. */
+function revokeSpj(trip) {
+  if (!trip.spj) return;
+  trip.revokedTokens.push(trip.spj.barcodeToken);
+  trip.spj = null;
 }
 
 function findByToken(rawToken) {
@@ -1247,9 +1338,9 @@ function bindCard(trip, card) {
 
 /** Card checks shared by check-in and replace: null when the card can be bound. */
 function cardProblem(card) {
-  if (!card) return problem(409, "CARD_UNKNOWN", "Card is not registered");
-  if (card.status === "IN_USE") return problem(409, "CARD_IN_USE", "Card is bound to another trip");
-  if (card.status !== "AVAILABLE") return problem(409, "CARD_NOT_AVAILABLE", "Card is lost or retired");
+  if (!card) return problem(409, "CARD_UNKNOWN", GATE_MESSAGES.CARD_UNKNOWN);
+  if (card.status === "IN_USE") return problem(409, "CARD_IN_USE", GATE_MESSAGES.CARD_IN_USE);
+  if (card.status !== "AVAILABLE") return problem(409, "CARD_NOT_AVAILABLE", GATE_MESSAGES.CARD_NOT_AVAILABLE);
   return null;
 }
 
@@ -1392,12 +1483,10 @@ const routes = {
   },
 
   "GET /api/contracts": (request, response, url) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["contracts", "VIEW"]]);
     if (!user) return 0;
     const direction = url.searchParams.get("direction");
-    if (direction !== "IN" && direction !== "OUT") {
-      return fail(request, response, 400, "VALIDATION_ERROR", "direction must be IN or OUT");
-    }
+    if (direction !== "IN" && direction !== "OUT") return invalid(request, response, { direction: "Arah harus IN atau OUT." });
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const includeClosed = ["true", "1"].includes(url.searchParams.get("includeClosed") ?? "");
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
@@ -1413,13 +1502,9 @@ const routes = {
   },
 
   "POST /api/admin/sync/odoo": async (request, response) => {
-    const user = authorize(request, response);
-    if (!user) return 0;
-    if (!user.roles.some((role) => SYNC_ROLES.includes(role))) {
-      return fail(request, response, 403, "FORBIDDEN", "This role may not start a sync");
-    }
-    if (!ODOO_CONFIGURED) return fail(request, response, 503, "NOT_CONFIGURED", "Odoo is not configured");
-    if (syncRunning) return fail(request, response, 409, "SYNC_RUNNING", "A sync is already running");
+    if (!guard(request, response, [["contracts", "EDIT"]], { staffOnly: true })) return 0;
+    if (!ODOO_CONFIGURED) return fail(request, response, 503, "NOT_CONFIGURED", "Odoo belum diatur di server.");
+    if (syncRunning) return fail(request, response, 409, "SYNC_RUNNING", "Sinkronisasi Odoo sedang berjalan.");
 
     syncRunning = true;
     const started = Date.now();
@@ -1447,53 +1532,64 @@ const routes = {
   },
 
   "GET /api/admin/sync/runs": (request, response, url) => {
-    const user = authorize(request, response);
-    if (!user) return 0;
-    if (user.kind !== "INTERNAL") return fail(request, response, 403, "FORBIDDEN", "Staff only");
+    if (!guard(request, response, [["contracts", "VIEW"], ["drivers", "VIEW"]], { staffOnly: true })) return 0;
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 100);
     return send(request, response, 200, { items: syncRuns.slice(0, limit) });
   },
 
-  // --- users (system admin only) --------------------------------------------
+  // --- users and their module permissions -----------------------------------
 
   "GET /api/admin/users": (request, response, url) => {
-    if (!authorizeRoles(request, response, ["SUPER_ADMIN"])) return 0;
+    if (!guard(request, response, [["users", "VIEW"]])) return 0;
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const matches = users.filter((user) => !q || includesText(user.fullName, q) || includesText(user.username, q));
     return page(request, response, url, matches.map(adminUser));
   },
 
-  "GET /api/admin/roles": (request, response) => {
-    if (!authorizeRoles(request, response, ["SUPER_ADMIN"])) return 0;
-    return send(request, response, 200, { items: roleDefinitions });
+  "GET /api/admin/modules": (request, response) => {
+    if (!guard(request, response, [["users", "VIEW"]])) return 0;
+    return send(request, response, 200, { items: modules });
   },
 
-  "PUT /api/admin/users/:id/roles": async (request, response, url, id) => {
-    const admin = authorizeRoles(request, response, ["SUPER_ADMIN"]);
-    if (!admin) return 0;
+  // Replaces every permission of the account: a module left out or set to null is taken away.
+  "PUT /api/admin/users/:id/permissions": async (request, response, url, id) => {
+    if (!guard(request, response, [["users", "EDIT"]])) return 0;
     const target = users.find((user) => user.id === id);
-    if (!target) return fail(request, response, 404, "NOT_FOUND", "No such user");
-    const { roles } = await readJson(request);
-    const allowed = roleDefinitions.filter((role) => role.scope === target.kind).map((role) => role.code);
-    if (!Array.isArray(roles) || roles.some((role) => !allowed.includes(role))) {
-      return invalid(request, response, { roles: "Unknown role, or a role of the other account kind" });
+    if (!target) return fail(request, response, 404, "NOT_FOUND", "Akun tidak ditemukan.");
+    const { permissions } = await readJson(request);
+    if (typeof permissions !== "object" || permissions === null || Array.isArray(permissions)) {
+      return invalid(request, response, { permissions: "permissions harus berupa objek kode modul ke tingkat." });
     }
-    const otherAdmins = users.some((user) => user !== target && user.isActive && user.roles.includes("SUPER_ADMIN"));
-    if (target === admin && !roles.includes("SUPER_ADMIN") && !otherAdmins) {
-      return fail(request, response, 409, "LAST_ADMIN_SELF", "The last system admin cannot drop that role");
+    const wanted = {};
+    const fields = [];
+    for (const [code, level] of Object.entries(permissions)) {
+      const known = modules.find((item) => item.code === code);
+      const field = `permissions.${code}`;
+      if (level !== null && !["VIEW", "CREATE", "EDIT"].includes(level)) fields.push({ field, message: "Tingkat harus VIEW, CREATE, EDIT, atau null." });
+      else if (!known) fields.push({ field, message: `Modul ${code} tidak ada.` });
+      else if (level === null) continue;
+      else if (!known.levels.includes(level)) fields.push({ field, message: `Tingkat ${level} tidak berlaku untuk modul ${code}.` });
+      else if (target.kind === "PARTNER" && !known.partnerAllowed) fields.push({ field, message: `Modul ${code} tidak bisa diberikan ke akun partner.` });
+      else wanted[code] = level;
     }
-    target.roles = [...new Set(roles)];
+    if (fields.length > 0) return invalid(request, response, fields);
+    const before = target.permissions;
+    target.permissions = wanted;
+    if (adminCount() === 0) {
+      target.permissions = before;
+      return fail(request, response, 409, "LAST_ADMIN", "Harus ada sedikitnya satu akun internal aktif yang bisa mengatur hak akses.");
+    }
     return send(request, response, 200, { user: adminUser(target) });
   },
 
   "PATCH /api/admin/users/:id": async (request, response, url, id) => {
-    const admin = authorizeRoles(request, response, ["SUPER_ADMIN"]);
+    const admin = guard(request, response, [["users", "EDIT"]]);
     if (!admin) return 0;
-    const target = users.find((user) => user.id === id);
-    if (!target) return fail(request, response, 404, "NOT_FOUND", "No such user");
     const { isActive } = await readJson(request);
-    if (typeof isActive !== "boolean") return invalid(request, response, { isActive: "Must be true or false" });
-    if (target === admin) return fail(request, response, 409, "SELF_CHANGE", "You cannot change your own account");
+    if (typeof isActive !== "boolean") return invalid(request, response, { isActive: "isActive harus true atau false." });
+    if (id === admin.id) return fail(request, response, 409, "SELF_CHANGE", "Anda tidak dapat mengubah status akun sendiri.");
+    const target = users.find((user) => user.id === id);
+    if (!target) return fail(request, response, 404, "NOT_FOUND", "Akun tidak ditemukan.");
     target.isActive = isActive;
     return send(request, response, 200, { user: adminUser(target) });
   },
@@ -1501,15 +1597,7 @@ const routes = {
   // --- drivers (staff) ------------------------------------------------------
 
   "GET /api/drivers": (request, response, url) => {
-    const user = authorize(request, response);
-    if (!user) return 0;
-    if (user.kind === "PARTNER") {
-      // Not in the contract (the list is staff only): the registration form of a
-      // partner looks a licence number up, so a partner gets an exact match only.
-      const licence = plateKey(url.searchParams.get("q"));
-      const match = licence ? drivers.filter((item) => item.licenceNo === licence && item.isActive) : [];
-      return page(request, response, url, match.map(publicDriver));
-    }
+    if (!guard(request, response, [["drivers", "VIEW"]], { staffOnly: true })) return 0;
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const status = url.searchParams.get("status") ?? "";
     const push = url.searchParams.get("push") ?? "";
@@ -1523,17 +1611,17 @@ const routes = {
   },
 
   "POST /api/drivers": async (request, response) => {
-    if (!authorizeRoles(request, response, MASTER_WRITE_ROLES)) return 0;
+    if (!guard(request, response, [["drivers", "CREATE"]], { staffOnly: true })) return 0;
     const body = await readJson(request);
     const fields = {};
     for (const name of ["fullName", "licenceNo", "licenceClass"]) {
-      if (!optionalText(body[name])) fields[name] = "Required";
+      if (!optionalText(body[name])) fields[name] = "Wajib diisi.";
     }
-    if (!isDate(body.licenceValidUntil)) fields.licenceValidUntil = "Must be a date (YYYY-MM-DD)";
+    if (!isDate(body.licenceValidUntil)) fields.licenceValidUntil = "Masa berlaku SIM harus tanggal (YYYY-MM-DD).";
     if (Object.keys(fields).length > 0) return invalid(request, response, fields);
     const licenceNo = body.licenceNo.trim().toUpperCase();
     if (drivers.some((item) => item.licenceNo === licenceNo)) {
-      return fail(request, response, 409, "DUPLICATE", "A driver with this licence number exists");
+      return fail(request, response, 409, "DUPLICATE", `Nomor SIM ${licenceNo} sudah terdaftar.`);
     }
     const created = {
       id: `d-${nextDriverId++}`,
@@ -1554,14 +1642,14 @@ const routes = {
   },
 
   "POST /api/admin/sync/vcf": async (request, response) => {
-    if (!authorizeRoles(request, response, SYNC_ROLES)) return 0;
-    if (VCF_MODE === "off") return fail(request, response, 503, "NOT_CONFIGURED", "VCF is not configured");
-    if (vcfRunning) return fail(request, response, 409, "SYNC_RUNNING", "A sync is already running");
+    if (!guard(request, response, [["drivers", "EDIT"]], { staffOnly: true })) return 0;
+    if (VCF_MODE === "off") return fail(request, response, 503, "NOT_CONFIGURED", "VCF belum diatur di server.");
+    if (vcfRunning) return fail(request, response, 409, "SYNC_RUNNING", "Sinkronisasi master supir sedang berjalan.");
     vcfRunning = true;
     const started = Date.now();
     await new Promise((resolve) => setTimeout(resolve, SYNC_MS));
     vcfRunning = false;
-    if (VCF_MODE === "fail") return fail(request, response, 502, "SYNC_FAILED", "The registry did not answer");
+    if (VCF_MODE === "fail") return fail(request, response, 502, "SYNC_FAILED", "Sinkronisasi master supir gagal.");
     const now = new Date().toISOString();
     // Drivers entered here are sent first; one made-up driver is always refused.
     let pushed = 0;
@@ -1601,27 +1689,24 @@ const routes = {
   // --- vehicles -------------------------------------------------------------
 
   "GET /api/vehicle-types": (request, response) => {
-    if (!authorize(request, response)) return 0;
+    if (!guard(request, response, [["vehicles", "VIEW"], ["registrations", "VIEW"]])) return 0;
     return send(request, response, 200, { items: vehicleTypes });
   },
 
   "GET /api/vehicles": (request, response, url) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["vehicles", "VIEW"]]);
     if (!user) return 0;
     const q = plateKey(url.searchParams.get("q"));
     const matches = vehicles.filter(
-      (item) =>
-        // A partner account only sees the vehicles of its own company. Not in the
-        // contract: it also gets an exact plate match, which the registration form needs.
-        (user.kind !== "PARTNER" || item.owner?.id === user.partner.id || (q && item.plateNo === q)) &&
-        (!q || item.plateNo.includes(q)),
+      // A partner account only sees the vehicles of its own company.
+      (item) => (user.kind !== "PARTNER" || item.owner?.id === user.partner.id) && (!q || item.plateNo.includes(q)),
     );
     return page(request, response, url, matches.map(publicVehicle));
   },
 
   "POST /api/vehicles": async (request, response) => {
-    if (!authorizeRoles(request, response, MASTER_WRITE_ROLES)) return 0;
-    const created = { id: `v-${nextVehicleId++}`, isActive: true, verified: false };
+    if (!guard(request, response, [["vehicles", "CREATE"]], { staffOnly: true })) return 0;
+    const created = { id: `v-${nextVehicleId++}`, isActive: true, verified: true };
     const problem = applyVehicle(created, { ...EMPTY_VEHICLE_BODY, ...(await readJson(request)) }, true);
     if (problem) return send(request, response, problem.status, problem.body);
     vehicles.unshift(created);
@@ -1629,22 +1714,19 @@ const routes = {
   },
 
   "PATCH /api/vehicles/:id": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, MASTER_WRITE_ROLES)) return 0;
+    if (!guard(request, response, [["vehicles", "EDIT"]], { staffOnly: true })) return 0;
     const target = vehicles.find((item) => item.id === id);
-    if (!target) return fail(request, response, 404, "NOT_FOUND", "No such vehicle");
+    if (!target) return fail(request, response, 404, "NOT_FOUND", "Kendaraan tidak ditemukan.");
     const problem = applyVehicle(target, await readJson(request), false);
     if (problem) return send(request, response, problem.status, problem.body);
     return send(request, response, 200, { vehicle: publicVehicle(target) });
   },
 
-  // --- partners and destinations (staff) ------------------------------------
+  // --- partners and destinations ---------------------------------------------
 
   "GET /api/partners": (request, response, url) => {
+    if (!guard(request, response, [], { staffOnly: true })) return 0;
     const role = url.searchParams.get("role");
-    // Not in the contract (the lookup is staff only): a supplier chooses the
-    // transporter of its truck, so partner accounts may search transporters.
-    const user = role === "transporter" ? authorize(request, response) : authorizeStaff(request, response);
-    if (!user) return 0;
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const matches = Object.values(partners).filter(
       (partner) => (!role || partnerRole(partner) === role) && (!q || includesText(partner.name, q)),
@@ -1665,7 +1747,7 @@ const routes = {
   },
 
   "GET /api/destinations": (request, response, url) => {
-    if (!authorizeStaff(request, response)) return 0;
+    if (!guard(request, response, [["destinations", "VIEW"]])) return 0;
     const partnerId = url.searchParams.get("partnerId") ?? "";
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const matches = destinations.filter(
@@ -1677,7 +1759,7 @@ const routes = {
   },
 
   "POST /api/destinations": async (request, response) => {
-    if (!authorizeRoles(request, response, SYNC_ROLES)) return 0;
+    if (!guard(request, response, [["destinations", "CREATE"]])) return 0;
     const created = { id: `t-${nextDestinationId++}`, isActive: true };
     const fields = applyDestination(created, await readJson(request), true);
     if (fields) return invalid(request, response, fields);
@@ -1686,31 +1768,81 @@ const routes = {
   },
 
   "PATCH /api/destinations/:id": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, SYNC_ROLES)) return 0;
+    if (!guard(request, response, [["destinations", "EDIT"]])) return 0;
     const target = destinations.find((item) => item.id === id);
-    if (!target) return fail(request, response, 404, "NOT_FOUND", "No such destination");
+    if (!target) return fail(request, response, 404, "NOT_FOUND", "Tujuan tidak ditemukan.");
     const fields = applyDestination(target, await readJson(request), false);
     if (fields) return invalid(request, response, fields);
     return send(request, response, 200, { destination: target });
   },
 
-  // --- phase 3: lookups the forms need (not in the contract) ----------------
+  // --- phase 3: what the registration and DO forms read -----------------------
 
   "GET /api/quality-parameters": (request, response) => {
-    if (!authorize(request, response)) return 0;
+    if (!guard(request, response, [["registrations", "VIEW"]])) return 0;
     return send(request, response, 200, { items: qualityParameters });
   },
 
+  // staff only: a partner account gets its products through its contracts and DOs
   "GET /api/products": (request, response, url) => {
-    if (!authorizeStaff(request, response)) return 0;
+    if (!guard(request, response, [["delivery_orders", "VIEW"]], { staffOnly: true })) return 0;
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
-    return page(request, response, url, Object.values(products).filter((item) => !q || includesText(item.name, q)));
+    return page(
+      request,
+      response,
+      url,
+      Object.values(products)
+        .filter((item) => !q || includesText(item.name, q))
+        .map(({ id, name, category }) => ({ id, name, category })),
+    );
+  },
+
+  // The lookups never list: one whole licence number or plate finds at most one row, a transporter only by name.
+  "GET /api/lookup/driver": (request, response, url) => {
+    if (!guard(request, response, [["registrations", "CREATE"]])) return 0;
+    const key = plateKey(url.searchParams.get("licenceNo")).replace(/[^A-Z0-9]/g, "");
+    const row = key.length >= 3 ? drivers.find((item) => item.licenceNo === key) : null;
+    if (!row) return send(request, response, 200, { driver: null });
+    const { id, fullName, licenceNo, licenceClass, licenceValidUntil, registryStatus, isActive } = row;
+    return send(request, response, 200, {
+      driver: { id, fullName, licenceNo, licenceClass, licenceValidUntil, registryStatus, licenceExpired: licenceValidUntil < today(), blocked: row.blocked === true, isActive },
+    });
+  },
+
+  "GET /api/lookup/vehicle": (request, response, url) => {
+    if (!guard(request, response, [["registrations", "CREATE"]])) return 0;
+    const key = plateKey(url.searchParams.get("plate")).replace(/[^A-Z0-9]/g, "");
+    const row = key.length >= 3 ? vehicles.find((item) => item.plateNo === key) : null;
+    if (!row) return send(request, response, 200, { vehicle: null });
+    return send(request, response, 200, {
+      vehicle: {
+        id: row.id,
+        plateNo: row.plateNo,
+        plateDisplay: row.plateDisplay,
+        vehicleTypeCode: row.vehicleTypeCode,
+        needsContainerNo: vehicleTypes.find((type) => type.code === row.vehicleTypeCode)?.needsContainerNo ?? false,
+        capacityKg: row.capacityKg,
+        tareKg: row.tareKg,
+        expired: publicVehicle(row).expired,
+        verified: row.verified,
+        owner: ref(row.owner),
+        isActive: row.isActive,
+      },
+    });
+  },
+
+  "GET /api/lookup/transporters": (request, response, url) => {
+    if (!guard(request, response, [["registrations", "CREATE"]])) return 0;
+    const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+    if (q.length < 2) return send(request, response, 200, { items: [], total: 0 });
+    const matches = Object.values(partners).filter((partner) => partnerRole(partner) === "transporter" && includesText(partner.name, q));
+    return page(request, response, url, matches.map(ref));
   },
 
   // --- RFID cards -------------------------------------------------------------
 
   "GET /api/rfid-cards": (request, response, url) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["rfid_cards", "VIEW"]])) return 0;
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const status = url.searchParams.get("status") ?? "";
     const matches = rfidCards.filter(
@@ -1728,31 +1860,31 @@ const routes = {
           label: card.label,
           status: card.status,
           note: card.note,
-          trip: trip ? { id: trip.id, tripNo: trip.tripNo, plateNo: vehicleOf(trip).plateDisplay } : null,
+          trip: trip ? { id: trip.id, tripNo: trip.tripNo, plateNo: vehicleOf(trip).plateNo } : null,
         };
       }),
     );
   },
 
   "POST /api/rfid-cards": async (request, response) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["rfid_cards", "CREATE"]])) return 0;
     const body = await readJson(request);
     const uid = normalizeUid(body.uid);
-    if (!/^[0-9A-F]{4,32}$/.test(uid)) return invalid(request, response, { uid: "Hexadecimal, 4 to 32 characters" });
-    if (rfidCards.some((card) => card.uid === uid)) return fail(request, response, 409, "DUPLICATE", "A card with this UID exists");
+    if (!/^[0-9A-F]{8,20}$/.test(uid)) return invalid(request, response, { uid: "UID kartu harus 8 sampai 20 digit heksadesimal." });
+    if (rfidCards.some((card) => card.uid === uid)) return fail(request, response, 409, "DUPLICATE", `Kartu ${uid} sudah terdaftar.`);
     const card = { id: `k-${nextCardId++}`, uid, label: optionalText(body.label), status: "AVAILABLE", note: optionalText(body.note), tripId: null };
     rfidCards.unshift(card);
     return send(request, response, 201, { card: { ...card, trip: null, tripId: undefined } });
   },
 
   "PATCH /api/rfid-cards/:id": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["rfid_cards", "EDIT"]])) return 0;
     const card = rfidCards.find((item) => item.id === id);
-    if (!card) return fail(request, response, 404, "NOT_FOUND", "No such card");
+    if (!card) return fail(request, response, 404, "NOT_FOUND", "Kartu tidak ditemukan.");
     const body = await readJson(request);
     if ("status" in body && body.status !== card.status) {
-      if (!["AVAILABLE", "LOST", "RETIRED"].includes(body.status)) return invalid(request, response, { status: "AVAILABLE, LOST or RETIRED" });
-      if (card.tripId) return fail(request, response, 409, "CARD_IN_USE", "The card is bound to a trip");
+      if (!["AVAILABLE", "LOST", "RETIRED"].includes(body.status)) return invalid(request, response, { status: "Status hanya boleh AVAILABLE, LOST, atau RETIRED." });
+      if (card.tripId) return fail(request, response, 409, "INVALID_STATE", "Kartu sedang dipakai truk. Lepas kartu dulu sebelum mengubah statusnya.");
       card.status = body.status;
     }
     if ("label" in body) card.label = optionalText(body.label);
@@ -1763,9 +1895,8 @@ const routes = {
   // --- delivery orders ----------------------------------------------------------
 
   "GET /api/delivery-orders": (request, response, url) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["delivery_orders", "VIEW"]]);
     if (!user) return 0;
-    if (user.kind === "INTERNAL" && !isStaffWith(user, REGISTERING_STAFF)) return fail(request, response, 403, "FORBIDDEN", "Not for this role");
     const status = url.searchParams.get("status") ?? "";
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const matches = deliveryOrders
@@ -1785,18 +1916,18 @@ const routes = {
   },
 
   "GET /api/delivery-orders/:id": (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["delivery_orders", "VIEW"]]);
     if (!user) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
     if (!order || (user.kind === "PARTNER" && (order.transporterId !== user.partner.id || order.status === "DRAFT"))) {
-      return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
+      return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     }
     const orderTrips = trips.filter((trip) => registrationOf(trip).allocations.some((allocation) => allocation.deliveryOrderId === order.id));
-    return send(request, response, 200, { deliveryOrder: publicOrder(order), trips: orderTrips.map(tripSummary) });
+    return send(request, response, 200, { deliveryOrder: publicOrder(order), trips: orderTrips.map(publicTrip) });
   },
 
   "POST /api/delivery-orders": async (request, response) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["delivery_orders", "CREATE"]], { staffOnly: true })) return 0;
     const body = await readJson(request);
     const order = {
       id: `do-${nextOrderId++}`,
@@ -1815,14 +1946,16 @@ const routes = {
   },
 
   "PATCH /api/delivery-orders/:id": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["delivery_orders", "EDIT"]], { staffOnly: true })) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
-    if (!order) return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
+    if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     const body = await readJson(request);
-    if (["CLOSED", "CANCELLED"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "The order can no longer change");
+    if (["CLOSED", "CANCELLED"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "DO yang sudah ditutup atau dibatalkan tidak bisa diubah.");
     if (order.status !== "DRAFT") {
-      const extra = Object.keys(body).filter((key) => !["deliveryUntil", "truckCount", "remark"].includes(key));
-      if (extra.length > 0) return invalid(request, response, Object.fromEntries(extra.map((key) => [key, "Only editable in DRAFT"])));
+      const extra = Object.keys(body).filter((key) => !["deliveryUntil", "truckCount", "remark"].includes(key) && body[key] !== undefined);
+      if (extra.length > 0) {
+        return fail(request, response, 409, "INVALID_STATE", "Setelah DO dikirim, hanya tanggal akhir kirim, jumlah truk, dan keterangan yang boleh diubah.");
+      }
     }
     const outcome = applyOrder(order, body, false);
     if (outcome) return reply(request, response, outcome);
@@ -1830,32 +1963,31 @@ const routes = {
   },
 
   "POST /api/delivery-orders/:id/send": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["delivery_orders", "EDIT"]], { staffOnly: true })) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
-    if (!order) return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
+    if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     const body = await readJson(request);
-    if (order.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Only a draft can be sent");
+    if (order.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya DO berstatus DRAFT yang bisa dikirim.");
     const transporterId = body.transporterId ?? order.transporterId;
-    if (!transporterId || partnerRole(findPartner(transporterId) ?? { id: "p-0" }) !== "transporter") {
-      return invalid(request, response, { transporterId: "A transporter is required" });
+    if (!transporterId) return invalid(request, response, { transporterId: "Pilih transporter sebelum DO dikirim." });
+    if (partnerRole(findPartner(transporterId) ?? { id: "p-0" }) !== "transporter") {
+      return invalid(request, response, { transporterId: "Transporter harus partner transporter." });
     }
     Object.assign(order, { transporterId, status: "SENT", sentAt: nowIso() });
     return send(request, response, 200, { deliveryOrder: publicOrder(order) });
   },
 
+  // the transporter accepts a DO sent to its own company; staff accept any
   "POST /api/delivery-orders/:id/accept": async (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["delivery_orders", "EDIT"]]);
     if (!user) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
     const visible = order && (user.kind === "INTERNAL" || (order.transporterId === user.partner.id && order.status !== "DRAFT"));
-    if (!visible) return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
-    if (user.kind === "INTERNAL" ? !isStaffWith(user, ADMIN_ROLES) : !user.roles.includes("PARTNER_TRANSPORTER")) {
-      return fail(request, response, 403, "FORBIDDEN", "Only the transporter accepts");
-    }
-    if (order.status !== "SENT") return fail(request, response, 409, "INVALID_STATE", "Only a sent order can be accepted");
+    if (!visible) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
+    if (order.status !== "SENT") return fail(request, response, 409, "INVALID_STATE", "Hanya DO berstatus SENT yang bisa diterima.");
     const { truckCount } = await readJson(request);
     if (truckCount !== undefined && truckCount !== null) {
-      if (!Number.isInteger(truckCount) || truckCount < 1) return invalid(request, response, { truckCount: "Positive whole number" });
+      if (!Number.isInteger(truckCount) || truckCount < 1 || truckCount > 500) return invalid(request, response, { truckCount: "Jumlah truk harus antara 1 dan 500." });
       if (order.truckCount === null) Object.assign(order, { truckCount, truckCountBy: "TRANSPORTER" });
     }
     Object.assign(order, { status: "ACCEPTED", acceptedAt: nowIso() });
@@ -1863,25 +1995,28 @@ const routes = {
   },
 
   "POST /api/delivery-orders/:id/close": (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["delivery_orders", "EDIT"]], { staffOnly: true })) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
-    if (!order) return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
-    if (!["SENT", "ACCEPTED"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "Only a running order can be closed");
+    if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
+    if (order.status !== "ACCEPTED") return fail(request, response, 409, "INVALID_STATE", "Hanya DO berstatus ACCEPTED yang bisa ditutup.");
     order.status = "CLOSED";
     return send(request, response, 200, { deliveryOrder: publicOrder(order) });
   },
 
   "POST /api/delivery-orders/:id/cancel": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["delivery_orders", "EDIT"]], { staffOnly: true })) return 0;
     const order = deliveryOrders.find((item) => item.id === id);
-    if (!order) return fail(request, response, 404, "NOT_FOUND", "No such delivery order");
+    if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     const { reason } = await readJson(request);
-    if (!optionalText(reason)) return invalid(request, response, { reason: "Required" });
-    const checkedIn = trips.some(
-      (trip) => trip.checkedInAt && registrationOf(trip).allocations.some((allocation) => allocation.deliveryOrderId === order.id),
-    );
-    if (!["DRAFT", "SENT", "ACCEPTED"].includes(order.status) || checkedIn) {
-      return fail(request, response, 409, "INVALID_STATE", "The order cannot be cancelled");
+    if (!optionalText(reason)) return invalid(request, response, { reason: "Alasan wajib diisi." });
+    if (!["DRAFT", "SENT", "ACCEPTED"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "DO ini sudah ditutup atau dibatalkan.");
+    const orderTrips = trips.filter((trip) => registrationOf(trip).allocations.some((allocation) => allocation.deliveryOrderId === order.id));
+    if (orderTrips.some((trip) => ARRIVED.includes(trip.status))) {
+      return fail(request, response, 409, "INVALID_STATE", "DO tidak bisa dibatalkan: sudah ada truk yang check-in.");
+    }
+    for (const trip of orderTrips.filter((item) => ["DRAFT", "READY", "ISSUED", "EXPIRED"].includes(refreshTrip(item).status))) {
+      Object.assign(trip, { status: "CANCELLED", cancelReason: reason.trim() });
+      revokeSpj(trip);
     }
     Object.assign(order, { status: "CANCELLED", cancelReason: reason.trim() });
     return send(request, response, 200, { deliveryOrder: publicOrder(order) });
@@ -1890,7 +2025,7 @@ const routes = {
   // --- registrations ------------------------------------------------------------
 
   "GET /api/registrations": (request, response, url) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "VIEW"]]);
     if (!user) return 0;
     const direction = url.searchParams.get("direction") ?? "";
     const status = url.searchParams.get("status") ?? "";
@@ -1898,29 +2033,31 @@ const routes = {
     const matches = registrations
       .filter((registration) => canReach(user, registration))
       .filter((registration) => (!direction || registration.direction === direction) && (!status || registration.status === status))
-      .map(publicRegistration)
-      .filter(
-        (registration) =>
-          !q ||
-          includesText(registration.regNo, q) ||
-          includesText(registration.partner?.name, q) ||
-          registration.trips.some((trip) => includesText(trip.vehicle.plateDisplay, q) || includesText(trip.spj?.spjNo, q)) ||
-          registration.allocations.some((allocation) => includesText(allocation.contractNo, q) || includesText(allocation.doNo, q)),
-      )
+      .filter((registration) => {
+        if (!q) return true;
+        const shown = publicRegistration(registration);
+        return (
+          includesText(shown.regNo, q) ||
+          includesText(shown.partner?.name, q) ||
+          shown.trips.some((trip) => plateKey(trip.vehicle?.plateDisplay).includes(plateKey(q))) ||
+          shown.allocations.some((allocation) => includesText(allocation.contractNo, q) || includesText(allocation.doNo, q))
+        );
+      })
+      .map((registration) => publicRegistration(registration, false))
       .reverse();
     return page(request, response, url, matches);
   },
 
   "GET /api/registrations/:id": (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "VIEW"]]);
     if (!user) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "No such registration");
+    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
   "POST /api/registrations": async (request, response) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "CREATE"]]);
     if (!user) return 0;
     const { plan, problem: refused } = planRegistration(user, await readJson(request));
     if (refused) return reply(request, response, refused);
@@ -1928,9 +2065,11 @@ const routes = {
       id: `r-${nextRegistrationId++}`,
       regNo: regNumber(),
       status: "DRAFT",
-      createdVia: user.kind === "INTERNAL" ? "OPERATOR" : "PARTNER",
+      createdVia: user.kind === "INTERNAL" ? "OPERATOR" : "PORTAL",
       createdBy: { id: user.id, fullName: user.fullName },
-      ownerPartnerId: user.kind === "PARTNER" ? user.partner.id : plan.direction === "IN" ? plan.partner.id : plan.transporterId,
+      createdAt: nowIso(),
+      // whose registration it is: the supplier of an incoming one, the transporter of an outgoing one
+      ownerPartnerId: plan.direction === "IN" ? plan.partner.id : plan.transporterId,
       submittedAt: null,
       reviewedAt: null,
       reviewNote: null,
@@ -1938,113 +2077,128 @@ const routes = {
     registrations.push(registration);
     writeRegistration(registration, plan, user);
     if (plan.submit) submitRegistration(registration);
+    else registration.findings = computeFindings(registration);
     return send(request, response, 201, { registration: publicRegistration(registration) });
   },
 
   "PUT /api/registrations/:id": async (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "CREATE"]]);
     if (!user) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "No such registration");
-    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Only a draft can be replaced");
-    const { plan, problem: refused } = planRegistration(user, await readJson(request));
+    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
+    const body = await readJson(request);
+    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi berstatus DRAFT yang bisa diubah.");
+    if (body.direction !== registration.direction) return invalid(request, response, { direction: "Arah registrasi tidak bisa diubah." });
+    const { plan, problem: refused } = planRegistration(user, body);
     if (refused) return reply(request, response, refused);
     writeRegistration(registration, plan, user);
     if (plan.submit) submitRegistration(registration);
+    else registration.findings = computeFindings(registration);
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
   "POST /api/registrations/:id/submit": (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "CREATE"]]);
     if (!user) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "No such registration");
-    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Only a draft can be submitted");
+    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
+    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi berstatus DRAFT yang bisa dikirim.");
     if (registration.direction === "OUT" && (registration.closeCargo === null || registration.flexiBag === null)) {
-      return invalid(request, response, { closeCargo: "Required at submit", flexiBag: "Required at submit" });
+      return invalid(request, response, { closeCargo: "Close cargo wajib dijawab sebelum dikirim.", flexiBag: "Flexi bag wajib dijawab sebelum dikirim." });
     }
     submitRegistration(registration);
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
+  // a partner account never approves or rejects, whatever its level
   "POST /api/registrations/:id/approve": async (request, response, url, id) => {
-    const user = authorizeRoles(request, response, ADMIN_ROLES);
+    const user = guard(request, response, [["registrations", "EDIT"]], { staffOnly: true });
     if (!user) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration) return fail(request, response, 404, "NOT_FOUND", "No such registration");
-    if (registration.status !== "SUBMITTED") return fail(request, response, 409, "INVALID_STATE", "Only a submitted registration can be approved");
+    if (!registration) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
+    if (registration.status !== "SUBMITTED") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi yang menunggu tinjauan yang bisa disetujui.");
     const { note } = await readJson(request);
     approveRegistration(registration, user, optionalText(note));
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
   "POST /api/registrations/:id/reject": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, ADMIN_ROLES)) return 0;
+    if (!guard(request, response, [["registrations", "EDIT"]], { staffOnly: true })) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration) return fail(request, response, 404, "NOT_FOUND", "No such registration");
+    if (!registration) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
     const { note } = await readJson(request);
-    if (!optionalText(note)) return invalid(request, response, { note: "Required" });
-    if (registration.status !== "SUBMITTED") return fail(request, response, 409, "INVALID_STATE", "Only a submitted registration can be rejected");
+    if (!optionalText(note)) return invalid(request, response, { note: "Alasan penolakan wajib diisi." });
+    if (registration.status !== "SUBMITTED") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi yang menunggu tinjauan yang bisa ditolak.");
     Object.assign(registration, { status: "REJECTED", reviewedAt: nowIso(), reviewNote: note.trim() });
-    for (const trip of tripsOf(registration)) trip.status = "CANCELLED";
+    for (const trip of tripsOf(registration)) {
+      Object.assign(trip, { status: "CANCELLED", cancelReason: note.trim() });
+      revokeSpj(trip);
+    }
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
   "POST /api/registrations/:id/cancel": async (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "CREATE"]]);
     if (!user) return 0;
     const registration = registrations.find((item) => item.id === id);
-    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "No such registration");
-    // The maker (or another account of the same company) or an admin.
-    const mayCancel = registration.createdBy.id === user.id || user.kind === "PARTNER" || isStaffWith(user, ADMIN_ROLES);
-    if (!mayCancel) return fail(request, response, 403, "FORBIDDEN", "Only the maker or an admin cancels");
-    const { reason } = await readJson(request);
-    if (!optionalText(reason)) return invalid(request, response, { reason: "Required" });
-    const checkedIn = tripsOf(registration).some((trip) => trip.checkedInAt);
-    if (["CANCELLED", "REJECTED"].includes(registration.status) || checkedIn) {
-      return fail(request, response, 409, "INVALID_STATE", "The registration cannot be cancelled");
+    if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
+    // a partner reaches only its own registrations; staff with CREATE only the ones they made
+    if (user.kind === "INTERNAL" && registration.createdBy.id !== user.id && !can(user, "registrations", "EDIT")) {
+      return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
     }
-    Object.assign(registration, { status: "CANCELLED", cancelReason: reason.trim() });
-    for (const trip of tripsOf(registration)) trip.status = "CANCELLED";
+    const { reason } = await readJson(request);
+    if (!optionalText(reason)) return invalid(request, response, { reason: "Alasan wajib diisi." });
+    if (!["DRAFT", "SUBMITTED", "APPROVED"].includes(registration.status)) {
+      return fail(request, response, 409, "INVALID_STATE", "Registrasi ini sudah selesai, ditolak, atau dibatalkan.");
+    }
+    if (tripsOf(registration).some((trip) => ARRIVED.includes(trip.status))) {
+      return fail(request, response, 409, "INVALID_STATE", "Registrasi tidak bisa dibatalkan: sudah ada truk yang check-in.");
+    }
+    for (const trip of tripsOf(registration).filter((item) => item.status !== "CANCELLED")) {
+      Object.assign(trip, { status: "CANCELLED", cancelReason: reason.trim() });
+      revokeSpj(trip);
+    }
+    registration.status = "CANCELLED";
     return send(request, response, 200, { registration: publicRegistration(registration) });
   },
 
   // --- trips and SPJ --------------------------------------------------------------
 
+  // staff only: the list is not limited to a company
   "GET /api/trips": (request, response, url) => {
-    if (!authorizeStaff(request, response)) return 0;
-    const status = url.searchParams.get("status") ?? "";
+    if (!guard(request, response, [["gate", "VIEW"], ["registrations", "VIEW"]], { staffOnly: true })) return 0;
+    const statuses = (url.searchParams.get("status") ?? "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
     const date = url.searchParams.get("date") ?? "";
-    const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+    const q = plateKey(url.searchParams.get("q"));
     const matches = trips
       .map(refreshTrip)
-      .filter((trip) => !status || trip.status === status)
-      .filter((trip) => {
-        if (!date) return true;
-        // Assumption: a checked-in trip counts on the day it came in, any other on its planned day.
-        if (trip.checkedInAt) return plantDate(new Date(trip.checkedInAt)).iso === date;
-        return (trip.plannedArrival ?? registrationOf(trip).plannedDate) === date;
-      })
-      .map(tripSummary)
+      .filter((trip) => statuses.length === 0 || statuses.includes(trip.status))
+      // apps/api trips/routes.ts: the planned day of the trip (or its registration), or the day it checked in
+      .filter(
+        (trip) =>
+          !date ||
+          (trip.plannedArrival ?? registrationOf(trip).plannedDate) === date ||
+          (trip.checkedInAt !== null && plantDate(new Date(trip.checkedInAt)).iso === date),
+      )
+      .map(publicTrip)
       .filter(
         (trip) =>
           !q ||
-          includesText(trip.vehicle.plateDisplay, q) ||
-          includesText(trip.vehicle.plateNo, q) ||
-          includesText(trip.spj?.spjNo, q) ||
-          includesText(trip.tripNo, q),
+          plateKey(trip.vehicle?.plateDisplay).includes(q) ||
+          plateKey(trip.spj?.spjNo).includes(q) ||
+          plateKey(trip.tripNo).includes(q),
       )
-      .sort((a, b) => String(b.checkedInAt ?? "").localeCompare(String(a.checkedInAt ?? "")));
+      .sort((a, b) => String(a.plannedArrival ?? "").localeCompare(String(b.plannedArrival ?? "")));
     return page(request, response, url, matches);
   },
 
+  // the SPJ belongs to the registration: whoever may see the registration may print it
   "GET /api/trips/:id/spj": (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "VIEW"]]);
     if (!user) return 0;
     const trip = trips.find((item) => item.id === id);
     const registration = trip ? registrationOf(trip) : null;
-    if (!trip || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "No such trip");
-    if (!trip.spj) return fail(request, response, 404, "SPJ_NOT_FOUND", "No SPJ for this trip");
+    if (!trip || !trip.spj || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "SPJ tidak ditemukan.");
     const driverRow = driverOf(trip);
     const vehicleRow = vehicleOf(trip);
     const lines = registration.allocations.map((allocation) => {
@@ -2053,13 +2207,15 @@ const routes = {
       const destinationRow = order ? destinations.find((item) => item.id === order.destinationId) : null;
       const source = contractRow ?? order;
       return {
-        contractNo: contractRow?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? null,
+        contractNo: contractRow?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? "-",
         doNo: order?.doNo ?? null,
-        product: { name: source.product.name },
+        product: { id: source.product.id, name: source.product.name },
         qtyPlanned: trip.allocations[allocation.seq - 1]?.qtyPlanned ?? null,
         uom: source.uom ?? "Kg",
         partner: ref(source.partner),
-        destination: destinationRow ? { name: destinationRow.name, address: destinationRow.address } : null,
+        destination: destinationRow
+          ? (({ id: destinationId, name, address, district, regency, province }) => ({ id: destinationId, name, address, district, regency, province }))(destinationRow)
+          : null,
       };
     });
     return send(request, response, 200, {
@@ -2068,10 +2224,12 @@ const routes = {
         barcodeToken: trip.spj.barcodeToken,
         issuedAt: trip.spj.issuedAt,
         validUntil: trip.spj.validUntil,
+        printCount: trip.spj.printCount,
         site: SITE,
         direction: registration.direction,
-        driver: { fullName: driverRow.fullName, licenceNo: driverRow.licenceNo },
-        vehicle: { plateDisplay: vehicleRow.plateDisplay, vehicleType: vehicleTypes.find((type) => type.code === vehicleRow.vehicleTypeCode)?.name ?? null },
+        driver: { fullName: driverRow?.fullName ?? null, licenceNo: driverRow?.licenceNo ?? null },
+        vehicle: { plateDisplay: vehicleRow?.plateDisplay ?? null, vehicleType: vehicleTypes.find((type) => type.code === vehicleRow?.vehicleTypeCode)?.name ?? null },
+        containerNo: trip.containerNo,
         transporter: ref(findPartner(registration.transporterId)),
         lines,
       },
@@ -2079,65 +2237,88 @@ const routes = {
   },
 
   "POST /api/trips/:id/spj/printed": (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["registrations", "VIEW"]]);
     if (!user) return 0;
     const trip = trips.find((item) => item.id === id);
-    if (!trip || !trip.spj || !canReach(user, registrationOf(trip))) return fail(request, response, 404, "NOT_FOUND", "No such SPJ");
+    if (!trip || !trip.spj || !canReach(user, registrationOf(trip))) return fail(request, response, 404, "NOT_FOUND", "SPJ tidak ditemukan.");
     trip.spj.printCount += 1;
-    return send(request, response, 200, { spj: trip.spj });
+    return send(request, response, 200, { printCount: trip.spj.printCount });
   },
 
   "POST /api/trips/:id/spj/reissue": async (request, response, url, id) => {
-    if (!authorizeRoles(request, response, REGISTERING_STAFF)) return 0;
-    const trip = trips.find((item) => item.id === id);
-    if (!trip || !trip.spj) return fail(request, response, 404, "NOT_FOUND", "No such SPJ");
+    const user = guard(request, response, [["gate", "EDIT"]]);
+    if (!user) return 0;
     const { reason } = await readJson(request);
-    if (!optionalText(reason)) return invalid(request, response, { reason: "Required" });
-    if (!["ISSUED", "EXPIRED"].includes(refreshTrip(trip).status)) return fail(request, response, 409, "INVALID_STATE", "Only an issued SPJ can be reissued");
-    trip.revokedTokens.push(trip.spj.barcodeToken);
+    if (!optionalText(reason)) return invalid(request, response, { reason: "Alasan wajib diisi." });
+    const trip = trips.find((item) => item.id === id);
+    if (!trip || !canReach(user, registrationOf(trip))) return fail(request, response, 404, "NOT_FOUND", "Trip tidak ditemukan.");
+    if (!["ISSUED", "EXPIRED"].includes(refreshTrip(trip).status) || registrationOf(trip).status !== "APPROVED") {
+      return fail(request, response, 409, "INVALID_STATE", "SPJ hanya bisa diterbitkan ulang untuk truk yang belum check-in pada registrasi yang disetujui.");
+    }
+    revokeSpj(trip);
     issueSpj(trip);
-    return send(request, response, 200, { trip: tripSummary(trip) });
+    return send(request, response, 200, { trip: publicTrip(trip) });
   },
 
+  // the owner (registrations CREATE) cancels before check-in; the desk (gate EDIT) also after check-in
   "POST /api/trips/:id/cancel": async (request, response, url, id) => {
-    const user = authorize(request, response);
+    const user = guard(request, response, [["gate", "EDIT"], ["registrations", "CREATE"]]);
     if (!user) return 0;
-    const trip = trips.find((item) => item.id === id);
-    if (!trip || !canReach(user, registrationOf(trip))) return fail(request, response, 404, "NOT_FOUND", "No such trip");
+    const isDesk = user.kind === "INTERNAL" && can(user, "gate", "EDIT");
     const { reason } = await readJson(request);
-    if (!optionalText(reason)) return invalid(request, response, { reason: "Required" });
-    // The owner may cancel before check-in, staff until weighing (Phase 4 adds the weighing statuses).
-    const allowed = user.kind === "INTERNAL" ? ["DRAFT", "READY", "ISSUED", "EXPIRED", "CHECKED_IN"] : ["DRAFT", "READY", "ISSUED", "EXPIRED"];
-    if (!allowed.includes(refreshTrip(trip).status)) return fail(request, response, 409, "INVALID_STATE", "The trip cannot be cancelled now");
-    releaseCard(trip, "CANCELLED");
+    if (!optionalText(reason)) return invalid(request, response, { reason: "Alasan wajib diisi." });
+    const trip = trips.find((item) => item.id === id);
+    if (!trip || !canReach(user, registrationOf(trip))) return fail(request, response, 404, "NOT_FOUND", "Trip tidak ditemukan.");
+    if (!isDesk && user.kind === "INTERNAL" && registrationOf(trip).createdBy.id !== user.id) {
+      return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+    }
+    const allowed = isDesk ? ["DRAFT", "READY", "ISSUED", "EXPIRED", "CHECKED_IN"] : ["DRAFT", "READY", "ISSUED", "EXPIRED"];
+    if (!allowed.includes(refreshTrip(trip).status)) {
+      return fail(
+        request,
+        response,
+        409,
+        "INVALID_STATE",
+        isDesk ? "Trip ini sudah ditimbang, selesai, atau dibatalkan." : "Trip yang sudah check-in hanya bisa dibatalkan petugas.",
+      );
+    }
     Object.assign(trip, { status: "CANCELLED", cancelReason: reason.trim(), currentStep: null });
-    return send(request, response, 200, { trip: tripSummary(trip) });
+    revokeSpj(trip);
+    releaseCard(trip, "CANCELLED");
+    return send(request, response, 200, { trip: publicTrip(trip) });
   },
 
   // --- registration post ------------------------------------------------------------
 
   "GET /api/gate/spj/:id": (request, response, url, token) => {
-    if (!authorizeRoles(request, response, REGISTERING_STAFF)) return 0;
+    if (!guard(request, response, [["gate", "VIEW"]])) return 0;
     const trip = findByToken(token);
-    if (!trip) return fail(request, response, 404, "SPJ_NOT_FOUND", "Unknown SPJ token");
-    return send(request, response, 200, { trip: tripSummary(trip), checks: gateChecks(trip) });
+    if (!trip) return fail(request, response, 404, "SPJ_NOT_FOUND", "SPJ dengan kode ini tidak ditemukan.");
+    return send(request, response, 200, { trip: publicTrip(trips.find((item) => item.id === trip.id)), checks: gateChecks(trip) });
   },
 
   "POST /api/gate/check-in": async (request, response) => {
-    if (!authorizeRoles(request, response, REGISTERING_STAFF)) return 0;
+    if (!guard(request, response, [["gate", "CREATE"]])) return 0;
     const body = await readJson(request);
+    const uid = normalizeUid(body.cardUid);
+    if (!/^[0-9A-F]{8,20}$/.test(uid)) return invalid(request, response, { cardUid: "UID kartu harus 8 sampai 20 digit heksadesimal." });
     const found = findByToken(body.token);
-    if (!found) return fail(request, response, 404, "SPJ_NOT_FOUND", "Unknown SPJ token");
-    if (found.revoked) return fail(request, response, 409, "SPJ_REVOKED", "SPJ has been revoked");
+    if (!found) return fail(request, response, 404, "SPJ_NOT_FOUND", "SPJ dengan kode ini tidak ditemukan.");
     const trip = trips.find((item) => item.id === found.id);
-    if (trip.status === "CHECKED_IN") return fail(request, response, 409, "ALREADY_CHECKED_IN", "Already checked in");
-    if (trip.status === "EXPIRED") return fail(request, response, 409, "SPJ_EXPIRED", "SPJ has expired");
-    if (trip.status !== "ISSUED") return fail(request, response, 409, "INVALID_STATE", "Trip is not issued");
-    const blocking = gateChecks(trip).find((check) => ["DRIVER_BLACKLISTED", "VEHICLE_INSIDE", "DRIVER_INSIDE"].includes(check.code));
-    if (blocking) return fail(request, response, 409, blocking.code, blocking.message);
-    const card = rfidCards.find((item) => item.uid === normalizeUid(body.cardUid)) ?? null;
+    const refuse = (code) => fail(request, response, 409, code, GATE_MESSAGES[code]);
+    if (found.revoked) return refuse("SPJ_REVOKED");
+    if (ARRIVED.includes(trip.status)) return refuse("ALREADY_CHECKED_IN");
+    if (trip.status === "EXPIRED") return refuse("SPJ_EXPIRED");
+    if (trip.status !== "ISSUED") return fail(request, response, 409, "INVALID_STATE", "Truk ini belum siap check-in.");
+    const driverRow = driverOf(trip);
+    const verdict = registryVerdict(driverRow);
+    if (verdict?.level === "BLOCK") return fail(request, response, 409, verdict.code, verdict.message);
+    if (driverRow.blocked) return fail(request, response, 409, "DRIVER_BLOCKED", `Supir ${driverRow.fullName} sedang diblokir.`);
+    const card = rfidCards.find((item) => item.uid === uid) ?? null;
     const refused = cardProblem(card);
     if (refused) return reply(request, response, refused);
+    if (insideElsewhere(trip, "vehicleId")) return refuse("VEHICLE_INSIDE");
+    if (insideElsewhere(trip, "driverId")) return refuse("DRIVER_INSIDE");
     const now = new Date();
     const { year, month, day, iso } = plantDate(now);
     bindCard(trip, card);
@@ -2149,22 +2330,28 @@ const routes = {
       steps: steps.map((code, index) => ({ code, status: index === 0 ? "DONE" : index === 1 ? "READY" : "PENDING" })),
       currentStep: steps[1] ?? null,
     });
-    return send(request, response, 200, { trip: tripSummary(trip) });
+    return send(request, response, 200, { trip: publicTrip(trip) });
   },
 
   "POST /api/gate/replace-card": async (request, response) => {
-    if (!authorizeRoles(request, response, REGISTERING_STAFF)) return 0;
+    if (!guard(request, response, [["gate", "EDIT"]])) return 0;
     const body = await readJson(request);
+    const uid = normalizeUid(body.cardUid);
+    const fields = {};
+    if (!/^[0-9A-F]{8,20}$/.test(uid)) fields.cardUid = "UID kartu harus 8 sampai 20 digit heksadesimal.";
+    if (!["REPLACED", "LOST"].includes(body.reason)) fields.reason = "Alasan harus REPLACED atau LOST.";
+    if (Object.keys(fields).length > 0) return invalid(request, response, fields);
     const trip = trips.find((item) => item.id === body.tripId);
-    if (!trip) return fail(request, response, 404, "NOT_FOUND", "No such trip");
-    if (!["REPLACED", "LOST"].includes(body.reason)) return invalid(request, response, { reason: "REPLACED or LOST" });
-    if (trip.status !== "CHECKED_IN") return fail(request, response, 409, "INVALID_STATE", "Only a checked-in trip holds a card");
-    const card = rfidCards.find((item) => item.uid === normalizeUid(body.cardUid)) ?? null;
+    if (!trip) return fail(request, response, 404, "NOT_FOUND", "Trip tidak ditemukan.");
+    if (!INSIDE.includes(trip.status) || !rfidCards.some((item) => item.tripId === trip.id)) {
+      return fail(request, response, 409, "INVALID_STATE", "Kartu hanya bisa diganti untuk truk yang sedang di dalam dengan kartu terikat.");
+    }
+    const card = rfidCards.find((item) => item.uid === uid) ?? null;
     const refused = cardProblem(card);
     if (refused) return reply(request, response, refused);
     releaseCard(trip, body.reason);
     bindCard(trip, card);
-    return send(request, response, 200, { trip: tripSummary(trip) });
+    return send(request, response, 200, { trip: publicTrip(trip) });
   },
 
   "POST /__mock/expire-access-tokens": (request, response) => {
@@ -2225,5 +2412,6 @@ server.listen(PORT, HOST, () => {
   console.log(`Mock API on http://${HOST}:${PORT} (web origin ${WEB_ORIGIN})`);
   console.log("Partner sign-in, password contoh-123: pks.contoh.a, transporter.contoh");
   console.log(`Staff sign-in: open http://${HOST}:${PORT}/api/auth/sso/start?as=admin.contoh`);
-  console.log("  other staff: super.contoh (system admin), pos.contoh (registration post), staf.baru (no role yet)");
+  console.log("  other staff: super.contoh (every module), pos.contoh (registration post), staf.baru (no access yet)");
+  console.log("Local staff sign-in, password contoh-123: petugas.lokal (every module)");
 });

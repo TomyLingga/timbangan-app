@@ -8,9 +8,9 @@ import { AppShell } from "@/components/app-shell/app-shell";
 import { LoadingScreen, StatusScreen } from "@/components/status-screen";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
-import { NoRoleScreen } from "@/features/auth/no-role-screen";
+import { NoAccessScreen } from "@/features/auth/no-access-screen";
 import { errorMessage } from "@/lib/messages";
-import { awaitsRoleAssignment } from "@/lib/roles";
+import { awaitsAccess } from "@/lib/permissions";
 import { ssoForwardTarget } from "@/lib/sso-ticket";
 
 function currentForwardTarget(): string | null {
@@ -65,10 +65,10 @@ export function AuthGate({ children, bare = false }: { children: ReactNode; /** 
           </div>
         </StatusScreen>
       );
-    case "no-role":
-      return <NoRoleScreen user={null} />;
+    case "no-access":
+      return <NoAccessScreen user={null} />;
     case "authenticated":
-      if (awaitsRoleAssignment(state.user)) return <NoRoleScreen user={state.user} />;
+      if (awaitsAccess(state.user)) return <NoAccessScreen user={state.user} />;
       if (bare) return <>{children}</>;
       return <AppShell user={state.user}>{children}</AppShell>;
   }

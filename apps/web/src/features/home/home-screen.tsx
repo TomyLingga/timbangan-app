@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { CircleAlert, CircleCheck, RefreshCw } from "lucide-react";
 
 import { StatusBadge } from "@/components/status-badge";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
@@ -13,7 +12,7 @@ import { isApiError } from "@/lib/api-client";
 import { API_URL } from "@/lib/config";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { errorMessage } from "@/lib/messages";
-import { isStaff, roleLabels } from "@/lib/roles";
+import { accessSummary, canSeeSyncRuns } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { latestRunPerEntity, runsBySource, syncEntityLabel, syncStatusInfo } from "@/lib/status";
 import type { SyncRun, SyncRunList, User } from "@/lib/types";
@@ -31,7 +30,6 @@ function Panel({ title, action, children }: { title: string; action?: ReactNode;
 }
 
 function AccountPanel({ user }: { user: User }) {
-  const roles = roleLabels(user.roles);
   return (
     <Panel title="Akun yang sedang masuk">
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
@@ -47,15 +45,9 @@ function AccountPanel({ user }: { user: User }) {
             <dd className="wrap-break-word">{user.partner.name}</dd>
           </>
         ) : null}
-        <dt className="text-muted-foreground">Peran</dt>
-        <dd className="flex flex-wrap gap-1.5">
-          {roles.length > 0
-            ? roles.map((role) => (
-                <Badge key={role} variant="outline">
-                  {role}
-                </Badge>
-              ))
-            : "-"}
+        <dt className="text-muted-foreground">Hak akses</dt>
+        <dd className="wrap-break-word" data-testid="access-summary">
+          {accessSummary(user.permissions, [], user.kind)}
         </dd>
       </dl>
     </Panel>
@@ -203,7 +195,7 @@ export function HomeScreen() {
         <AccountPanel user={user} />
         <div className="flex flex-col gap-4">
           <HealthPanel />
-          {isStaff(user) ? <SyncPanels /> : null}
+          {canSeeSyncRuns(user) ? <SyncPanels /> : null}
         </div>
       </div>
     </div>

@@ -1,10 +1,10 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { UserRoundCog } from "lucide-react";
+import { ShieldCheck, ShieldOff, UserRoundCog } from "lucide-react";
 
 import { DataList, type Column } from "@/components/data-list";
-import { CheckboxField } from "@/components/form-fields";
+import { SelectField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
 import {
   AccessDenied,
@@ -17,7 +17,6 @@ import {
   SearchField,
 } from "@/components/page-parts";
 import { StatusBadge } from "@/components/status-badge";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -27,9 +26,18 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useAction } from "@/hooks/use-form";
 import { formatDateTime } from "@/lib/format";
 import { userAdminErrorMessage } from "@/lib/messages";
-import { canManageUsers, ROLE_LABELS, roleLabels, rolesForKind, toggleRole } from "@/lib/roles";
+import {
+  accessSummary,
+  canEdit,
+  canView,
+  grantAll,
+  levelChoices,
+  modulesForKind,
+  permissionsPayload,
+  setLevel,
+} from "@/lib/permissions";
 import { api } from "@/lib/session";
-import type { AdminUser, Page, RoleDefinition, User } from "@/lib/types";
+import type { AdminUser, ModuleDefinition, Page, PermissionLevel, Permissions, User } from "@/lib/types";
 
 const LIST_LIMIT = 50;
 
@@ -37,29 +45,29 @@ function userPath(user: AdminUser): string {
   return `/api/admin/users/${encodeURIComponent(String(user.id))}`;
 }
 
-function RolesSheet({
+function PermissionsSheet({
   account,
+  modules,
   onClose,
   onSaved,
 }: {
   account: AdminUser;
+  modules: readonly ModuleDefinition[];
   onClose: () => void;
   onSaved: (account: AdminUser) => void;
 }) {
-  const [selected, setSelected] = useState<string[]>(account.roles);
+  const [levels, setLevels] = useState<Permissions>(account.permissions);
   const [formError, setFormError] = useState<string | null>(null);
   const save = useAction();
-
-  const roles = useApiQuery("roles", (signal) =>
-    api.request<{ items: RoleDefinition[] }>("/api/admin/roles", { signal }),
-  );
-  // Only roles of the account's own kind: staff roles for staff, partner roles for partners.
-  const offered = roles.data ? rolesForKind(roles.data.items, account.kind) : [];
+  const offered = modulesForKind(modules, account.kind);
 
   async function handleSubmit() {
     setFormError(null);
     const outcome = await save.run(() =>
-      api.request<{ user: AdminUser }>(`${userPath(account)}/roles`, { method: "PUT", body: { roles: selected } }),
+      api.request<{ user: AdminUser }>(`${userPath(account)}/permissions`, {
+        method: "PUT",
+        body: { permissions: permissionsPayload(modules, account.kind, levels) },
+      }),
     );
     if (outcome.ok) onSaved(outcome.value.user);
     else setFormError(userAdminErrorMessage(outcome.error));
@@ -69,42 +77,48 @@ function RolesSheet({
     <FormSheet
       open
       onOpenChange={(open) => (open ? undefined : onClose())}
-      title={`Peran ${account.fullName}`}
+      title={`Hak akses ${account.fullName}`}
       description={
         account.kind === "INTERNAL"
-          ? "Akun karyawan. Hanya peran karyawan yang bisa dipilih."
-          : "Akun perusahaan partner. Hanya peran partner yang bisa dipilih."
+          ? "Akun karyawan. Tingkat yang lebih tinggi mencakup yang di bawahnya."
+          : `Akun partner${account.partner ? ` ${account.partner.name}` : ""}. Hanya modul yang boleh untuk partner yang tampil; data yang terlihat tetap data perusahaannya sendiri.`
       }
       pending={save.pending}
-      error={formError ?? (roles.hasError ? userAdminErrorMessage(roles.error) : null)}
+      error={formError}
       onSubmit={handleSubmit}
     >
-      {!roles.data && !roles.hasError ? (
-        <div className="flex flex-col gap-3" aria-busy="true">
-          <Skeleton className="h-6 w-2/3" />
-          <Skeleton className="h-6 w-1/2" />
-          <Skeleton className="h-6 w-3/5" />
-        </div>
-      ) : (
-        <fieldset className="flex flex-col">
-          <legend className="mb-1 text-sm font-medium">Peran</legend>
-          {offered.map((role) => (
-            <CheckboxField
-              key={role.code}
-              name={`role-${role.code}`}
-              label={ROLE_LABELS[role.code] ?? role.name}
-              checked={selected.includes(role.code)}
-              onChange={(checked) => setSelected((current) => toggleRole(current, role.code, checked))}
-            />
-          ))}
-        </fieldset>
-      )}
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => setLevels(grantAll(modules, account.kind))}>
+          <ShieldCheck aria-hidden="true" />
+          Beri semua
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => setLevels({})}>
+          <ShieldOff aria-hidden="true" />
+          Cabut semua
+        </Button>
+      </div>
+      <fieldset className="flex flex-col gap-3" aria-label="Hak akses per modul">
+        {offered.map((module) => (
+          <SelectField
+            key={module.code}
+            label={module.name}
+            name={`permission-${module.code}`}
+            value={levels[module.code] ?? ""}
+            onChange={(value) => setLevels((current) => setLevel(current, module.code, (value || null) as PermissionLevel | null))}
+            emptyLabel="Tidak ada akses"
+            options={levelChoices(module)
+              .filter((choice) => choice.value !== "")
+              .map((choice) => ({ value: choice.value, label: choice.label }))}
+          />
+        ))}
+      </fieldset>
     </FormSheet>
   );
 }
 
 function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; onOwnAccountChanged: () => void }) {
   const ids = useId();
+  const mayEdit = canEdit(currentUser, "users");
   const [searchText, setSearchText] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const [editing, setEditing] = useState<AdminUser | null>(null);
@@ -117,6 +131,10 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
     (signal) => api.request<Page<AdminUser>>("/api/admin/users", { query: { q: search, limit: LIST_LIMIT }, signal }),
     { keepPrevious: true },
   );
+  const modules = useApiQuery("modules", (signal) =>
+    api.request<{ items: ModuleDefinition[] }>("/api/admin/modules", { signal }),
+  );
+  const moduleList = useMemo(() => modules.data?.items ?? [], [modules.data]);
 
   const columns = useMemo<ReadonlyArray<Column<AdminUser>>>(() => {
     async function setActive(account: AdminUser, isActive: boolean) {
@@ -155,21 +173,15 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
         cell: (account) => (account.kind === "INTERNAL" ? account.employeeNo : account.partner?.name) || "-",
       },
       {
-        id: "roles",
-        header: "Peran",
+        id: "access",
+        header: "Hak akses",
         wide: true,
-        cellClassName: "whitespace-normal",
+        cellClassName: "max-w-72 whitespace-normal",
         cell: (account) =>
-          account.roles.length === 0 ? (
-            <StatusBadge info={{ label: "Belum ada peran", tone: "warning" }} />
+          Object.keys(account.permissions).length === 0 ? (
+            <StatusBadge info={{ label: "Belum ada akses", tone: "warning" }} />
           ) : (
-            <span className="flex flex-wrap gap-1">
-              {roleLabels(account.roles).map((role) => (
-                <Badge key={role} variant="outline">
-                  {role}
-                </Badge>
-              ))}
-            </span>
+            <span className="text-sm">{accessSummary(account.permissions, moduleList, account.kind)}</span>
           ),
       },
       {
@@ -179,7 +191,7 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
           <span className="flex items-center gap-2">
             <Switch
               checked={account.isActive}
-              disabled={togglingId === account.id}
+              disabled={!mayEdit || togglingId === account.id}
               onCheckedChange={(checked) => void setActive(account, checked)}
               aria-label={`Akun ${account.fullName} aktif`}
             />
@@ -198,13 +210,13 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
           ),
       },
     ];
-  }, [togglingId]);
+  }, [togglingId, moduleList, mayEdit]);
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Pengguna"
-        description="Karyawan yang baru pertama kali masuk lewat portal belum punya peran: tetapkan perannya di sini supaya ia bisa memakai aplikasi."
+        description="Karyawan yang baru masuk lewat portal belum punya hak akses. Atur modul yang boleh dibukanya di sini."
       />
 
       <div aria-live="polite" className="empty:hidden">
@@ -237,31 +249,42 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
             rows={list.data.items}
             rowKey={(account) => account.id}
             stale={list.isStale}
-            actions={(account) => (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-10 md:h-8"
-                onClick={() => setEditing(account)}
-                aria-label={`Atur peran ${account.fullName}`}
-              >
-                <UserRoundCog aria-hidden="true" />
-                Atur peran
-              </Button>
-            )}
+            actions={
+              mayEdit
+                ? (account) =>
+                    modules.data ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-10 md:h-8"
+                        onClick={() => setEditing(account)}
+                        aria-label={`Atur hak akses ${account.fullName}`}
+                      >
+                        <UserRoundCog aria-hidden="true" />
+                        Atur hak akses
+                      </Button>
+                    ) : modules.hasError ? null : (
+                      <Skeleton className="h-8 w-28" />
+                    )
+                : undefined
+            }
           />
+          {modules.hasError ? (
+            <Notice tone="error">Daftar modul belum bisa dimuat, jadi hak akses belum bisa diatur. {userAdminErrorMessage(modules.error)}</Notice>
+          ) : null}
         </div>
       )}
 
-      {editing ? (
-        <RolesSheet
+      {editing && modules.data ? (
+        <PermissionsSheet
           account={editing}
+          modules={modules.data.items}
           onClose={() => setEditing(null)}
           onSaved={(account) => {
             setEditing(null);
-            setNotice({ tone: "success", text: `Peran ${account.fullName} disimpan.` });
+            setNotice({ tone: "success", text: `Hak akses ${account.fullName} disimpan.` });
             setReloadToken((token) => token + 1);
-            // The admin's own roles decide what this page and the menu may show.
+            // The admin's own permissions decide what this page and the menu may show.
             if (String(account.id) === String(currentUser.id)) onOwnAccountChanged();
           }}
         />
@@ -273,8 +296,6 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
 export function UsersScreen() {
   const { state, restore } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canManageUsers(state.user)) {
-    return <AccessDenied reason="Pengaturan pengguna hanya untuk admin sistem." />;
-  }
+  if (!canView(state.user, "users")) return <AccessDenied module="users" />;
   return <UsersPage currentUser={state.user} onOwnAccountChanged={restore} />;
 }

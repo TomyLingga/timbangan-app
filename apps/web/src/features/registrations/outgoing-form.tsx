@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, X } from "lucide-react";
 
@@ -9,17 +9,20 @@ import { ListError, ListSkeleton, PageHeader } from "@/components/page-parts";
 import { Button } from "@/components/ui/button";
 import { dropErrors, FormSection, SubmitBar, focusFirstInvalid } from "@/features/registrations/form-parts";
 import { plantToday } from "@/features/registrations/incoming-form";
-import { TruckFields } from "@/features/registrations/truck-fields";
+import { lookUpDriver, lookUpVehicle, TruckFields } from "@/features/registrations/truck-fields";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
+import { isApiError } from "@/lib/api-client";
 import { registrationErrorMessage } from "@/lib/messages";
 import { planPerTruck, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
-import type { DeliveryOrder, Page, Registration, VehicleType } from "@/lib/types";
+import type { DeliveryOrder, DeliveryOrderDetail, Page, Registration, VehicleType } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   emptyTruck,
+  outgoingFromDraft,
   outgoingPayload,
+  registrationFieldErrors,
   validateOutgoing,
   type FormErrors,
   type OutgoingValues,
@@ -33,10 +36,7 @@ const MAX_INITIAL_TRUCKS = 12;
 let truckSerial = 0;
 const newTruck = () => emptyTruck(`truck-${(truckSerial += 1)}`);
 
-const remainingText = (order: DeliveryOrder) => {
-  const remaining = Number(order.qtyRemaining ?? order.qty);
-  return Number.isFinite(remaining) && remaining > 0 ? String(Math.floor(remaining)) : "";
-};
+const remainingText = (order: DeliveryOrder) => (order.qtyRemaining > 0 ? String(Math.floor(order.qtyRemaining)) : "");
 
 function YesNoField({
   legend,
@@ -81,18 +81,32 @@ function YesNoField({
   );
 }
 
-function OutgoingFormBody({ initialOrder, types }: { initialOrder: DeliveryOrder | null; types: VehicleType[] }) {
+function OutgoingFormBody({
+  initialOrder,
+  types,
+  draft,
+  draftOrders,
+}: {
+  initialOrder: DeliveryOrder | null;
+  types: VehicleType[];
+  /** A draft to change with PUT, and the delivery orders it names. */
+  draft: Registration | null;
+  draftOrders: DeliveryOrder[];
+}) {
   const router = useRouter();
+  const [initial] = useState(() => (draft ? outgoingFromDraft(draft, draftOrders) : null));
   const [orders, setOrders] = useState<OutgoingValues["orders"]>(
-    initialOrder ? [{ order: initialOrder, qty: remainingText(initialOrder) }] : [],
+    initial?.orders ?? (initialOrder ? [{ order: initialOrder, qty: remainingText(initialOrder) }] : []),
   );
-  const [trucks, setTrucks] = useState<TruckValues[]>(() =>
-    Array.from({ length: Math.min(Math.max(initialOrder?.truckCount ?? 1, 1), MAX_INITIAL_TRUCKS) }, newTruck),
+  const [trucks, setTrucks] = useState<TruckValues[]>(
+    () =>
+      initial?.trucks ??
+      Array.from({ length: Math.min(Math.max(initialOrder?.truckCount ?? 1, 1), MAX_INITIAL_TRUCKS) }, newTruck),
   );
-  const [closeCargo, setCloseCargo] = useState<YesNo>("");
-  const [flexiBag, setFlexiBag] = useState<YesNo>("");
-  const [plannedDate, setPlannedDate] = useState(plantToday());
-  const [remark, setRemark] = useState("");
+  const [closeCargo, setCloseCargo] = useState<YesNo>(initial?.closeCargo ?? "");
+  const [flexiBag, setFlexiBag] = useState<YesNo>(initial?.flexiBag ?? "");
+  const [plannedDate, setPlannedDate] = useState(initial?.plannedDate || plantToday());
+  const [remark, setRemark] = useState(initial?.remark ?? "");
   const [addOrderId, setAddOrderId] = useState("");
   const [errors, setErrors] = useState<FormErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -120,6 +134,19 @@ function OutgoingFormBody({ initialOrder, types }: { initialOrder: DeliveryOrder
     setErrors((current) => dropErrors(current, `trucks.${index}.`));
   }
 
+  // The trucks of a draft come back with plate and licence; each is looked up again once.
+  const lookedUp = useRef(false);
+  useEffect(() => {
+    if (!initial || lookedUp.current) return;
+    lookedUp.current = true;
+    for (const truck of initial.trucks) {
+      const update = (change: (value: TruckValues) => TruckValues) =>
+        setTrucks((current) => current.map((item) => (item.key === truck.key ? change(item) : item)));
+      void lookUpVehicle(truck, update);
+      void lookUpDriver(truck, update);
+    }
+  }, [initial]);
+
   async function save(submit: boolean) {
     const values: OutgoingValues = { orders, trucks, closeCargo, flexiBag, plannedDate, remark };
     const found = validateOutgoing(values, { types, parameters: [], currentYear: new Date().getFullYear() }, submit);
@@ -132,21 +159,24 @@ function OutgoingFormBody({ initialOrder, types }: { initialOrder: DeliveryOrder
     }
     setPending(submit ? "submit" : "draft");
     try {
-      const { registration } = await api.request<{ registration: Registration }>("/api/registrations", {
-        method: "POST",
-        body: outgoingPayload(values, submit),
-      });
+      const { registration } = await api.request<{ registration: Registration }>(
+        draft ? `/api/registrations/${encodeURIComponent(String(draft.id))}` : "/api/registrations",
+        { method: draft ? "PUT" : "POST", body: outgoingPayload(values, submit) },
+      );
       router.push(`/registrasi/${encodeURIComponent(String(registration.id))}?baru=${submit ? "kirim" : "draf"}`);
     } catch (error) {
-      setFormError(registrationErrorMessage(error));
+      const placed = isApiError(error) ? registrationFieldErrors("OUT", error.fieldMessages) : { errors: {}, unplaced: [] };
+      setErrors(placed.errors);
+      setFormError(registrationErrorMessage(error, placed.unplaced));
       setPending(null);
+      if (Object.keys(placed.errors).length > 0) focusFirstInvalid();
     }
   }
 
   return (
     <form noValidate onSubmit={(event) => event.preventDefault()} className="flex flex-col gap-5">
       <PageHeader
-        title="Registrasi outgoing"
+        title={draft ? `Ubah draf ${draft.regNo}` : "Registrasi outgoing"}
         description="Daftar truk untuk delivery order yang sudah diterima. Quantity tiap DO dibagi rata ke semua truk."
       />
 
@@ -242,7 +272,15 @@ function OutgoingFormBody({ initialOrder, types }: { initialOrder: DeliveryOrder
       </FormSection>
 
       <FormSection title="2. Tanggal datang">
-        <TextField label="Tanggal datang" name="plannedDate" type="date" value={plannedDate} onChange={setPlannedDate} className="sm:max-w-xs" />
+        <TextField
+          label="Tanggal datang"
+          name="plannedDate"
+          type="date"
+          value={plannedDate}
+          onChange={setPlannedDate}
+          error={errors.plannedDate}
+          className="sm:max-w-xs"
+        />
       </FormSection>
 
       <section aria-labelledby="trucks-heading" className="flex flex-col gap-3">
@@ -338,31 +376,46 @@ function OutgoingFormBody({ initialOrder, types }: { initialOrder: DeliveryOrder
   );
 }
 
-/** Loads the vehicle types and the delivery order named in the address, then opens the form. */
-export function OutgoingForm({ orderId }: { orderId: string | null }) {
+const orderPath = (id: string | number) => `/api/delivery-orders/${encodeURIComponent(String(id))}`;
+
+/**
+ * Loads the vehicle types and the delivery order named in the address (or,
+ * for a draft, every DO it names), then opens the form.
+ */
+export function OutgoingForm({ orderId, draft = null }: { orderId: string | null; draft?: Registration | null }) {
+  const draftOrderIds = (draft?.allocations ?? []).flatMap((allocation) => (allocation.deliveryOrder ? [allocation.deliveryOrder.id] : []));
   const types = useApiQuery("vehicle-types", (signal) => api.request<{ items: VehicleType[] }>("/api/vehicle-types", { signal }));
-  const order = useApiQuery(orderId ? `order|${orderId}` : null, (signal) =>
-    api.request<{ deliveryOrder: DeliveryOrder }>(`/api/delivery-orders/${encodeURIComponent(orderId ?? "")}`, { signal }),
+  const order = useApiQuery(orderId && !draft ? `order|${orderId}` : null, (signal) =>
+    api.request<DeliveryOrderDetail>(orderPath(orderId ?? ""), { signal }),
   );
-  if (types.hasError || order.hasError) {
+  const draftOrders = useApiQuery(draft ? `draft-orders|${draftOrderIds.join(",")}` : null, (signal) =>
+    Promise.all(draftOrderIds.map((id) => api.request<DeliveryOrderDetail>(orderPath(id), { signal }))),
+  );
+  const failure = types.hasError ? types.error : order.hasError ? order.error : draftOrders.hasError ? draftOrders.error : null;
+  if (failure) {
     return (
       <ListError
         title="Form registrasi belum bisa dibuka"
-        error={types.error ?? order.error}
+        error={failure}
         onRetry={() => {
           types.reload();
           order.reload();
+          draftOrders.reload();
         }}
       />
     );
   }
-  if (!types.data || (orderId && !order.data)) return <ListSkeleton label="Menyiapkan form registrasi" />;
+  if (!types.data || (orderId && !draft && !order.data) || (draft && !draftOrders.data)) {
+    return <ListSkeleton label="Menyiapkan form registrasi" />;
+  }
   const initial = order.data?.deliveryOrder ?? null;
   return (
     <OutgoingFormBody
-      key={orderId ?? "none"}
+      key={draft ? `draft-${draft.id}` : (orderId ?? "none")}
       initialOrder={initial && initial.status.toUpperCase() === "ACCEPTED" ? initial : null}
       types={types.data.items}
+      draft={draft}
+      draftOrders={(draftOrders.data ?? []).map((detail) => detail.deliveryOrder)}
     />
   );
 }

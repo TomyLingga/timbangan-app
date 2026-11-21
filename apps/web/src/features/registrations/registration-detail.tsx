@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft, CircleCheck, Printer, Send, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, CircleCheck, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
 import { FindingsList } from "@/components/findings-list";
@@ -14,8 +14,8 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { DIRECTION_LABELS } from "@/features/registrations/registrations-screen";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
-import { transitionErrorMessage } from "@/lib/messages";
-import { canReviewRegistrations, canSeeRegistrations } from "@/lib/roles";
+import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
+import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { Registration, Trip, User } from "@/lib/types";
@@ -43,7 +43,20 @@ function Panel({ title, children, action }: { title: string; children: ReactNode
   );
 }
 
-function TripCard({ trip, registration }: { trip: Trip; registration: Registration }) {
+/** POST /api/trips/:id/spj/reissue takes a truck that has not checked in, on an approved registration. */
+const mayBeReissued = (trip: Trip, registration: Registration) =>
+  registration.status.toUpperCase() === "APPROVED" && ["ISSUED", "EXPIRED"].includes(trip.status.toUpperCase());
+
+function TripCard({
+  trip,
+  registration,
+  onReissue,
+}: {
+  trip: Trip;
+  registration: Registration;
+  /** Present when the account may reissue the SPJ of this truck. */
+  onReissue?: () => void;
+}) {
   const incoming = registration.direction === "IN";
   const allocationName = (seq: number) => {
     const allocation = registration.allocations.find((item) => item.seq === seq);
@@ -112,6 +125,13 @@ function TripCard({ trip, registration }: { trip: Trip; registration: Registrati
         </ul>
       ) : null}
 
+      {trip.cancelReason ? (
+        <p className="mt-3 border-t pt-3 text-sm">
+          <span className="font-medium">Alasan batal: </span>
+          {trip.cancelReason}
+        </p>
+      ) : null}
+
       {trip.spj ? (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border-t pt-3">
           <p className="text-sm">
@@ -121,12 +141,20 @@ function TripCard({ trip, registration }: { trip: Trip; registration: Registrati
               {trip.spj.printCount ? ` · dicetak ${formatNumber(trip.spj.printCount)} kali` : ""}
             </span>
           </p>
-          <Button asChild variant="secondary">
-            <Link href={`/spj/${encodeURIComponent(String(trip.id))}/cetak`} target="_blank" rel="noopener" aria-label={`Cetak SPJ truk ${trip.seq}`}>
-              <Printer aria-hidden="true" />
-              Cetak SPJ
-            </Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {onReissue ? (
+              <Button variant="outline" onClick={onReissue} aria-label={`Terbit ulang SPJ truk ${trip.seq}`}>
+                <RefreshCw aria-hidden="true" />
+                Terbit ulang SPJ
+              </Button>
+            ) : null}
+            <Button asChild variant="secondary">
+              <Link href={`/spj/${encodeURIComponent(String(trip.id))}/cetak`} target="_blank" rel="noopener" aria-label={`Cetak SPJ truk ${trip.seq}`}>
+                <Printer aria-hidden="true" />
+                Cetak SPJ
+              </Link>
+            </Button>
+          </div>
         </div>
       ) : null}
     </li>
@@ -144,6 +172,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
   const searchParams = useSearchParams();
   const [reloadToken, setReloadToken] = useState(0);
   const [pending, setPending] = useState<PendingAction>(null);
+  const [reissuing, setReissuing] = useState<Trip | null>(null);
   const [notice, setNotice] = useState<string | null>(CREATED_NOTICES[searchParams.get("baru") ?? ""] ?? null);
 
   const query = useApiQuery(`${id}|${reloadToken}`, (signal) =>
@@ -156,8 +185,8 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
   const status = registration.status.toUpperCase();
   const reviewer = canReviewRegistrations(user);
   const anyCheckedIn = registration.trips.some((trip) => trip.checkedInAt || trip.status.toUpperCase() === "CHECKED_IN");
-  const owner = user.kind === "PARTNER" || registration.createdBy?.id === user.id;
-  const mayCancel = (owner || reviewer) && ["DRAFT", "SUBMITTED", "APPROVED"].includes(status) && !anyCheckedIn;
+  const mayChangeDraft = canEditDraft(user, registration);
+  const mayCancel = canCancelRegistration(user, registration) && ["DRAFT", "SUBMITTED", "APPROVED"].includes(status) && !anyCheckedIn;
 
   async function act(action: string, body: unknown, message: string): Promise<string | null> {
     try {
@@ -282,18 +311,31 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
         </h2>
         <ul className="flex flex-col gap-3">
           {registration.trips.map((trip) => (
-            <TripCard key={trip.id} trip={trip} registration={registration} />
+            <TripCard
+              key={trip.id}
+              trip={trip}
+              registration={registration}
+              onReissue={canReissueSpj(user) && mayBeReissued(trip, registration) ? () => setReissuing(trip) : undefined}
+            />
           ))}
         </ul>
       </section>
 
       {status === "DRAFT" || mayCancel ? (
         <div className="flex flex-wrap gap-2 border-t pt-4">
-          {status === "DRAFT" && owner ? (
-            <Button onClick={() => setPending("submit")}>
-              <Send aria-hidden="true" />
-              Kirim registrasi
-            </Button>
+          {mayChangeDraft ? (
+            <>
+              <Button onClick={() => setPending("submit")}>
+                <Send aria-hidden="true" />
+                Kirim registrasi
+              </Button>
+              <Button asChild variant="outline">
+                <Link href={`/registrasi/${encodeURIComponent(id)}/ubah`}>
+                  <Pencil aria-hidden="true" />
+                  Ubah draf
+                </Link>
+              </Button>
+            </>
           ) : null}
           {mayCancel ? (
             <Button variant="outline" onClick={() => setPending("cancel")}>
@@ -336,6 +378,27 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
           onConfirm={(reason) => act("cancel", { reason }, "Registrasi dibatalkan.")}
         />
       ) : null}
+      {reissuing ? (
+        <ActionSheet
+          title={`Terbit ulang SPJ truk ${reissuing.seq}`}
+          description="SPJ lama dicabut dan tidak bisa dipakai lagi. SPJ baru berlaku penuh sejak sekarang; cetak lagi untuk supir."
+          submitLabel="Terbit ulang SPJ"
+          reasonLabel="Alasan"
+          reasonRequired="Isi alasan terbit ulang."
+          onClose={() => setReissuing(null)}
+          onConfirm={async (reason) => {
+            try {
+              await api.request(`/api/trips/${encodeURIComponent(String(reissuing.id))}/spj/reissue`, { method: "POST", body: { reason } });
+            } catch (error) {
+              return gateErrorMessage(error);
+            }
+            setReissuing(null);
+            setNotice(`SPJ truk ${reissuing.seq} diterbitkan ulang. Cetak SPJ yang baru untuk supir.`);
+            setReloadToken((token) => token + 1);
+            return null;
+          }}
+        />
+      ) : null}
       {pending === "submit" ? (
         <ActionSheet
           title={`Kirim ${registration.regNo}`}
@@ -351,8 +414,10 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
 
 export function RegistrationDetailScreen() {
   const params = useParams<{ id: string }>();
+  const searchParams = useSearchParams();
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canSeeRegistrations(state.user)) return <AccessDenied reason="Registrasi tidak tersedia untuk peran akun ini." />;
-  return <RegistrationView user={state.user} id={params.id} />;
+  if (!canView(state.user, "registrations")) return <AccessDenied module="registrations" />;
+  // A new notice (?baru=) on the same registration, after a draft was changed, starts the view afresh.
+  return <RegistrationView key={`${params.id}|${searchParams.get("baru") ?? ""}`} user={state.user} id={params.id} />;
 }

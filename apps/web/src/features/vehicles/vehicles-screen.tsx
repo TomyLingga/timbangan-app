@@ -7,7 +7,7 @@ import { DataList, type Column } from "@/components/data-list";
 import { ExpiryDate } from "@/components/expiry-date";
 import { CheckboxField, SelectField, TextAreaField, TextField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
-import { ListEmpty, ListError, ListSkeleton, Notice, PageHeader, ResultCount, SearchField } from "@/components/page-parts";
+import { AccessDenied, ListEmpty, ListError, ListSkeleton, Notice, PageHeader, ResultCount, SearchField } from "@/components/page-parts";
 import { PartnerLookup } from "@/components/partner-lookup";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
@@ -18,7 +18,7 @@ import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatQuantity } from "@/lib/format";
 import { EMPTY_VEHICLE, tareChanged, validateVehicle, vehiclePayload, type VehicleValues } from "@/lib/forms";
 import { saveErrorMessage } from "@/lib/messages";
-import { canWriteVehicles } from "@/lib/roles";
+import { canAddVehicle, canEditVehicle, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { expirySummary } from "@/lib/status";
 import type { Page, PartnerRef, Vehicle, VehicleType } from "@/lib/types";
@@ -230,7 +230,9 @@ function VehicleFormSheet({
 export function VehiclesScreen() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
-  const mayWrite = canWriteVehicles(user);
+  const mayView = canView(user, "vehicles");
+  const mayAdd = canAddVehicle(user);
+  const mayEdit = canEditVehicle(user);
 
   const ids = useId();
   const [searchText, setSearchText] = useState("");
@@ -241,11 +243,11 @@ export function VehiclesScreen() {
 
   const search = useDebouncedValue(searchText.trim(), 300);
 
-  const types = useApiQuery("vehicle-types", (signal) =>
+  const types = useApiQuery(mayView ? "vehicle-types" : null, (signal) =>
     api.request<{ items: VehicleType[] }>("/api/vehicle-types", { signal }),
   );
   const list = useApiQuery(
-    `${search}|${reloadToken}`,
+    mayView ? `${search}|${reloadToken}` : null,
     (signal) => api.request<Page<Vehicle>>("/api/vehicles", { query: { q: search, limit: LIST_LIMIT }, signal }),
     { keepPrevious: true },
   );
@@ -322,11 +324,12 @@ export function VehiclesScreen() {
   }, [typeItems]);
 
   if (!user) return null;
+  if (!mayView) return <AccessDenied module="vehicles" />;
 
   return (
     <div className="flex flex-col gap-5">
       <PageHeader title="Kendaraan" description="Data truk beserta masa berlaku STNK, pajak, dan KIR.">
-        {mayWrite ? (
+        {mayAdd ? (
           <Button onClick={() => setEditing(null)}>
             <Plus aria-hidden="true" />
             Kendaraan baru
@@ -365,7 +368,7 @@ export function VehiclesScreen() {
             rowKey={(vehicle) => vehicle.id}
             stale={list.isStale}
             actions={
-              mayWrite
+              mayEdit
                 ? (vehicle) => (
                     <Button
                       variant="ghost"

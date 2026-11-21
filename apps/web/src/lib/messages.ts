@@ -7,7 +7,7 @@ export function errorMessage(error: unknown): string {
   if (!isApiError(error)) return "Terjadi kesalahan yang tidak dikenal. Coba lagi.";
   if (error.code === NETWORK_ERROR) return "Server tidak bisa dihubungi. Periksa jaringan, lalu coba lagi.";
   if (error.code === SIGNED_OUT) return "Sesi berakhir. Masuk lagi untuk melanjutkan.";
-  if (error.code === "NO_ROLE") return "Akun ini belum punya peran. Hubungi admin sistem.";
+  if (error.code === "NO_ACCESS") return "Akun ini belum diberi hak akses. Hubungi admin sistem.";
   if (error.status === 403) return "Akun ini tidak punya izin untuk data ini.";
   if (error.status === 429) return "Terlalu banyak permintaan. Tunggu sebentar, lalu coba lagi.";
   if (error.status >= 500) return `Server sedang bermasalah (kode ${error.status}). Coba lagi sebentar lagi.`;
@@ -67,12 +67,15 @@ export function saveErrorMessage(error: unknown, duplicate: string): string {
 
 export function userAdminErrorMessage(error: unknown): string {
   if (isApiError(error)) {
-    if (error.code === "LAST_ADMIN_SELF") {
-      return "Anda admin sistem terakhir, jadi peran Admin sistem tidak bisa dilepas dari akun Anda sendiri.";
+    if (error.code === "LAST_ADMIN") {
+      return "Harus tetap ada satu akun karyawan aktif yang bisa mengatur hak akses. Beri tingkat ubah pada modul Pengguna ke akun lain dulu.";
     }
     if (error.code === "SELF_CHANGE") return "Anda tidak bisa menonaktifkan akun Anda sendiri.";
     if (error.code === "VALIDATION" || error.status === 400) {
-      return "Pilihan peran ditolak server. Periksa lagi peran yang dicentang.";
+      const reasons = Object.values(error.fieldMessages);
+      return reasons.length > 0
+        ? `Hak akses ditolak server: ${reasons.join(" ")}`
+        : "Hak akses ditolak server. Periksa lagi pilihan tiap modul.";
     }
   }
   return errorMessage(error);
@@ -91,36 +94,54 @@ const GATE_REFUSALS: Record<string, string> = {
   VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik. Selesaikan perjalanan sebelumnya dulu.",
   DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik. Selesaikan perjalanan sebelumnya dulu.",
   DRIVER_BLACKLISTED: "Supir masuk daftar hitam VCF. Truk tidak boleh check-in.",
+  DRIVER_BLOCKED: "Supir sedang diblokir di pabrik ini. Truk tidak boleh check-in.",
   INVALID_STATE: "Status truk ini tidak memungkinkan tindakan itu. Scan ulang SPJ-nya.",
 };
 
-/** Refusals at the registration post (scan, check-in, replace card, cancel). */
+/**
+ * A 409 with a code this app has no sentence for is a business rule of the
+ * API (a driver policy can refuse WARNING drivers, for one). The API writes
+ * those messages in Indonesian for the people using it, so they are shown.
+ */
+function refusalText(error: { status: number; message: string }): string | null {
+  return error.status === 409 && error.message.trim() ? error.message.trim() : null;
+}
+
+/** Refusals at the registration post (scan, check-in, replace card, cancel, reissue). */
 export function gateErrorMessage(error: unknown): string {
-  if (isApiError(error) && GATE_REFUSALS[error.code]) return GATE_REFUSALS[error.code];
+  if (isApiError(error)) {
+    if (GATE_REFUSALS[error.code]) return GATE_REFUSALS[error.code];
+    const text = refusalText(error);
+    if (text) return text;
+  }
   return errorMessage(error);
 }
 
 const REGISTRATION_REFUSALS: Record<string, string> = {
   DRIVER_BLACKLISTED: "Supir ini masuk daftar hitam VCF, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
   DRIVER_BLOCKED: "Supir ini sedang diblokir di pabrik, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
-  FLOW_MISMATCH: "Kontrak yang dipilih tidak bisa digabung dalam satu registrasi karena alur barangnya berbeda.",
-  TOO_MANY_ALLOCATIONS: "Terlalu banyak kontrak atau DO untuk satu registrasi.",
-  DUPLICATE_IN_REGISTRATION: "Kendaraan atau supir yang sama dipakai dua kali dalam registrasi ini.",
-  CONTRACT_NOT_OPEN: "Ada kontrak yang sudah tidak terbuka. Hapus kontrak itu dari registrasi.",
-  DELIVERY_ORDER_NOT_OPEN: "Ada DO yang belum diterima atau sudah ditutup. Hapus DO itu dari registrasi.",
-  VEHICLE_INSIDE: "Kendaraan ini masih tercatat di dalam pabrik.",
-  DRIVER_INSIDE: "Supir ini masih tercatat di dalam pabrik.",
+  CONTRACT_NOT_AVAILABLE: "Ada kontrak yang tidak terbuka lagi atau bukan milik perusahaan Anda. Hapus kontrak itu dari registrasi.",
+  DO_NOT_AVAILABLE: "Ada DO yang belum diterima, sudah ditutup, atau bukan untuk perusahaan Anda. Hapus DO itu dari registrasi.",
+  DUPLICATE_VEHICLE: "Satu kendaraan dipakai dua kali dalam registrasi ini.",
+  DUPLICATE_DRIVER: "Satu supir dipakai dua kali dalam registrasi ini.",
   INVALID_STATE: "Registrasi ini sudah berubah status. Muat ulang halaman, lalu coba lagi.",
 };
 
-/** Saving or sending a registration. */
-export function registrationErrorMessage(error: unknown): string {
+/**
+ * Saving or sending a registration. `unplaced` are the API's messages for a
+ * VALIDATION refusal that the form could not show next to a field.
+ */
+export function registrationErrorMessage(error: unknown, unplaced: readonly string[] = []): string {
   if (isApiError(error)) {
     if (REGISTRATION_REFUSALS[error.code]) return REGISTRATION_REFUSALS[error.code];
     if (error.code === "VALIDATION" || error.status === 400) {
-      return "Server menolak isian ini. Periksa kolom yang ditandai, lalu kirim lagi.";
+      return unplaced.length > 0
+        ? `Server menolak isian ini: ${unplaced.join(" ")}`
+        : "Server menolak isian ini. Periksa kolom yang ditandai, lalu kirim lagi.";
     }
     if (error.status === 403) return "Akun ini tidak punya izin membuat registrasi ini.";
+    const text = refusalText(error);
+    if (text) return text;
   }
   return errorMessage(error);
 }
@@ -140,7 +161,7 @@ export function transitionErrorMessage(error: unknown): string {
 }
 
 export function cardSaveErrorMessage(error: unknown): string {
-  if (isApiError(error) && (error.code === "CARD_IN_USE" || error.code === "INVALID_STATE")) {
+  if (isApiError(error) && error.code === "INVALID_STATE") {
     return "Kartu ini sedang terikat ke truk, jadi statusnya belum bisa diubah.";
   }
   return saveErrorMessage(error, "UID kartu ini sudah terdaftar.");

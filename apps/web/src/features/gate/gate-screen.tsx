@@ -18,10 +18,10 @@ import { formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { cardUidError, normalizeCardUid, normalizeSpjToken, spjTokenError } from "@/lib/gate-input";
 import { gateErrorMessage } from "@/lib/messages";
 import { MOTION_BASE } from "@/lib/motion";
-import { canUseGate } from "@/lib/roles";
+import { canCreate, canEdit, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { checkSentence, isBlocking, registryStatusInfo, tripStatusInfo } from "@/lib/status";
-import type { GateCheck, GateScan, Page, TripSummary } from "@/lib/types";
+import type { GateCheck, GateScan, Page, Trip, User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Phase =
@@ -29,7 +29,7 @@ type Phase =
   | { kind: "scanning"; token: string }
   | { kind: "scanned"; token: string; scan: GateScan; cardError: string | null; checkingIn: boolean }
   | { kind: "refused"; message: string; scan: GateScan | null }
-  | { kind: "done"; trip: TripSummary };
+  | { kind: "done"; trip: Trip };
 
 const DIRECTION = { IN: "Incoming", OUT: "Outgoing" } as const;
 
@@ -165,7 +165,7 @@ function CheckList({ checks }: { checks: readonly GateCheck[] }) {
   );
 }
 
-function TruckCard({ trip }: { trip: TripSummary }) {
+function TruckCard({ trip }: { trip: Trip }) {
   return (
     <div className="flex flex-col gap-3" data-testid="gate-truck">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -216,7 +216,7 @@ function TripRow({
   trip,
   actions,
 }: {
-  trip: TripSummary;
+  trip: Trip;
   actions?: ReactNode;
 }) {
   return (
@@ -243,9 +243,9 @@ function ReplaceCardSheet({
   onDone,
   returnFocus,
 }: {
-  trip: TripSummary;
+  trip: Trip;
   onClose: () => void;
-  onDone: (trip: TripSummary) => void;
+  onDone: (trip: Trip) => void;
   returnFocus: () => void;
 }) {
   const [uid, setUid] = useState("");
@@ -262,7 +262,7 @@ function ReplaceCardSheet({
     if (found.uid || found.reason) return;
     setPending(true);
     try {
-      const { trip: updated } = await api.request<{ trip: TripSummary }>("/api/gate/replace-card", {
+      const { trip: updated } = await api.request<{ trip: Trip }>("/api/gate/replace-card", {
         method: "POST",
         body: { tripId: trip.id, cardUid, reason },
       });
@@ -314,7 +314,9 @@ function ReplaceCardSheet({
   );
 }
 
-function GatePage() {
+function GatePage({ user }: { user: User }) {
+  const mayCheckIn = canCreate(user, "gate");
+  const mayChange = canEdit(user, "gate");
   const reduceMotion = useReducedMotion();
   const scanRef = useRef<HTMLInputElement>(null);
   const cardRef = useRef<HTMLInputElement>(null);
@@ -323,18 +325,20 @@ function GatePage() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [reloadToken, setReloadToken] = useState(0);
-  const [sheet, setSheet] = useState<{ kind: "replace" | "cancel"; trip: TripSummary } | null>(null);
+  const [sheet, setSheet] = useState<{ kind: "replace" | "cancel" | "reissue"; trip: Trip } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const today = plantToday();
+  // `date` matches the planned arrival or the day of check-in (apps/api trips/routes.ts); `status` takes several.
   const upcoming = useApiQuery(`upcoming|${today}|${reloadToken}`, (signal) =>
-    api.request<Page<TripSummary>>("/api/trips", { query: { status: "ISSUED", date: today, limit: 50 }, signal }),
+    api.request<Page<Trip>>("/api/trips", { query: { status: "ISSUED,EXPIRED", date: today, limit: 50 }, signal }),
   { keepPrevious: true });
-  const inside = useApiQuery(`inside|${today}|${reloadToken}`, (signal) =>
-    api.request<Page<TripSummary>>("/api/trips", { query: { status: "CHECKED_IN", date: today, limit: 50 }, signal }),
+  // Trucks inside the plant, whatever day they came in.
+  const inside = useApiQuery(`inside|${reloadToken}`, (signal) =>
+    api.request<Page<Trip>>("/api/trips", { query: { status: "CHECKED_IN,IN_PROCESS", limit: 50 }, signal }),
   { keepPrevious: true });
 
-  const awaitingCard = phase.kind === "scanned" && !phase.scan.checks.some(isBlocking);
+  const awaitingCard = mayCheckIn && phase.kind === "scanned" && !phase.scan.checks.some(isBlocking);
 
   // The operator works without the mouse: the box that expects the next reading has focus.
   useEffect(() => {
@@ -375,7 +379,7 @@ function GatePage() {
     }
     setPhase({ ...phase, cardError: null, checkingIn: true });
     try {
-      const { trip } = await api.request<{ trip: TripSummary }>("/api/gate/check-in", {
+      const { trip } = await api.request<{ trip: Trip }>("/api/gate/check-in", {
         method: "POST",
         body: { token: phase.token, cardUid },
       });
@@ -483,6 +487,15 @@ function GatePage() {
               >
                 <TruckCard trip={shownTrip} />
                 {phase.kind === "scanned" ? <CheckList checks={phase.scan.checks} /> : null}
+                {phase.kind === "scanned" && !mayCheckIn && !phase.scan.checks.some(isBlocking) ? (
+                  <Notice tone="warning">Akun Anda hanya bisa melihat. Check-in butuh hak akses Pos registrasi tingkat buat.</Notice>
+                ) : null}
+                {shownTrip && mayChange && ["ISSUED", "EXPIRED"].includes(shownTrip.status.toUpperCase()) &&
+                phase.kind === "scanned" && phase.scan.checks.some((check) => check.code === "SPJ_EXPIRED") ? (
+                  <Button variant="outline" className="self-start" onClick={() => setSheet({ kind: "reissue", trip: shownTrip })}>
+                    Terbit ulang SPJ
+                  </Button>
+                ) : null}
               </motion.section>
             ) : null}
 
@@ -533,7 +546,21 @@ function GatePage() {
                     key={trip.id}
                     trip={trip}
                     actions={
-                      trip.spj ? (
+                      trip.status.toUpperCase() === "EXPIRED" ? (
+                        mayChange ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-10 md:h-8"
+                            onClick={() => setSheet({ kind: "reissue", trip })}
+                            aria-label={`Terbit ulang SPJ ${trip.vehicle?.plateDisplay ?? "truk"}`}
+                          >
+                            Terbit ulang
+                          </Button>
+                        ) : (
+                          <StatusBadge info={tripStatusInfo(trip.status)} />
+                        )
+                      ) : trip.spj ? (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -554,13 +581,13 @@ function GatePage() {
           <section className="rounded-lg border bg-card p-4 sm:p-5" aria-labelledby="inside-heading">
             <h2 id="inside-heading" className="flex items-center gap-2 text-sm font-semibold">
               <CreditCard className="size-4 text-muted-foreground" aria-hidden="true" />
-              Sudah check-in
+              Di dalam pabrik
               <span className="font-normal text-muted-foreground">{inside.data ? formatNumber(inside.data.total) : ""}</span>
             </h2>
             {inside.hasError ? (
               <p className="mt-2 text-sm text-destructive">{gateErrorMessage(inside.error)}</p>
             ) : inside.data && inside.data.items.length === 0 ? (
-              <p className="mt-2 text-sm text-muted-foreground">Belum ada truk yang check-in hari ini.</p>
+              <p className="mt-2 text-sm text-muted-foreground">Tidak ada truk di dalam pabrik.</p>
             ) : (
               <ul className={cn("mt-1 divide-y", inside.isStale && "opacity-60")} data-testid="gate-inside">
                 {(inside.data?.items ?? []).map((trip) => (
@@ -568,6 +595,7 @@ function GatePage() {
                     key={trip.id}
                     trip={trip}
                     actions={
+                      mayChange ? (
                       <>
                         <Button
                           variant="ghost"
@@ -588,6 +616,7 @@ function GatePage() {
                           Batal
                         </Button>
                       </>
+                      ) : null
                     }
                   />
                 ))}
@@ -609,10 +638,33 @@ function GatePage() {
           }}
         />
       ) : null}
+      {sheet?.kind === "reissue" ? (
+        <ActionSheet
+          title={`Terbit ulang SPJ ${sheet.trip.vehicle?.plateDisplay ?? "truk"}`}
+          description="SPJ lama dicabut dan tidak bisa dipakai lagi. Cetak SPJ yang baru untuk supir dari halaman registrasinya."
+          submitLabel="Terbit ulang SPJ"
+          reasonLabel="Alasan"
+          reasonRequired="Isi alasan terbit ulang."
+          returnFocus={() => focusSoon(scanRef)}
+          onClose={() => setSheet(null)}
+          onConfirm={async (reason) => {
+            try {
+              await api.request(`/api/trips/${encodeURIComponent(String(sheet.trip.id))}/spj/reissue`, { method: "POST", body: { reason } });
+            } catch (error) {
+              return gateErrorMessage(error);
+            }
+            setNotice(`SPJ ${sheet.trip.vehicle?.plateDisplay ?? "truk"} diterbitkan ulang. Cetak SPJ baru dari halaman registrasinya.`);
+            setSheet(null);
+            setPhase({ kind: "idle" });
+            setReloadToken((token) => token + 1);
+            return null;
+          }}
+        />
+      ) : null}
       {sheet?.kind === "cancel" ? (
         <ActionSheet
           title={`Batalkan ${sheet.trip.vehicle?.plateDisplay ?? "truk"}`}
-          description="Truk dibatalkan sebelum timbang. Kartunya dilepas dan bisa dipakai truk lain."
+          description="Truk dibatalkan sebelum timbang. SPJ-nya dicabut, kartunya dilepas dan bisa dipakai truk lain."
           submitLabel="Batalkan truk"
           reasonLabel="Alasan"
           reasonRequired="Isi alasan pembatalan."
@@ -638,6 +690,6 @@ function GatePage() {
 export function GateScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canUseGate(state.user)) return <AccessDenied reason="Pos registrasi hanya untuk petugas pos dan admin logistik." />;
-  return <GatePage />;
+  if (!isStaff(state.user) || !canView(state.user, "gate")) return <AccessDenied module="gate" />;
+  return <GatePage user={state.user} />;
 }

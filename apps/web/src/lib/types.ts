@@ -1,5 +1,5 @@
-// Shapes taken from the API contract. Fields the contract leaves open
-// (state values, numeric fields that may arrive as strings) are typed loosely.
+// Shapes the API sends. Phase 3 and the permission shapes follow the views of
+// apps/api (registrations/view.ts, trips/view.ts, trips/routes.ts, auth/guard.ts).
 
 export type UserKind = "INTERNAL" | "PARTNER";
 
@@ -8,13 +8,46 @@ export interface PartnerRef {
   name: string;
 }
 
+/** Modules the routes of this phase check (apps/api src/auth/permissions.ts). */
+export type ModuleCode =
+  | "contracts"
+  | "drivers"
+  | "vehicles"
+  | "destinations"
+  | "delivery_orders"
+  | "registrations"
+  | "gate"
+  | "rfid_cards"
+  | "users";
+
+/** EDIT covers CREATE, CREATE covers VIEW. */
+export type PermissionLevel = "VIEW" | "CREATE" | "EDIT";
+
+/** Level per module the account may open; a module that is absent cannot be opened. */
+export type Permissions = Partial<Record<string, PermissionLevel>>;
+
+/** The company of a partner account; the flags say which kinds of partner it is. */
+export interface AccountPartner extends PartnerRef {
+  isSupplier: boolean;
+  isTransporter: boolean;
+  isCustomer: boolean;
+}
+
 export interface User {
   id: string | number;
   kind: UserKind;
   username: string;
   fullName: string;
-  roles: string[];
-  partner: PartnerRef | null;
+  permissions: Permissions;
+  partner: AccountPartner | null;
+}
+
+/** One row of GET /api/admin/modules. */
+export interface ModuleDefinition {
+  code: string;
+  name: string;
+  levels: PermissionLevel[];
+  partnerAllowed: boolean;
 }
 
 export interface AuthResponse {
@@ -74,12 +107,6 @@ export interface Page<T> {
   total: number;
 }
 
-export interface RoleDefinition {
-  code: string;
-  name: string;
-  scope: UserKind;
-}
-
 export interface AdminUser {
   id: string | number;
   kind: UserKind;
@@ -87,7 +114,7 @@ export interface AdminUser {
   fullName: string;
   employeeNo: string | null;
   partner: PartnerRef | null;
-  roles: string[];
+  permissions: Permissions;
   isActive: boolean;
   lastLoginAt: string | null;
 }
@@ -173,11 +200,13 @@ export interface Destination {
   isActive: boolean;
 }
 
-// --- phase 3: RFID cards, delivery orders, registrations, trips, SPJ --------
-// Shapes from section 3 of docs/fase-3-rancangan.md. Status values are typed as
-// string because the contract may grow them (Phase 4 adds trip statuses).
 
-export type Numeric = number | string | null;
+// --- phase 3: RFID cards, delivery orders, registrations, trips, SPJ --------
+// As apps/api sends them (registrations/view.ts, trips/view.ts, trips/routes.ts,
+// delivery-orders/routes.ts, gate/routes.ts, lookup/routes.ts). Status values
+// stay strings because later phases add trip statuses.
+
+export type Numeric = number | null;
 
 export interface RfidCard {
   id: string | number;
@@ -188,47 +217,54 @@ export interface RfidCard {
   trip: { id: string | number; tripNo: string | null; plateNo: string | null } | null;
 }
 
+export interface DeliveryOrderDestination {
+  id: string | number;
+  name: string;
+  address: string | null;
+  district: string | null;
+  regency: string | null;
+  province: string | null;
+}
+
 export interface DeliveryOrder {
   id: string | number;
   doNo: string;
-  doDate: string | null;
+  doDate: string;
   status: string;
-  contract: { id: string | number; contractNo: string } | null;
+  contract: { id: string | number; contractNo: string | null } | null;
   customerPoNo: string | null;
-  /** The contract names it "partner" without a shape; read as a reference. */
-  partner: PartnerRef | null;
-  product: { id: string | number; name: string; category: string | null } | null;
-  qty: Numeric;
-  uom: string | null;
-  tolerancePct: Numeric;
-  destination: {
-    id: string | number;
-    name: string;
-    address: string | null;
-    district: string | null;
-    regency: string | null;
-    province: string | null;
-  } | null;
-  deliveryFrom: string | null;
+  partner: PartnerRef;
+  product: { id: string | number; name: string; category: string | null };
+  qty: number;
+  uom: string;
+  tolerancePct: number;
+  destination: DeliveryOrderDestination;
+  deliveryFrom: string;
   deliveryUntil: string | null;
   transportTerms: string | null;
   transporter: PartnerRef | null;
   truckCount: number | null;
   truckCountBy: string | null;
-  qtyPlanned: Numeric;
-  qtyRemaining: Numeric;
-  tripCount: number | null;
+  qtyPlanned: number;
+  qtyRemaining: number;
+  tripCount: number;
   remark: string | null;
   sentAt: string | null;
   acceptedAt: string | null;
 }
 
+/** GET /api/delivery-orders/:id: the DO and every truck registered on it. */
+export interface DeliveryOrderDetail {
+  deliveryOrder: DeliveryOrder;
+  trips: Trip[];
+}
+
 /** One finding of a registration check. `tripSeq` and `allocationSeq` point at what it is about. */
 export interface Finding {
   code: string;
-  message: string | null;
-  tripSeq?: number | null;
-  allocationSeq?: number | null;
+  message: string;
+  tripSeq?: number;
+  allocationSeq?: number;
 }
 
 export interface TripAllocation {
@@ -241,25 +277,32 @@ export interface TripAllocation {
   originGrossKg: Numeric;
   originTareKg: Numeric;
   originNetKg: Numeric;
-  quality: Record<string, number | string> | null;
+  quality: Record<string, number>;
 }
 
 export interface Spj {
   id: string | number;
   spjNo: string;
   barcodeToken: string;
-  issuedAt: string | null;
+  issuedAt: string;
   validUntil: string | null;
-  printCount: number | null;
+  printCount: number;
 }
 
+/** A trip as every route answers it: the desk lists, the scan, a registration and a DO. */
 export interface Trip {
   id: string | number;
+  registrationId: string | number;
   seq: number;
   tripNo: string | null;
   status: string;
-  vehicle: { id: string | number; plateNo: string; plateDisplay: string; vehicleTypeCode: string | null } | null;
-  driver: { id: string | number; fullName: string; licenceNo: string; registryStatus: string | null } | null;
+  direction: Direction;
+  flowCode: string;
+  partner: PartnerRef;
+  transporter: PartnerRef | null;
+  currentStep: string | null;
+  vehicle: { id: string | number; plateNo: string; plateDisplay: string; vehicleTypeCode: string } | null;
+  driver: { id: string | number; fullName: string; licenceNo: string; registryStatus: string } | null;
   containerNo: string | null;
   plannedArrival: string | null;
   qtyPlanned: Numeric;
@@ -270,48 +313,39 @@ export interface Trip {
   spj: Spj | null;
   card: { uid: string; label: string | null } | null;
   checkedInAt: string | null;
-}
-
-/** `Trip` in short, with what the lists at the post need. Every extra field is optional on purpose. */
-export interface TripSummary extends Partial<Omit<Trip, "id" | "status">> {
-  id: string | number;
-  status: string;
-  direction?: Direction | null;
-  flowCode?: string | null;
-  partner?: PartnerRef | null;
-  transporter?: PartnerRef | null;
-  currentStep?: string | null;
+  cancelReason: string | null;
 }
 
 export interface RegistrationAllocation {
   seq: number;
   contract: { id: string | number; contractNo: string } | null;
-  deliveryOrder: { id: string | number; doNo: string } | null;
-  contractNo: string | null;
+  deliveryOrder: { id: string | number; doNo: string | null } | null;
+  contractNo: string;
   doNo: string | null;
   qtyPlanned: Numeric;
-  tolerancePct: Numeric;
-  product: { id: string | number; name: string; category?: string | null } | null;
-  partner: PartnerRef | null;
+  tolerancePct: number;
+  product: { id: string | number; name: string; category: string | null };
+  partner: PartnerRef;
 }
 
 export interface Registration {
   id: string | number;
   regNo: string;
   direction: Direction;
-  flowCode: string | null;
+  flowCode: string;
   status: string;
-  partner: PartnerRef | null;
+  partner: PartnerRef;
   transporter: PartnerRef | null;
   plannedDate: string | null;
-  truckCount: number | null;
+  truckCount: number;
   qtyTotal: Numeric;
-  uom: string | null;
+  uom: string;
   closeCargo: boolean | null;
   flexiBag: boolean | null;
   remark: string | null;
-  createdVia: string | null;
-  createdBy: { id: string | number; fullName: string } | null;
+  createdVia: string;
+  createdBy: { id: string | number; fullName: string };
+  createdAt: string;
   submittedAt: string | null;
   reviewedAt: string | null;
   reviewNote: string | null;
@@ -320,60 +354,85 @@ export interface Registration {
   trips: Trip[];
 }
 
-/**
- * The contract names `RegistrationSummary` without its fields. The list reads
- * the fields of `Registration` it needs and treats every one as optional.
- */
-export type RegistrationSummary = Partial<Registration> & Pick<Registration, "id" | "regNo" | "status">;
+/** A list row: the registration without its trips. */
+export type RegistrationSummary = Omit<Registration, "trips">;
 
 export interface SpjPrint {
   spjNo: string;
   barcodeToken: string;
-  issuedAt: string | null;
+  issuedAt: string;
   validUntil: string | null;
-  /** Shape left open by the contract: a code, a name, or both. */
-  site: string | { code?: string | null; name?: string | null } | null;
+  printCount: number;
+  site: { code: string; name: string };
   direction: Direction;
-  driver: { fullName: string; licenceNo: string } | null;
-  vehicle: { plateDisplay: string; vehicleType: string | null } | null;
-  transporter: PartnerRef | string | null;
+  driver: { fullName: string | null; licenceNo: string | null };
+  vehicle: { plateDisplay: string | null; vehicleType: string | null };
+  containerNo: string | null;
+  transporter: PartnerRef | null;
   lines: SpjLine[];
 }
 
 export interface SpjLine {
-  contractNo: string | null;
+  contractNo: string;
   doNo: string | null;
-  product: { name: string } | string | null;
+  product: { id: string | number; name: string };
   qtyPlanned: Numeric;
   uom: string | null;
-  partner: PartnerRef | string | null;
-  destination: { name: string; address?: string | null } | string | null;
+  partner: PartnerRef;
+  destination: DeliveryOrderDestination | null;
 }
 
 export interface GateCheck {
   code: string;
-  level: string;
-  message: string | null;
+  level: "BLOCK" | "WARN";
+  message: string;
 }
 
 export interface GateScan {
-  trip: TripSummary;
+  trip: Trip;
   checks: GateCheck[];
 }
 
-/** Not in the contract: the incoming form needs the parameter list and its plausible range. */
 export interface QualityParameter {
   code: string;
   name: string;
-  unit: string | null;
-  decimals: number | null;
-  minValid: Numeric;
-  maxValid: Numeric;
+  unit: string;
+  decimals: number;
+  minValid: number;
+  maxValid: number;
 }
 
-/** Not in the contract: a delivery order without a contract needs a product to choose from. */
 export interface Product {
   id: string | number;
   name: string;
   category: string | null;
+}
+
+/** GET /api/lookup/driver: one driver by its whole licence number. */
+export interface LookupDriver {
+  id: string | number;
+  fullName: string;
+  licenceNo: string;
+  licenceClass: string | null;
+  licenceValidUntil: string | null;
+  licenceExpired: boolean;
+  registryStatus: string;
+  blocked: boolean;
+  isActive: boolean;
+}
+
+/** GET /api/lookup/vehicle: one vehicle by its whole plate. */
+export interface LookupVehicle {
+  id: string | number;
+  plateNo: string;
+  plateDisplay: string;
+  vehicleTypeCode: string | null;
+  needsContainerNo: boolean;
+  capacityKg: number | null;
+  tareKg: number | null;
+  /** Papers past today: "STNK", "TAX", "KIR". */
+  expired: string[];
+  verified: boolean;
+  owner: PartnerRef | null;
+  isActive: boolean;
 }

@@ -31,6 +31,6 @@ export function normalizeCardUid(input: string): string {
 export function cardUidError(uid: string): string | null {
   if (!uid) return "Tempelkan kartu ke pembaca, atau ketik UID kartu.";
   if (!/^[0-9A-F]+$/.test(uid)) return "UID kartu hanya berisi angka 0 sampai 9 dan huruf A sampai F.";
-  if (uid.length < 4 || uid.length > 32) return "UID kartu terdiri dari 4 sampai 32 karakter.";
+  if (uid.length < 8 || uid.length > 20) return "UID kartu terdiri dari 8 sampai 20 karakter.";
   return null;
 }

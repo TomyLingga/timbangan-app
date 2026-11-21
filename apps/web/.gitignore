@@ -43,3 +43,4 @@ next-env.d.ts
 
 # smoke check output (screenshots, browser profile)
 /dev/.smoke/
+/dev/.e2e-real/

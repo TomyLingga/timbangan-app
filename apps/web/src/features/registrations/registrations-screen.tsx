@@ -21,7 +21,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
-import { canCreateIncoming, canCreateOutgoing, canSeeRegistrations } from "@/lib/roles";
+import { canCreateIncoming, canCreateOutgoing, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { registrationStatusInfo } from "@/lib/status";
 import type { Page, RegistrationSummary, User } from "@/lib/types";
@@ -86,7 +86,7 @@ const COLUMNS: ReadonlyArray<Column<RegistrationSummary>> = [
     align: "right",
     cell: (registration) => (
       <>
-        <span className="block">{formatNumber(registration.truckCount ?? registration.trips?.length ?? null)}</span>
+        <span className="block">{formatNumber(registration.truckCount)}</span>
         <span className="block text-xs whitespace-nowrap text-muted-foreground">
           {formatQuantity(registration.qtyTotal ?? null, registration.uom ?? "Kg")}
         </span>
@@ -200,6 +200,6 @@ function RegistrationsPage({ user }: { user: User }) {
 export function RegistrationsScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canSeeRegistrations(state.user)) return <AccessDenied reason="Registrasi tidak tersedia untuk peran akun ini." />;
+  if (!canView(state.user, "registrations")) return <AccessDenied module="registrations" />;
   return <RegistrationsPage user={state.user} />;
 }

@@ -12,8 +12,8 @@ export type AuthState =
   | { status: "loading" }
   | { status: "anonymous"; notice: "expired" | null }
   | { status: "authenticated"; user: User }
-  /** Signed in, but the API answers 403 NO_ROLE and gave no user to show. */
-  | { status: "no-role" }
+  /** Signed in, but the API answers 403 NO_ACCESS and gave no user to show. */
+  | { status: "no-access" }
   /** The API did not answer, so it is unknown whether a session exists. */
   | { status: "unreachable"; error: unknown };
 
@@ -41,7 +41,7 @@ async function restoreSession(): Promise<AuthState> {
     return { status: "authenticated", user };
   } catch (error) {
     if (isApiError(error) && error.code === SIGNED_OUT) return ANONYMOUS;
-    if (isApiError(error) && error.code === "NO_ROLE") return { status: "no-role" };
+    if (isApiError(error) && error.code === "NO_ACCESS") return { status: "no-access" };
     return { status: "unreachable", error };
   }
 }

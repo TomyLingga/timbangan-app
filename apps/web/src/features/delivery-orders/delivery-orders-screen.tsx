@@ -34,7 +34,14 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
 import { saveErrorMessage, transitionErrorMessage } from "@/lib/messages";
-import { canManageDeliveryOrders, canSeeDeliveryOrders } from "@/lib/roles";
+import {
+  canAcceptDeliveryOrder,
+  canCreateDeliveryOrder,
+  canCreateOutgoing,
+  canManageDeliveryOrders,
+  canView,
+  isStaff,
+} from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { deliveryOrderStatusInfo } from "@/lib/status";
 import type { DeliveryOrder, Destination, Page, PartnerRef, Product, User } from "@/lib/types";
@@ -78,7 +85,12 @@ function columnsFor(admin: boolean): ReadonlyArray<Column<DeliveryOrder>> {
       cell: (order) => (
         <>
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{order.doNo}</span>
+            <Link
+              href={`/delivery-order/${encodeURIComponent(String(order.id))}`}
+              className="font-medium text-link underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              {order.doNo}
+            </Link>
             <StatusBadge info={deliveryOrderStatusInfo(order.status)} className="md:hidden" />
           </span>
           <span className="block text-xs text-muted-foreground">
@@ -186,7 +198,7 @@ function DeliveryOrderFormSheet({
 }) {
   const limited = order !== null && !is(order, "DRAFT");
   const form = useFormValues<DeliveryOrderValues>(order ? toValues(order) : { ...EMPTY_DELIVERY_ORDER, doDate: today(), deliveryFrom: today() });
-  const [contract, setContract] = useState<{ contractNo: string } | null>(order?.contract ?? null);
+  const [contract, setContract] = useState<{ contractNo: string } | null>(order?.contract ? { contractNo: order.contract.contractNo ?? "-" } : null);
   const [customer, setCustomer] = useState<PartnerRef | null>(order?.partner ?? null);
   const [productName, setProductName] = useState<string | null>(order?.product?.name ?? null);
   const [transporter, setTransporter] = useState<PartnerRef | null>(order?.transporter ?? null);
@@ -491,7 +503,11 @@ function AcceptSheet({ order, onClose, onDone }: { order: DeliveryOrder; onClose
 }
 
 function DeliveryOrdersPage({ user }: { user: User }) {
-  const admin = canManageDeliveryOrders(user);
+  const admin = isStaff(user);
+  const mayCreate = canCreateDeliveryOrder(user);
+  const mayManage = canManageDeliveryOrders(user);
+  const mayAccept = canAcceptDeliveryOrder(user);
+  const mayFillTrucks = canCreateOutgoing(user);
   const ids = useId();
   const [searchText, setSearchText] = useState("");
   const [status, setStatus] = useState("");
@@ -514,9 +530,9 @@ function DeliveryOrdersPage({ user }: { user: User }) {
     setReloadToken((token) => token + 1);
   }
 
-  function adminActions(order: DeliveryOrder) {
+  function manageMenu(order: DeliveryOrder) {
     const running = is(order, "DRAFT", "SENT", "ACCEPTED");
-    if (!running) return null;
+    if (!mayManage || !running) return null;
     return (
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -534,7 +550,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
               Kirim ke transporter
             </DropdownMenuItem>
           ) : null}
-          {is(order, "SENT", "ACCEPTED") ? (
+          {is(order, "ACCEPTED") ? (
             <DropdownMenuItem className="min-h-11 md:min-h-9" onSelect={() => setPending({ kind: "close", order })}>
               Tutup DO
             </DropdownMenuItem>
@@ -550,8 +566,8 @@ function DeliveryOrdersPage({ user }: { user: User }) {
     );
   }
 
-  function transporterActions(order: DeliveryOrder) {
-    if (is(order, "SENT")) {
+  function workActions(order: DeliveryOrder) {
+    if (is(order, "SENT") && mayAccept) {
       return (
         <Button size="sm" className="h-10 md:h-8" onClick={() => setPending({ kind: "accept", order })} aria-label={`Terima ${order.doNo}`}>
           <CircleCheck aria-hidden="true" />
@@ -559,7 +575,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
         </Button>
       );
     }
-    if (is(order, "ACCEPTED")) {
+    if (is(order, "ACCEPTED") && mayFillTrucks) {
       return (
         <Button asChild size="sm" variant="secondary" className="h-10 md:h-8">
           <Link href={`/registrasi/baru?arah=out&do=${encodeURIComponent(String(order.id))}`} aria-label={`Isi daftar truk ${order.doNo}`}>
@@ -582,7 +598,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
             : "DO yang dikirim admin logistik kepada perusahaan Anda. Terima DO, lalu isi daftar truknya."
         }
       >
-        {admin ? (
+        {mayCreate ? (
           <Button onClick={() => setPending({ kind: "edit", order: null })}>
             <Plus aria-hidden="true" />
             DO baru
@@ -631,7 +647,17 @@ function DeliveryOrdersPage({ user }: { user: User }) {
             rows={list.data.items}
             rowKey={(order) => order.id}
             stale={list.isStale}
-            actions={admin ? adminActions : transporterActions}
+            actions={(order) => {
+              const work = workActions(order);
+              const menu = manageMenu(order);
+              if (!work && !menu) return null;
+              return (
+                <span className="flex items-center justify-end gap-1">
+                  {work}
+                  {menu}
+                </span>
+              );
+            }}
           />
         </div>
       )}
@@ -703,8 +729,6 @@ function DeliveryOrdersPage({ user }: { user: User }) {
 export function DeliveryOrdersScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canSeeDeliveryOrders(state.user)) {
-    return <AccessDenied reason="Delivery order hanya untuk admin logistik dan transporter." />;
-  }
+  if (!canView(state.user, "delivery_orders")) return <AccessDenied module="delivery_orders" />;
   return <DeliveryOrdersPage user={state.user} />;
 }

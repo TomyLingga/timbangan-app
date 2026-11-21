@@ -9,7 +9,18 @@ import { driverPayload, validateDriver, validateVehicle, type DriverValues } fro
 import { cardUidError, normalizeCardUid } from "@/lib/gate-input";
 import { plateDisplay, plateError, plateKey } from "@/lib/plate";
 import { wholeKg } from "@/lib/quantity";
-import type { Contract, DeliveryOrder, Driver, PartnerRef, QualityParameter, Vehicle, VehicleType } from "@/lib/types";
+import type {
+  Contract,
+  DeliveryOrder,
+  Direction,
+  LookupDriver,
+  LookupVehicle,
+  PartnerRef,
+  QualityParameter,
+  Registration,
+  Trip,
+  VehicleType,
+} from "@/lib/types";
 
 export type FormErrors = Record<string, string>;
 
@@ -59,7 +70,7 @@ export interface TruckValues {
   /** Local key for React lists; never sent. */
   key: string;
   plate: string;
-  vehicle: Lookup<Vehicle>;
+  vehicle: Lookup<LookupVehicle>;
   vehicleTypeCode: string;
   capacityKg: string;
   productionYear: string;
@@ -68,7 +79,7 @@ export interface TruckValues {
   taxValidUntil: string;
   kirValidUntil: string;
   licenceNo: string;
-  driver: Lookup<Driver>;
+  driver: Lookup<LookupDriver>;
   fullName: string;
   licenceClass: string;
   licenceValidUntil: string;
@@ -115,11 +126,13 @@ export function truckTypeCode(truck: TruckValues): string | null {
 }
 
 export function needsContainer(truck: TruckValues, types: readonly VehicleType[]): boolean {
+  const vehicle = currentLookup(truck.vehicle, plateKey(truck.plate));
+  if (vehicle.state === "found") return vehicle.item.needsContainerNo;
   const code = truckTypeCode(truck);
   return !!code && types.some((type) => type.code === code && type.needsContainerNo);
 }
 
-export function isBlacklisted(driver: Driver | null | undefined): boolean {
+export function isBlacklisted(driver: { registryStatus: string | null } | null | undefined): boolean {
   return driver?.registryStatus?.trim().toUpperCase() === "BLACKLIST";
 }
 
@@ -143,6 +156,7 @@ export function validateTruck(truck: TruckValues, context: Pick<FormContext, "ty
     const vehicle = currentLookup(truck.vehicle, plateKey(truck.plate));
     if (vehicle.state === "idle" || vehicle.state === "loading") errors.plate = "Tekan Periksa untuk mencari plat ini.";
     else if (vehicle.state === "failed") errors.plate = "Plat belum bisa diperiksa. Tekan Periksa lagi.";
+    else if (vehicle.state === "found" && !vehicle.item.isActive) errors.plate = "Kendaraan ini tidak aktif. Hubungi admin logistik.";
     else if (vehicle.state === "missing") {
       if (!truck.vehicleTypeCode) errors.vehicleTypeCode = "Pilih jenis kendaraan.";
       const vehicleErrors = validateVehicle(
@@ -177,6 +191,10 @@ export function validateTruck(truck: TruckValues, context: Pick<FormContext, "ty
     else if (driver.state === "failed") errors.licenceNo = "Nomor SIM belum bisa diperiksa. Tekan Periksa lagi.";
     else if (driver.state === "found" && isBlacklisted(driver.item)) {
       errors.licenceNo = "Supir ini masuk daftar hitam VCF dan tidak bisa didaftarkan.";
+    } else if (driver.state === "found" && driver.item.blocked) {
+      errors.licenceNo = "Supir ini sedang diblokir di pabrik dan tidak bisa didaftarkan.";
+    } else if (driver.state === "found" && !driver.item.isActive) {
+      errors.licenceNo = "Supir ini tidak aktif. Hubungi admin logistik.";
     } else if (driver.state === "missing") {
       const driverErrors = validateDriver(newDriverValues(truck));
       for (const name of ["fullName", "licenceClass", "licenceValidUntil", "phone"] as const) {
@@ -405,6 +423,135 @@ export function outgoingPayload(values: OutgoingValues, submit: boolean): Regist
   body.allocations = values.orders.map((entry) => ({ deliveryOrderId: entry.order.id, qtyPlanned: wholeKg(entry.qty) }));
   body.trips = values.trucks.map(truckPayload);
   return body;
+}
+
+// --- refusals of the API, back onto the form -------------------------------------
+
+const TRUCK_FIELDS: Record<string, string> = {
+  "vehicle.id": "plate",
+  "vehicle.plateDisplay": "plate",
+  "vehicle.vehicleTypeCode": "vehicleTypeCode",
+  "vehicle.capacityKg": "capacityKg",
+  "vehicle.productionYear": "productionYear",
+  "vehicle.tareKg": "tareKg",
+  "driver.id": "licenceNo",
+  "driver.licenceNo": "licenceNo",
+  "driver.fullName": "fullName",
+  "driver.licenceClass": "licenceClass",
+  "driver.licenceValidUntil": "licenceValidUntil",
+  "driver.phone": "phone",
+  containerNo: "containerNo",
+  handoverNo: "handoverNo",
+};
+const TOP_FIELDS = new Set(["plannedDate", "remark", "closeCargo", "flexiBag"]);
+
+/** Form path for one API field path of a registration body, or null when the form has no such field. */
+function formPath(direction: Direction, path: string): string | null {
+  if (TOP_FIELDS.has(path)) return path;
+  if (path === "allocations") return direction === "IN" ? "contracts" : "orders";
+  if (path === "transporterId") return direction === "IN" ? "transporter" : null;
+  const allocation = /^allocations\.(\d+)\.qtyPlanned$/.exec(path);
+  if (allocation) return direction === "OUT" ? `orders.${allocation[1]}.qty` : null;
+  const letter = /^trips\.0\.letters\.(\d+)\.(.+)$/.exec(path);
+  if (letter && direction === "IN") return letter[2] === "allocationSeq" ? "contracts" : `letters.${letter[1]}.${letter[2]}`;
+  const trip = /^trips\.(\d+)\.(.+)$/.exec(path);
+  if (trip && TRUCK_FIELDS[trip[2]]) {
+    const truck = direction === "IN" ? "truck" : `trucks.${trip[1]}`;
+    return `${truck}.${TRUCK_FIELDS[trip[2]]}`;
+  }
+  return null;
+}
+
+/**
+ * The messages of a VALIDATION refusal (written by the API in Indonesian), on
+ * the fields of the form they belong to. `unplaced` keeps the ones without a field.
+ */
+export function registrationFieldErrors(
+  direction: Direction,
+  fieldMessages: Record<string, string>,
+): { errors: FormErrors; unplaced: string[] } {
+  const errors: FormErrors = {};
+  const unplaced: string[] = [];
+  for (const [path, message] of Object.entries(fieldMessages)) {
+    const target = formPath(direction, path);
+    if (target && !errors[target]) errors[target] = message;
+    else if (!target) unplaced.push(message);
+  }
+  return { errors, unplaced };
+}
+
+// --- a draft back into the forms ----------------------------------------------------
+
+const asText = (value: number | string | null | undefined): string => (value === null || value === undefined ? "" : String(value));
+
+/** A truck of a draft with its plate and licence filled; the form looks both up again. */
+export function truckFromTrip(trip: Trip, key: string): TruckValues {
+  return {
+    ...emptyTruck(key),
+    plate: trip.vehicle?.plateDisplay ?? "",
+    licenceNo: trip.driver?.licenceNo ?? "",
+    containerNo: trip.containerNo ?? "",
+    handoverNo: trip.allocations[0]?.handoverNo ?? "",
+  };
+}
+
+export function incomingFromDraft(registration: Registration, parameters: readonly QualityParameter[]): IncomingValues {
+  const allocations = registration.allocations.filter((allocation) => allocation.contract !== null);
+  const trip = registration.trips[0];
+  return {
+    contracts: allocations.map((allocation) => ({
+      id: allocation.contract?.id ?? "",
+      contractNo: allocation.contract?.contractNo ?? allocation.contractNo,
+      direction: "IN",
+      partner: allocation.partner,
+      product: allocation.product,
+      qtyContract: null,
+      uom: registration.uom,
+      tolerancePct: allocation.tolerancePct,
+      certificate: null,
+      validFrom: null,
+      validUntil: null,
+      customerPoNo: null,
+      state: "OPEN",
+      syncedAt: null,
+    })),
+    transporter: registration.transporter,
+    plannedDate: registration.plannedDate ?? "",
+    truck: trip ? truckFromTrip(trip, "truck") : emptyTruck("truck"),
+    letters: allocations.map((allocation) => {
+      const line = trip?.allocations.find((item) => item.seq === allocation.seq);
+      const letter = emptyLetter(parameters);
+      if (!line) return letter;
+      return {
+        handoverNo: line.handoverNo ?? "",
+        spbNo: line.spbNo ?? "",
+        spbDate: line.spbDate ?? "",
+        originTicketNo: line.originTicketNo ?? "",
+        originGrossKg: asText(line.originGrossKg),
+        originTareKg: asText(line.originTareKg),
+        originNetKg: asText(line.originNetKg),
+        quality: Object.fromEntries(parameters.map((parameter) => [parameter.code, asText(line.quality[parameter.code])])),
+      };
+    }),
+    remark: registration.remark ?? "",
+  };
+}
+
+const yesNoOf = (value: boolean | null): YesNo => (value === null ? "" : value ? "yes" : "no");
+
+/** `orders` are the delivery orders the draft names, as GET /api/delivery-orders/:id answers them. */
+export function outgoingFromDraft(registration: Registration, orders: readonly DeliveryOrder[]): OutgoingValues {
+  return {
+    orders: registration.allocations.flatMap((allocation) => {
+      const order = orders.find((item) => String(item.id) === String(allocation.deliveryOrder?.id));
+      return order ? [{ order, qty: asText(allocation.qtyPlanned) }] : [];
+    }),
+    trucks: registration.trips.map((trip) => truckFromTrip(trip, `draft-${trip.seq}`)),
+    closeCargo: yesNoOf(registration.closeCargo),
+    flexiBag: yesNoOf(registration.flexiBag),
+    plannedDate: registration.plannedDate ?? "",
+    remark: registration.remark ?? "",
+  };
 }
 
 // --- delivery order ---------------------------------------------------------------

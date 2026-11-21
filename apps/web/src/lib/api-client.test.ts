@@ -297,6 +297,33 @@ describe("errors", () => {
     expect(without.fields).toEqual([]);
   });
 
+  it("keeps the message of each refused field as the API writes it", async () => {
+    const { client } = setup(
+      json(400, {
+        error: {
+          code: "VALIDATION",
+          message: "Data yang dikirim tidak valid.",
+          fields: [
+            { field: "allocations", message: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang." },
+            { field: "trips.0.driver.licenceNo", message: "Nomor SIM wajib diisi." },
+            { path: "address" },
+          ],
+        },
+      }),
+      json(400, { error: { code: "VALIDATION", message: "Invalid body", fields: { plateDisplay: "too short", roles: ["x"] } } }),
+    );
+    client.setAccessToken("t");
+
+    const asList = (await client.request("/api/registrations", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+    const asMap = (await client.request("/api/vehicles", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+
+    expect(asList.fieldMessages).toEqual({
+      allocations: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang.",
+      "trips.0.driver.licenceNo": "Nomor SIM wajib diisi.",
+    });
+    expect(asMap.fieldMessages).toEqual({ plateDisplay: "too short" });
+  });
+
   it("falls back to an HTTP code when the body is not the envelope", async () => {
     const { client } = setup(new Response("<html>Bad gateway</html>", { status: 502 }));
     client.setAccessToken("t");

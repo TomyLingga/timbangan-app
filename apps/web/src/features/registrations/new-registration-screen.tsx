@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { IncomingForm } from "@/features/registrations/incoming-form";
 import { OutgoingForm } from "@/features/registrations/outgoing-form";
-import { canCreateIncoming, canCreateOutgoing } from "@/lib/roles";
+import { canCreateIncoming, canCreateOutgoing } from "@/lib/permissions";
 
 /** /registrasi/baru?arah=in, or ?arah=out&do=<id>. */
 export function NewRegistrationScreen() {
@@ -20,13 +20,23 @@ export function NewRegistrationScreen() {
 
   if (direction === "in") {
     if (!canCreateIncoming(user)) {
-      return <AccessDenied reason="Registrasi incoming dibuat oleh PKS atau supplier, atau oleh petugas atas nama mereka." />;
+      return (
+        <AccessDenied
+          module="registrations"
+          reason="Registrasi incoming dibuat oleh akun pemasok atau karyawan dengan hak akses Registrasi tingkat buat."
+        />
+      );
     }
     return <IncomingForm />;
   }
   if (direction === "out") {
     if (!canCreateOutgoing(user)) {
-      return <AccessDenied reason="Registrasi outgoing dibuat oleh transporter DO itu, atau oleh petugas atas namanya." />;
+      return (
+        <AccessDenied
+          module="registrations"
+          reason="Registrasi outgoing dibuat oleh akun transporter atau karyawan dengan hak akses Registrasi tingkat buat."
+        />
+      );
     }
     return <OutgoingForm orderId={searchParams.get("do")} />;
   }

@@ -15,7 +15,8 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { formatDuration, formatNumber } from "@/lib/format";
 import { syncErrorMessage } from "@/lib/messages";
 import { MOTION_FAST } from "@/lib/motion";
-import { canSyncOdoo } from "@/lib/roles";
+import { AccessDenied } from "@/components/page-parts";
+import { canSyncOdoo, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { Direction, SyncResult } from "@/lib/types";
 
@@ -70,6 +71,9 @@ export function ContractsScreen() {
       setSync({ phase: "failed", message: syncErrorMessage(error) });
     }
   }
+
+  if (!user) return null;
+  if (!canView(user, "contracts")) return <AccessDenied module="contracts" />;
 
   return (
     <div className="flex flex-col gap-5">
