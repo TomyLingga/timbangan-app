@@ -21,6 +21,7 @@ export interface WeighTrip {
   transporter: { id: number; name: string } | null;
   qtyPlanned: number | null;
   docGrossKg: number | null;
+  docTareKg: number | null;
   docNetKg: number | null;
   grossKg: number | null;
   tareKg: number | null;
@@ -120,6 +121,7 @@ export async function loadWeighTrip(orm: Orm, tripId: number): Promise<WeighTrip
     transporter: row.transporterId !== null && row.transporterName !== null ? { id: row.transporterId, name: row.transporterName } : null,
     qtyPlanned: trip.qtyPlanned,
     docGrossKg: trip.docGrossKg,
+    docTareKg: trip.docTareKg,
     docNetKg: trip.docNetKg,
     grossKg: trip.grossKg,
     tareKg: trip.tareKg,

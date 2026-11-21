@@ -26,8 +26,8 @@ describe("GET /api/weighbridge/card/:uid", () => {
       stage: 1,
       kind: "GROSS",
       camera: 3,
-      expected: { plateNo: "BK8001AA", plateDisplay: "BK 8001 AA", docGrossKg: 30_000, docNetKg: 20_000, vehicleTareKg: null },
-      trip: { id: truck.tripId, direction: "IN", flowCode: "IN_CPO", status: "CHECKED_IN", currentStep: "WEIGH_1", plateNo: "BK8001AA", grossKg: null, tareKg: null, netKg: null },
+      expected: { plateNo: "BK8001AA", plateDisplay: "BK 8001 AA", docGrossKg: 30_000, docTareKg: 10_000, docNetKg: 20_000, vehicleTareKg: null },
+      trip: { id: truck.tripId, direction: "IN", flowCode: "IN_CPO", status: "CHECKED_IN", currentStep: "WEIGH_1", plateNo: "BK8001AA", docGrossKg: 30_000, docTareKg: 10_000, docNetKg: 20_000, grossKg: null, tareKg: null, netKg: null },
       message: "Plat BK 8001 AA. Timbang pertama, bruto. Tunggu berat stabil.",
       speech: ["Plat B K delapan nol nol satu A A.", "Timbang pertama, bruto.", "Tunggu berat stabil."],
     });
@@ -113,7 +113,7 @@ describe("POST /api/weighbridge/weigh without exceptions", () => {
     const truck = await outgoing({ dos: [30_000] });
     // outgoing bulk: the first weighing follows check-in
     const card = (await station(wbOut.key, "GET", `/api/weighbridge/card/${truck.cardUid}`)).json();
-    expect(card).toMatchObject({ stage: 1, kind: "TARE", camera: 1, expected: { vehicleTareKg: 15_000 } });
+    expect(card).toMatchObject({ stage: 1, kind: "TARE", camera: 1, expected: { docTareKg: null, vehicleTareKg: 15_000 }, trip: { docTareKg: null } });
     expect(card.message).toBe(`Plat ${card.expected.plateDisplay}. Timbang pertama, tarra. Tunggu berat stabil.`);
     expect((await weigh(wbOut.key, { cardUid: truck.cardUid, weightKg: 15_010, plateRead: truck.plateNo })).json().trip).toMatchObject({ tareKg: 15_010, currentStep: "CLEANLINESS" });
     await forceReady(truck.tripId, "WEIGH_2");

@@ -64,6 +64,7 @@ export function registerWeighbridgeRoutes(app: FastifyInstance, context: AppCont
         plateNo: weigh.plateNo,
         plateDisplay: weigh.plateDisplay,
         docGrossKg: weigh.trip.docGrossKg,
+        docTareKg: weigh.trip.docTareKg,
         docNetKg: weigh.trip.docNetKg,
         vehicleTareKg: weigh.vehicle?.tareKg ?? null,
       },
