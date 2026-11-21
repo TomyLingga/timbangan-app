@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.expo/
+dev/.profile/
+dev/out/
+*.log
+.env
+.env.*

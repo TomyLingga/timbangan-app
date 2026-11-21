@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Timbangan Lapangan",
+    "slug": "timbangan-lapangan",
+    "scheme": "timbangan",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "android": {
+      "package": "app.timbangan.lapangan",
+      "softwareKeyboardLayoutMode": "resize"
+    },
+    "web": {
+      "output": "single",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-status-bar",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Kamera dipakai untuk scan barcode SPJ dan memotret bukti.",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Kamera dipakai untuk memotret bukti bongkar dan segel.",
+          "photosPermission": "Galeri dipakai untuk memilih foto bukti."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Identitas dicek sebelum keputusan dikirim."
+        }
+      ]
+    ]
+  }
+}
