@@ -42,7 +42,7 @@ describe("login", () => {
     );
     const answer = await client.login("operator", "rahasia");
     expect(answer.user).toEqual({ id: 1 });
-    expect(bodyOf(calls[0]!.init)).toEqual({ username: "operator", password: "rahasia", client: "mobile" });
+    expect(bodyOf(calls[0]!.init)).toEqual({ username: "operator", password: "rahasia", client: "android" });
     expect(tokens.value).toBe("r1");
     await client.request("/api/me");
     expect(authOf(calls[1]!.init)).toBe("Bearer a1");
@@ -64,7 +64,7 @@ describe("silent refresh", () => {
     let meCalls = 0;
     const { client, calls, tokens } = setup((url, init) => {
       if (url.endsWith("/api/auth/refresh")) {
-        expect(bodyOf(init)).toEqual({ refreshToken: "r1", client: "mobile" });
+        expect(bodyOf(init)).toEqual({ refreshToken: "r1" });
         return json(200, { accessToken: "a2", refreshToken: "r2" });
       }
       meCalls += 1;
@@ -173,7 +173,7 @@ describe("logout", () => {
       throw new TypeError("offline");
     }, memoryTokens("r1"));
     await client.logout();
-    expect(bodyOf(calls[0]!.init)).toEqual({ refreshToken: "r1", client: "mobile" });
+    expect(bodyOf(calls[0]!.init)).toEqual({ refreshToken: "r1" });
     expect(tokens.value).toBeNull();
     expect(client.hasAccessToken()).toBe(false);
   });

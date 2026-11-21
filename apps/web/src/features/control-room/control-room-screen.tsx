@@ -17,7 +17,7 @@ import type { FeedStatus } from "@/lib/control-room-stream";
 import { cn } from "@/lib/utils";
 
 // /ruang-kontrol: the control room. KPI strip on top, the live plant map in the middle, zones and the latest
-// changes beside it. `?layar=tv` is the wall-screen mode: its own full-screen frame over the app shell, larger type,
+// changes beside it. /layar-kontrol (or `?layar=tv`) is the wall-screen mode: a full-screen frame without the app shell, larger type,
 // no pointer interaction, and the cursor hidden after a few idle seconds.
 
 const subscribeNever = () => () => {};
@@ -74,7 +74,8 @@ function LoadingLayout() {
   );
 }
 
-export function ControlRoomScreen() {
+/** `wall`: the wall-screen page /layar-kontrol, which has no app shell around it. */
+export function ControlRoomScreen({ wall = false }: { wall?: boolean }) {
   const { state: auth } = useAuth();
   const user = auth.status === "authenticated" ? auth.user : null;
   const allowed = !!user && user.kind === "INTERNAL" && !!user.permissions.dashboard;
@@ -86,11 +87,12 @@ export function ControlRoomScreen() {
       />
     );
   }
-  return <ControlRoom />;
+  return <ControlRoom wall={wall} />;
 }
 
-function ControlRoom() {
-  const tv = useSyncExternalStore(subscribeNever, readTvMode, () => false);
+function ControlRoom({ wall }: { wall: boolean }) {
+  const tvQuery = useSyncExternalStore(subscribeNever, readTvMode, () => false);
+  const tv = wall || tvQuery;
   const live = useLiveControlRoom();
   const plan = usePlanDrawing();
   const now = useNow();
@@ -184,7 +186,7 @@ function ControlRoom() {
         <div className="flex flex-wrap items-center gap-3">
           <LiveBadge status={live.status} receivedAt={live.receivedAt} tv={false} />
           <Button asChild variant="secondary" size="sm">
-            <Link href="/ruang-kontrol?layar=tv" target="_blank" rel="noopener">
+            <Link href="/layar-kontrol" target="_blank" rel="noopener">
               <Maximize2 aria-hidden="true" />
               Layar TV
             </Link>

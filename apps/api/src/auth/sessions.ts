@@ -14,18 +14,36 @@ const isLocalHost = (hostname: string) => hostname === "localhost" || hostname =
  * Starts a session for the user: stores the hash of a new refresh token, sends the token as an httpOnly
  * cookie and answers a new access token. `orm` may be a transaction.
  */
-export async function issueSession(context: AppContext, orm: Orm, request: FastifyRequest, reply: FastifyReply, userId: number): Promise<string> {
+/** Who holds a session: the browser keeps its refresh token in a cookie, the phone app in its secure store. */
+export type SessionClient = "WEB" | "ANDROID" | "IOS";
+
+export interface IssuedSession {
+  accessToken: string;
+  /** Only for a phone session; a web session gets its refresh token as a cookie. */
+  refreshToken?: string;
+}
+
+export async function issueSession(
+  context: AppContext,
+  orm: Orm,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  userId: number,
+  client: SessionClient = "WEB",
+): Promise<IssuedSession> {
   const now = context.now();
   const maxAge = context.config.refreshTokenTtlDays * DAY_S;
   const refresh = newRefreshToken();
   await orm.insert(authSessions).values({
     userId,
     tokenHash: refresh.hash,
-    client: "WEB",
+    client,
     ip: request.ip,
     createdAt: now,
     expiresAt: new Date(now.getTime() + maxAge * 1000),
   });
+  const accessToken = await signAccessToken(context.config.jwtSecret, userId, context.config.accessTokenTtlS, now);
+  if (client !== "WEB") return { accessToken, refreshToken: refresh.token };
   reply.setCookie(REFRESH_COOKIE, refresh.token, {
     path: COOKIE_PATH,
     httpOnly: true,
@@ -33,7 +51,7 @@ export async function issueSession(context: AppContext, orm: Orm, request: Fasti
     secure: !isLocalHost(request.hostname),
     maxAge,
   });
-  return signAccessToken(context.config.jwtSecret, userId, context.config.accessTokenTtlS, now);
+  return { accessToken };
 }
 
 export function clearSessionCookie(reply: FastifyReply): void {

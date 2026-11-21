@@ -61,7 +61,7 @@ export function registerSsoRoutes(app: FastifyInstance, context: AppContext): vo
       if (userId === undefined) return null;
       // the bootstrap admins get every active module again at each sign-in, so a module added later reaches them
       if (context.config.bootstrapAdminEmails.includes(identity.email.toLowerCase())) await grantEverything(tx, userId, now);
-      const accessToken = await issueSession(context, tx, request, reply, userId);
+      const { accessToken } = await issueSession(context, tx, request, reply, userId);
       return { accessToken, user: await loadAccount(tx, userId) };
     });
     if (!session) throw rejected();

@@ -64,6 +64,8 @@ export interface ApiClientOptions {
   timeoutMs?: number;
   /** Called once when a session that was in use can no longer be renewed. */
   onSignedOut?: () => void;
+  /** Which phone this is; the API records it on the session. Default android. */
+  clientKind?: "android" | "ios";
 }
 
 export interface ApiClient {
@@ -130,6 +132,7 @@ const isAbort = (error: unknown) => typeof error === "object" && error !== null 
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const { baseUrl, tokens, onSignedOut } = options;
+  const clientKind = options.clientKind ?? "android";
   const doFetch: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const defaultTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
@@ -167,7 +170,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     const stored = await tokens.load();
     if (!stored) return false;
     const tokenAtStart = accessToken;
-    const response = await send(REFRESH_PATH, { method: "POST", body: { refreshToken: stored, client: "mobile" } }, null);
+    const response = await send(REFRESH_PATH, { method: "POST", body: { refreshToken: stored } }, null);
     const body = await readBody(response);
     if (response.status === 401) {
       // a sign-in may have stored a new session while this call was out; keep it
@@ -219,7 +222,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   }
 
   async function login(username: string, password: string): Promise<LoginResponse> {
-    const answer = await request<LoginResponse>(LOGIN_PATH, { method: "POST", auth: false, body: { username, password, client: "mobile" } });
+    const answer = await request<LoginResponse>(LOGIN_PATH, { method: "POST", auth: false, body: { username, password, client: clientKind } });
     if (!answer?.accessToken || !answer.refreshToken) throw new ApiError(200, "BAD_RESPONSE", "The login answer carried no tokens");
     await tokens.save(answer.refreshToken);
     accessToken = answer.accessToken;
@@ -232,7 +235,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     await tokens.clear();
     if (!stored) return;
     // best effort: the session also ends on the server when the token expires
-    await send(LOGOUT_PATH, { method: "POST", body: { refreshToken: stored, client: "mobile" }, timeoutMs: 5_000 }, null).catch(() => undefined);
+    await send(LOGOUT_PATH, { method: "POST", body: { refreshToken: stored }, timeoutMs: 5_000 }, null).catch(() => undefined);
   }
 
   return {

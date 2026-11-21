@@ -88,7 +88,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.setErrorHandler(errorHandler);
   app.setNotFoundHandler(notFoundHandler);
   await app.register(helmet);
-  await app.register(cors, { origin: [context.config.webOrigin], credentials: true });
+  // content-disposition: the web page reads the file name of a CSV download
+  await app.register(cors, { origin: [context.config.webOrigin], credentials: true, exposedHeaders: ["content-disposition"] });
   await app.register(cookie);
   app.decorateRequest("account", null);
   app.decorateRequest("station", null);

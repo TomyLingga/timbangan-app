@@ -3,6 +3,7 @@
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { Platform } from "react-native";
 import { type ApiClient, createApiClient, isApiError, SIGNED_OUT } from "../api/client";
 import type { Account, MeResponse } from "../api/types";
 import { tokenStore } from "../platform/tokens";
@@ -32,7 +33,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signedOutRef = useRef<() => void>(() => undefined);
 
   const api = useMemo(
-    () => createApiClient({ baseUrl: API_URL, tokens: tokenStore, onSignedOut: () => signedOutRef.current() }),
+    () => createApiClient({ baseUrl: API_URL, tokens: tokenStore, clientKind: Platform.OS === "ios" ? "ios" : "android", onSignedOut: () => signedOutRef.current() }),
     [],
   );
 

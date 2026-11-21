@@ -36,11 +36,11 @@ import {
 
 export const CLEANLINESS_ITEMS: [CleanlinessItemKey, string][] = [
   ["containerClean", "Kontainer bersih atau kosong dari sisa produk sebelumnya"],
-  ["noPuddles", "Genangan minyak/air/cairan chemical, dan atau sejenisnya"],
-  ["noForeignMatter", "Benda asing/Pasir/Karat/Kotoran"],
-  ["noPestNajis", "Pest dan najis atau sejenisnya"],
-  ["wallsClean", "Dinding kontainer dalam keadaan bersih, kering dan tidak bocor"],
-  ["noOdour", "Tidak ada bau yang dapat mempengaruhi mutu produk yang akan diisi di kontainer"],
+  ["noLiquid", "Genangan minyak/air/cairan chemical, dan atau sejenisnya"],
+  ["noForeignObject", "Benda asing/Pasir/Karat/Kotoran"],
+  ["noPestOrNajis", "Pest dan najis atau sejenisnya"],
+  ["wallsCleanDryNoLeak", "Dinding kontainer dalam keadaan bersih, kering dan tidak bocor"],
+  ["noOdor", "Tidak ada bau yang dapat mempengaruhi mutu produk yang akan diisi di kontainer"],
 ];
 const NOZZLE_ITEMS: [string, string][] = [
   ["flashLight", "Monitoring Flash Light"],
@@ -60,7 +60,7 @@ export const cleanlinessForm: FormDefinition = {
     flashLight: null,
     nozzleVisual: null,
     nozzleNo: null,
-    nozzleOdour: null,
+    nozzleOdor: null,
     disposition: null,
     remark: "",
   }),
@@ -72,7 +72,7 @@ export const cleanlinessForm: FormDefinition = {
           { kind: "section", key: "s-nozzle", title: "Monitoring nozzle" },
           ...NOZZLE_ITEMS.map(([key, label]): Field => ({ kind: "choice", key, label, options: OK_NOT_OK, required: true })),
           { kind: "choice", key: "nozzleNo", label: "Number Nozzle Loading", options: NOZZLE_NUMBERS, required: true, columns: 2 },
-          { kind: "choice", key: "nozzleOdour", label: "Nozzle Odor", options: OK_NOT_OK, required: true },
+          { kind: "choice", key: "nozzleOdor", label: "Nozzle Odor", options: OK_NOT_OK, required: true },
         ] satisfies Field[])
       : []),
     { kind: "section", key: "s-decision", title: "Keputusan" },
@@ -82,23 +82,25 @@ export const cleanlinessForm: FormDefinition = {
   validate: (values, ctx) => {
     const errors: Errors = {};
     requireChoices(values, CLEANLINESS_ITEMS.map(([key]) => key), errors);
-    if (needsNozzle(ctx.step.truck.flowCode)) requireChoices(values, ["flashLight", "nozzleVisual", "nozzleNo", "nozzleOdour"], errors);
+    if (needsNozzle(ctx.step.truck.flowCode)) requireChoices(values, ["flashLight", "nozzleVisual", "nozzleNo", "nozzleOdor"], errors);
     requireChoices(values, ["disposition"], errors);
     return errors;
   },
   body: (values, ctx, clientUuid): CleanlinessBody & Record<string, unknown> => ({
     clientUuid,
-    items: Object.fromEntries(CLEANLINESS_ITEMS.map(([key]) => [key, choice(values, key) === "OK"])) as CleanlinessBody["items"],
-    nozzle: needsNozzle(ctx.step.truck.flowCode)
-      ? {
-          flashLight: choice(values, "flashLight") === "OK",
-          nozzleVisual: choice(values, "nozzleVisual") === "OK",
-          nozzleOdour: choice(values, "nozzleOdour") === "OK",
-          nozzleNo: Number(choice(values, "nozzleNo")),
-        }
-      : null,
-    result: choice(values, "disposition") === "OK" ? "PASS" : "FAIL",
-    ...remarkOf(values),
+    items: {
+      ...(Object.fromEntries(CLEANLINESS_ITEMS.map(([key]) => [key, choice(values, key) === "OK"])) as Record<CleanlinessItemKey, boolean>),
+      ...(needsNozzle(ctx.step.truck.flowCode)
+        ? {
+            flashLight: choice(values, "flashLight") === "OK",
+            nozzleVisual: choice(values, "nozzleVisual") === "OK",
+            nozzleOdor: choice(values, "nozzleOdor") === "OK",
+          }
+        : {}),
+    },
+    ...(needsNozzle(ctx.step.truck.flowCode) ? { nozzleNo: Number(choice(values, "nozzleNo")) } : {}),
+    disposition: choice(values, "disposition") === "OK" ? "OK" : "NOT_OK",
+    ...(text(values, "remark").trim() ? { conclusion: text(values, "remark").trim() } : {}),
   }),
   summary: (values, ctx) => {
     const ok = (key: string) => ({ value: labelOf(OK_NOT_OK, choice(values, key)), tone: toneOf(OK_NOT_OK, choice(values, key)) });
@@ -109,7 +111,7 @@ export const cleanlinessForm: FormDefinition = {
         ? [
             ...NOZZLE_ITEMS.map(([key, label]) => ({ label, ...ok(key) })),
             { label: "Number Nozzle Loading", value: labelOf(NOZZLE_NUMBERS, choice(values, "nozzleNo")) },
-            { label: "Nozzle Odor", ...ok("nozzleOdour") },
+            { label: "Nozzle Odor", ...ok("nozzleOdor") },
           ]
         : []),
       { label: "Disposisi", ...ok("disposition") },
@@ -189,7 +191,8 @@ export const loadingStartForm: FormDefinition = {
 };
 
 /** GUESSED plausibility range of the loading temperature; the API has no parameter row for it. */
-export const TEMPERATURE_RANGE = { min: 0, max: 120 };
+// the API refuses a loading temperature outside 0 to 150 °C (apps/api/src/work/outgoing.ts)
+export const TEMPERATURE_RANGE = { min: 0, max: 150 };
 export const QUALITY = [
   { value: "OK", label: "OK", tone: "ok" as const },
   { value: "NOT_OK", label: "NOT OK", tone: "bad" as const },
@@ -229,7 +232,7 @@ export const loadingFinishForm: FormDefinition = {
     temperatureC: parseDecimal(text(values, "temperature")) ?? 0,
     qualityOk: choice(values, "quality") === "OK",
     handbrakeOn: choice(values, "handbrake") === "ON",
-    engineOn: choice(values, "engine") === "ON",
+    engineOff: choice(values, "engine") === "OFF",
     ...remarkOf(values),
   }),
   summary: (values, ctx) => [

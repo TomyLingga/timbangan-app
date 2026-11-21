@@ -65,7 +65,7 @@ export interface MeResponse {
 export interface LoginRequest {
   username: string;
   password: string;
-  client: "mobile";
+  client: "android" | "ios";
 }
 export interface LoginResponse {
   accessToken: string;
@@ -73,10 +73,9 @@ export interface LoginResponse {
   user: Account;
 }
 
-/** GUESSED: POST /api/auth/refresh and /api/auth/logout with the refresh token in the body (docs section 4). */
+/** FROM CODE apps/api/src/auth/routes.ts: POST /api/auth/refresh and /api/auth/logout with the refresh token in the body (docs section 4). */
 export interface RefreshRequest {
   refreshToken: string;
-  client: "mobile";
 }
 export interface RefreshResponse {
   accessToken: string;
@@ -246,18 +245,19 @@ export interface UnloadingBody {
   photoFileIds?: number[];
 }
 
-/** GUESSED keys of the six container items of the cleanliness check (labels from the old form). */
-export type CleanlinessItemKey = "containerClean" | "noPuddles" | "noForeignMatter" | "noPestNajis" | "wallsClean" | "noOdour";
-/** GUESSED keys of the nozzle items (outgoing bulk only). */
-export type NozzleItemKey = "flashLight" | "nozzleVisual" | "nozzleOdour";
+/** FROM CODE apps/api/src/work/outgoing.ts: keys of the six container items of the cleanliness check (labels from the old form). */
+export type CleanlinessItemKey = "containerClean" | "noLiquid" | "noForeignObject" | "noPestOrNajis" | "wallsCleanDryNoLeak" | "noOdor";
+/** FROM CODE: keys of the nozzle items (outgoing bulk only). */
+export type NozzleItemKey = "flashLight" | "nozzleVisual" | "nozzleOdor";
 
-/** GUESSED: route `cleanliness`. Every item true = OK. `nozzle` is null for packed goods. */
+/** FROM CODE: route `cleanliness`. Every item true = OK. `nozzle` is null for packed goods. */
 export interface CleanlinessBody {
   clientUuid: string;
-  items: Record<CleanlinessItemKey, boolean>;
-  nozzle: { flashLight: boolean; nozzleVisual: boolean; nozzleOdour: boolean; nozzleNo: number } | null;
-  result: "PASS" | "FAIL";
-  remark?: string;
+  /** true = OK. The nozzle items are required for outgoing bulk and left out for packed goods. */
+  items: Record<CleanlinessItemKey, boolean> & Partial<Record<NozzleItemKey, boolean>>;
+  nozzleNo?: number;
+  disposition: "OK" | "NOT_OK";
+  conclusion?: string;
 }
 
 /** GUESSED: route `qc-loading`. Values keyed by quality parameter code (FFA, MNI, IV, ...). */
@@ -275,14 +275,14 @@ export interface LoadingStartBody {
   startedAt: string;
 }
 
-/** GUESSED: route `loading/finish`. */
+/** FROM CODE: route `loading/finish`. */
 export interface LoadingFinishBody {
   clientUuid: string;
   finishedAt: string;
   temperatureC: number;
   qualityOk: boolean;
   handbrakeOn: boolean;
-  engineOn: boolean;
+  engineOff: boolean;
   remark?: string;
 }
 

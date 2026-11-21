@@ -196,25 +196,26 @@ describe("unloading", () => {
 });
 
 describe("cleanliness", () => {
-  const items = { containerClean: "OK", noPuddles: "OK", noForeignMatter: "OK", noPestNajis: "OK", wallsClean: "NOT_OK", noOdour: "OK" };
+  const items = { containerClean: "OK", noLiquid: "OK", noForeignObject: "OK", noPestOrNajis: "OK", wallsCleanDryNoLeak: "NOT_OK", noOdor: "OK" };
   it("requires the nozzle items for bulk loading only", () => {
     const bulk = context("CLEANLINESS", "OUT_BULK");
     const packed = context("CLEANLINESS", "OUT_PACKED");
     const values = fill(cleanlinessForm.initial(bulk), { ...items, disposition: "NOT_OK" });
-    expect(Object.keys(cleanlinessForm.validate(values, bulk)).sort()).toEqual(["flashLight", "nozzleNo", "nozzleOdour", "nozzleVisual"]);
+    expect(Object.keys(cleanlinessForm.validate(values, bulk)).sort()).toEqual(["flashLight", "nozzleNo", "nozzleOdor", "nozzleVisual"]);
     expect(cleanlinessForm.validate(values, packed)).toEqual({});
     expect(cleanlinessForm.body(values, packed, UUID)).toEqual({
       clientUuid: UUID,
-      items: { containerClean: true, noPuddles: true, noForeignMatter: true, noPestNajis: true, wallsClean: false, noOdour: true },
-      nozzle: null,
-      result: "FAIL",
+      items: { containerClean: true, noLiquid: true, noForeignObject: true, noPestOrNajis: true, wallsCleanDryNoLeak: false, noOdor: true },
+      disposition: "NOT_OK",
     });
   });
   it("keeps every item and the nozzle answers in the body", () => {
     const bulk = context("CLEANLINESS", "OUT_BULK");
-    const values = fill(cleanlinessForm.initial(bulk), { ...items, wallsClean: "OK", flashLight: "OK", nozzleVisual: "OK", nozzleNo: "2", nozzleOdour: "NOT_OK", disposition: "OK" });
+    const values = fill(cleanlinessForm.initial(bulk), { ...items, wallsCleanDryNoLeak: "OK", flashLight: "OK", nozzleVisual: "OK", nozzleNo: "2", nozzleOdor: "NOT_OK", disposition: "OK" });
     expect(cleanlinessForm.validate(values, bulk)).toEqual({});
-    expect(cleanlinessForm.body(values, bulk, UUID).nozzle).toEqual({ flashLight: true, nozzleVisual: true, nozzleOdour: false, nozzleNo: 2 });
+    const body = cleanlinessForm.body(values, bulk, UUID);
+    expect(body.items).toMatchObject({ flashLight: true, nozzleVisual: true, nozzleOdor: false });
+    expect(body).toMatchObject({ nozzleNo: 2, disposition: "OK" });
   });
 });
 
@@ -244,8 +245,8 @@ describe("loading", () => {
 
     const running = context("LOADING", "OUT_BULK", {}, { status: "IN_PROGRESS", startedAt: "2026-11-21T07:05:00Z" });
     expect(formFor(running.step)).toBe(loadingFinishForm);
-    const values = fill(loadingFinishForm.initial(running), { temperature: "130", quality: "OK", handbrake: "ON", engine: "OFF" });
-    expect(loadingFinishForm.validate(values, running)).toEqual({ temperature: "Temp. harus antara 0 sampai 120." });
+    const values = fill(loadingFinishForm.initial(running), { temperature: "160", quality: "OK", handbrake: "ON", engine: "OFF" });
+    expect(loadingFinishForm.validate(values, running)).toEqual({ temperature: "Temp. harus antara 0 sampai 150." });
     const done = fill(values, { temperature: "45,5" });
     expect(loadingFinishForm.body(done, running, UUID)).toEqual({
       clientUuid: UUID,
@@ -253,7 +254,7 @@ describe("loading", () => {
       temperatureC: 45.5,
       qualityOk: true,
       handbrakeOn: true,
-      engineOn: false,
+      engineOff: true,
     });
     expect(loadingFinishForm.summary(done, running).slice(0, 2)).toEqual([
       { label: "Waktu Mulai", value: "14.05" },
