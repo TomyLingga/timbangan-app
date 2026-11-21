@@ -16,8 +16,8 @@ import { contractStateInfo } from "@/lib/status";
 import type { Contract, ContractList as ContractListData, Direction } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** Most rows asked for in one request; the API has no paging in this contract. */
-const PAGE_LIMIT = 100;
+/** Rows asked for in one request: the API caps a list at 50 and has no offset. */
+const PAGE_LIMIT = 50;
 
 const COLUMNS = ["Nomor kontrak", "Partner", "Barang", "Quantity", "Toleransi", "Sertifikat", "Berlaku sampai", "Status"];
 
@@ -108,16 +108,16 @@ function ContractCards({ items }: { items: Contract[] }) {
           className="rounded-lg border bg-card p-4"
         >
           <div className="flex items-start justify-between gap-3">
-            <p className="min-w-0 text-sm break-words">
+            <p className="min-w-0 text-sm wrap-break-word">
               <ContractNumber contract={contract} />
             </p>
             <StatusBadge info={contractStateInfo(contract.state)} />
           </div>
-          <p className="mt-1 text-sm break-words text-muted-foreground">{contract.partner.name}</p>
+          <p className="mt-1 text-sm wrap-break-word text-muted-foreground">{contract.partner.name}</p>
           <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 text-sm">
             <div className="col-span-2">
               <dt className="text-xs text-muted-foreground">Barang</dt>
-              <dd className="break-words">{contract.product.name}</dd>
+              <dd className="wrap-break-word">{contract.product.name}</dd>
             </div>
             <div>
               <dt className="text-xs text-muted-foreground">Quantity</dt>

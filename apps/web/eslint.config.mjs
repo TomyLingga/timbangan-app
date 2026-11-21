@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Screenshots and the temporary browser profile of dev/smoke.mjs.
+    "dev/.smoke/**",
   ]),
 ]);
 

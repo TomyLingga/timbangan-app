@@ -36,6 +36,48 @@ export function ssoErrorMessage(error: unknown): string {
   return errorMessage(error);
 }
 
+export function vcfSyncErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (error.code === "SYNC_RUNNING" || error.status === 409) {
+      return "Pengambilan data dari VCF sedang berjalan, tunggu sampai selesai lalu coba lagi.";
+    }
+    if (error.code === "NOT_CONFIGURED" || error.status === 503) return "Sambungan ke VCF belum diatur di server ini.";
+    if (error.code === "SYNC_FAILED" || error.status === 502) {
+      return "VCF tidak bisa dibaca saat ini, coba lagi beberapa saat lagi.";
+    }
+    if (error.status === 403) return "Akun ini tidak punya izin mengambil data dari VCF.";
+  }
+  return errorMessage(error);
+}
+
+/** Text shown under a field the API refused. The API's own wording is not shown. */
+export const FIELD_REFUSED = "Isian ini ditolak server.";
+
+/** For create and edit forms. `duplicate` says what is already there, in the page's own words. */
+export function saveErrorMessage(error: unknown, duplicate: string): string {
+  if (isApiError(error)) {
+    if (error.code === "DUPLICATE") return duplicate;
+    if (error.code === "VALIDATION" || error.status === 400) {
+      return "Server menolak isian ini. Periksa kolom yang ditandai, lalu simpan lagi.";
+    }
+    if (error.status === 403) return "Akun ini tidak punya izin menyimpan data ini.";
+  }
+  return errorMessage(error);
+}
+
+export function userAdminErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (error.code === "LAST_ADMIN_SELF") {
+      return "Anda admin sistem terakhir, jadi peran Admin sistem tidak bisa dilepas dari akun Anda sendiri.";
+    }
+    if (error.code === "SELF_CHANGE") return "Anda tidak bisa menonaktifkan akun Anda sendiri.";
+    if (error.code === "VALIDATION" || error.status === 400) {
+      return "Pilihan peran ditolak server. Periksa lagi peran yang dicentang.";
+    }
+  }
+  return errorMessage(error);
+}
+
 export function syncErrorMessage(error: unknown): string {
   if (isApiError(error)) {
     if (error.code === "SYNC_RUNNING" || error.status === 409) {

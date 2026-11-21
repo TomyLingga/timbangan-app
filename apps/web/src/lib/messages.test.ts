@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "@/lib/api-client";
-import { errorMessage, loginErrorMessage, ssoErrorMessage, syncErrorMessage } from "@/lib/messages";
+import {
+  errorMessage,
+  loginErrorMessage,
+  saveErrorMessage,
+  ssoErrorMessage,
+  syncErrorMessage,
+  userAdminErrorMessage,
+  vcfSyncErrorMessage,
+} from "@/lib/messages";
 
 const error = (status: number, code: string) => new ApiError(status, code, "english text from the api");
 
@@ -49,6 +57,50 @@ describe("ssoErrorMessage", () => {
     );
     expect(ssoErrorMessage(error(503, "NOT_CONFIGURED"))).toBe(
       "Masuk lewat Portal INL belum diatur di server ini. Hubungi admin sistem.",
+    );
+  });
+});
+
+describe("vcfSyncErrorMessage", () => {
+  it("explains each way the VCF sync can fail", () => {
+    expect(vcfSyncErrorMessage(error(503, "NOT_CONFIGURED"))).toBe("Sambungan ke VCF belum diatur di server ini.");
+    expect(vcfSyncErrorMessage(error(409, "SYNC_RUNNING"))).toBe(
+      "Pengambilan data dari VCF sedang berjalan, tunggu sampai selesai lalu coba lagi.",
+    );
+    expect(vcfSyncErrorMessage(error(502, "SYNC_FAILED"))).toBe(
+      "VCF tidak bisa dibaca saat ini, coba lagi beberapa saat lagi.",
+    );
+    expect(vcfSyncErrorMessage(error(403, "FORBIDDEN"))).toBe("Akun ini tidak punya izin mengambil data dari VCF.");
+  });
+});
+
+describe("saveErrorMessage", () => {
+  it("uses the text given for a duplicate", () => {
+    expect(saveErrorMessage(error(409, "DUPLICATE"), "Plat ini sudah terdaftar.")).toBe("Plat ini sudah terdaftar.");
+  });
+
+  it("points at the marked fields for a validation error", () => {
+    expect(saveErrorMessage(error(400, "VALIDATION"), "x")).toBe(
+      "Server menolak isian ini. Periksa kolom yang ditandai, lalu simpan lagi.",
+    );
+  });
+
+  it("falls back to the general text", () => {
+    expect(saveErrorMessage(error(0, "NETWORK_ERROR"), "x")).toBe(errorMessage(error(0, "NETWORK_ERROR")));
+  });
+});
+
+describe("userAdminErrorMessage", () => {
+  it("explains the two protections on the admin's own account", () => {
+    expect(userAdminErrorMessage(error(409, "LAST_ADMIN_SELF"))).toBe(
+      "Anda admin sistem terakhir, jadi peran Admin sistem tidak bisa dilepas dari akun Anda sendiri.",
+    );
+    expect(userAdminErrorMessage(error(409, "SELF_CHANGE"))).toBe("Anda tidak bisa menonaktifkan akun Anda sendiri.");
+  });
+
+  it("explains a refused role selection", () => {
+    expect(userAdminErrorMessage(error(400, "VALIDATION"))).toBe(
+      "Pilihan peran ditolak server. Periksa lagi peran yang dicentang.",
     );
   });
 });

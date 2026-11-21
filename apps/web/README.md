@@ -1,6 +1,6 @@
 # apps/web
 
-Web registrasi timbangan: Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui, `motion`. Halaman yang ada: `/login`, `/auth/sso`, Beranda (`/`), dan `/kontrak`.
+Web registrasi timbangan: Next.js 16 (App Router), React 19, Tailwind CSS 4, shadcn/ui, `motion`. Halaman yang ada: `/login`, `/auth/sso`, Beranda (`/`), `/kontrak`, `/supir`, `/kendaraan`, `/tujuan`, dan `/pengguna` (hanya admin sistem).
 
 ## Menjalankan
 
@@ -26,8 +26,9 @@ npm run build
 `dev/mock-api.mjs` meniru kontrak API tanpa dependensi. Semua nama, perusahaan, dan nomor kontrak di dalamnya karangan.
 
 - Akun partner (kata sandi `contoh-123`): `pks.contoh.a`, `transporter.contoh`.
-- Akun karyawan masuk lewat `http://localhost:3100/api/auth/sso/start?as=admin.contoh`. Rute itu berperan sebagai portal: browser dikembalikan ke `/?token=…&appId=…` (tambahkan `&to=callback` untuk `/auth/sso`). Akun lain: `pos.contoh` (tanpa tombol ambil dari Odoo), `staf.baru` (belum punya peran).
-- `MOCK_ODOO=off` membuat sinkron menjawab 503, `MOCK_SSO=off` membuat penukaran tiket menjawab 503.
+- Akun karyawan masuk lewat `http://localhost:3100/api/auth/sso/start?as=admin.contoh`. Rute itu berperan sebagai portal: browser dikembalikan ke `/?token=…&appId=…` (tambahkan `&to=callback` untuk `/auth/sso`). Akun lain: `super.contoh` (admin sistem, satu-satunya yang membuka `/pengguna`), `pos.contoh` (tanpa tombol ambil dari Odoo), `staf.baru` (belum punya peran).
+- Supir baru dari form berstatus "menunggu dikirim ke VCF" dan terkirim saat "Ambil dari VCF". Satu supir contoh selalu gagal dikirim, supaya tanda gagal dan alasannya bisa dilihat.
+- `MOCK_ODOO=off` membuat sinkron menjawab 503, `MOCK_SSO=off` membuat penukaran tiket menjawab 503, `MOCK_VCF=off` atau `MOCK_VCF=fail` membuat ambil dari VCF menjawab 503 atau 502.
 
 ## Uji asap di browser
 

@@ -2,8 +2,21 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ClipboardList, FileText, House, IdCard, Map, PackageCheck, Truck, type LucideIcon } from "lucide-react";
+import {
+  ClipboardList,
+  FileText,
+  House,
+  IdCard,
+  Map,
+  MapPin,
+  PackageCheck,
+  Truck,
+  UsersRound,
+  type LucideIcon,
+} from "lucide-react";
 
+import { canManageUsers, isStaff } from "@/lib/roles";
+import type { User } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -11,9 +24,21 @@ interface NavItem {
   icon: LucideIcon;
 }
 
-const AVAILABLE: ReadonlyArray<NavItem & { href: string }> = [
-  { href: "/", label: "Beranda", icon: House },
-  { href: "/kontrak", label: "Kontrak", icon: FileText },
+interface NavLink extends NavItem {
+  href: string;
+  /** Who gets the entry. The page behind it applies the same rule on a direct visit. */
+  visible: (user: User) => boolean;
+}
+
+const everyone = () => true;
+
+const AVAILABLE: ReadonlyArray<NavLink> = [
+  { href: "/", label: "Beranda", icon: House, visible: everyone },
+  { href: "/kontrak", label: "Kontrak", icon: FileText, visible: everyone },
+  { href: "/supir", label: "Supir", icon: IdCard, visible: isStaff },
+  { href: "/kendaraan", label: "Kendaraan", icon: Truck, visible: everyone },
+  { href: "/tujuan", label: "Tujuan", icon: MapPin, visible: isStaff },
+  { href: "/pengguna", label: "Pengguna", icon: UsersRound, visible: canManageUsers },
 ];
 
 // Modules that come in later phases. Listed so people know they are planned,
@@ -21,8 +46,6 @@ const AVAILABLE: ReadonlyArray<NavItem & { href: string }> = [
 const PLANNED: ReadonlyArray<NavItem> = [
   { label: "Registrasi", icon: ClipboardList },
   { label: "Delivery Order", icon: PackageCheck },
-  { label: "Kendaraan", icon: Truck },
-  { label: "Supir", icon: IdCard },
   { label: "Denah", icon: Map },
 ];
 
@@ -30,13 +53,13 @@ function isCurrent(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);
 }
 
-export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
+export function SidebarNav({ user, onNavigate }: { user: User; onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
     <nav aria-label="Menu utama" className="flex flex-1 flex-col gap-6 overflow-y-auto p-3">
       <ul className="flex flex-col gap-1">
-        {AVAILABLE.map((item) => {
+        {AVAILABLE.filter((item) => item.visible(user)).map((item) => {
           const current = isCurrent(pathname, item.href);
           return (
             <li key={item.href}>

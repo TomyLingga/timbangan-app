@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { awaitsRoleAssignment, canSyncOdoo, isStaff, roleLabel, roleLabels } from "@/lib/roles";
+import {
+  awaitsRoleAssignment,
+  canManageUsers,
+  canSyncOdoo,
+  canSyncVcf,
+  canWriteDestinations,
+  canWriteDrivers,
+  canWriteVehicles,
+  isStaff,
+  roleLabel,
+  roleLabels,
+  rolesForKind,
+  toggleRole,
+} from "@/lib/roles";
 import type { User } from "@/lib/types";
 
 function user(overrides: Partial<User> = {}): User {
@@ -74,6 +87,64 @@ describe("canSyncOdoo", () => {
   it("refuses a user without roles and a missing user", () => {
     expect(canSyncOdoo(user())).toBe(false);
     expect(canSyncOdoo(null)).toBe(false);
+  });
+});
+
+describe("write permissions of the master data pages", () => {
+  const allRoles = [
+    "SUPER_ADMIN",
+    "LOGISTICS_ADMIN",
+    "REGISTRATION_OPERATOR",
+    "LOGISTICS_SUPERVISOR",
+    "QC_OPERATOR",
+    "QC_SUPERVISOR",
+    "SECURITY",
+    "UNLOADING_OPERATOR",
+    "LOADING_OPERATOR",
+    "SEAL_OPERATOR",
+    "MANAGEMENT",
+    "PARTNER_SUPPLIER",
+    "PARTNER_TRANSPORTER",
+    "PARTNER_CUSTOMER",
+  ];
+  const allowed = (check: (candidate: User | null) => boolean) =>
+    allRoles.filter((role) => check(user({ roles: [role] })));
+
+  it("lets three roles add drivers and vehicles", () => {
+    const writers = ["SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR"];
+    expect(allowed(canWriteDrivers)).toEqual(writers);
+    expect(allowed(canWriteVehicles)).toEqual(writers);
+  });
+
+  it("lets the two admin roles sync VCF and edit destinations", () => {
+    expect(allowed(canSyncVcf)).toEqual(["SUPER_ADMIN", "LOGISTICS_ADMIN"]);
+    expect(allowed(canWriteDestinations)).toEqual(["SUPER_ADMIN", "LOGISTICS_ADMIN"]);
+  });
+
+  it("lets only the system admin manage users", () => {
+    expect(allowed(canManageUsers)).toEqual(["SUPER_ADMIN"]);
+    expect(canManageUsers(null)).toBe(false);
+  });
+});
+
+describe("rolesForKind", () => {
+  const roles = [
+    { code: "SUPER_ADMIN", name: "System admin", scope: "INTERNAL" as const },
+    { code: "SECURITY", name: "Security", scope: "INTERNAL" as const },
+    { code: "PARTNER_TRANSPORTER", name: "Transporter", scope: "PARTNER" as const },
+  ];
+
+  it("offers staff roles to staff accounts and partner roles to partner accounts", () => {
+    expect(rolesForKind(roles, "INTERNAL").map((role) => role.code)).toEqual(["SUPER_ADMIN", "SECURITY"]);
+    expect(rolesForKind(roles, "PARTNER").map((role) => role.code)).toEqual(["PARTNER_TRANSPORTER"]);
+  });
+});
+
+describe("toggleRole", () => {
+  it("adds a role that is missing and removes one that is present", () => {
+    expect(toggleRole(["SECURITY"], "QC_OPERATOR", true)).toEqual(["SECURITY", "QC_OPERATOR"]);
+    expect(toggleRole(["SECURITY", "QC_OPERATOR"], "SECURITY", false)).toEqual(["QC_OPERATOR"]);
+    expect(toggleRole(["SECURITY"], "SECURITY", true)).toEqual(["SECURITY"]);
   });
 });
 

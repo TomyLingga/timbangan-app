@@ -15,12 +15,37 @@ export class ApiError extends Error {
   /** Code from the API error envelope, or a client-side code such as SIGNED_OUT. */
   readonly code: string;
 
-  constructor(status: number, code: string, message: string) {
+  /** Names of the request fields the API refused (from `error.fields`), if it said. */
+  readonly fields: string[];
+
+  constructor(status: number, code: string, message: string, fields: string[] = []) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.fields = fields;
   }
+}
+
+/**
+ * The contract says `fields?` without fixing its shape. Both common forms are
+ * read: a map of field name to message, and a list of `{ field | path }`.
+ * Only the names are kept; the wording shown to users is written in this app.
+ */
+function readFieldNames(fields: unknown): string[] {
+  if (Array.isArray(fields)) {
+    return fields
+      .map((entry: unknown) => {
+        if (typeof entry === "string") return entry;
+        if (typeof entry !== "object" || entry === null) return null;
+        const { field, path, name } = entry as { field?: unknown; path?: unknown; name?: unknown };
+        const found = [field, path, name].find((value) => typeof value === "string" && value);
+        return typeof found === "string" ? found : null;
+      })
+      .filter((value): value is string => value !== null);
+  }
+  if (typeof fields === "object" && fields !== null) return Object.keys(fields);
+  return [];
 }
 
 export function isApiError(value: unknown): value is ApiError {
@@ -88,9 +113,14 @@ function toApiError(status: number, body: unknown): ApiError {
   if (typeof body === "object" && body !== null && "error" in body) {
     const envelope = (body as { error: unknown }).error;
     if (typeof envelope === "object" && envelope !== null) {
-      const { code, message } = envelope as { code?: unknown; message?: unknown };
+      const { code, message, fields } = envelope as { code?: unknown; message?: unknown; fields?: unknown };
       if (typeof code === "string" && code) {
-        return new ApiError(status, code, typeof message === "string" && message ? message : code);
+        return new ApiError(
+          status,
+          code,
+          typeof message === "string" && message ? message : code,
+          readFieldNames(fields),
+        );
       }
     }
   }

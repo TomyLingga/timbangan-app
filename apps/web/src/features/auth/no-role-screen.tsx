@@ -41,9 +41,9 @@ export function NoRoleScreen({ user }: { user: User | null }) {
         {user ? (
           <dl className="mt-4 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 rounded-md bg-muted px-3 py-2.5 text-sm">
             <dt className="text-muted-foreground">Nama</dt>
-            <dd className="font-medium break-words">{user.fullName}</dd>
+            <dd className="font-medium wrap-break-word">{user.fullName}</dd>
             <dt className="text-muted-foreground">Nama pengguna</dt>
-            <dd className="break-words">{user.username}</dd>
+            <dd className="wrap-break-word">{user.username}</dd>
           </dl>
         ) : null}
 

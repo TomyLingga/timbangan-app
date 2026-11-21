@@ -49,8 +49,8 @@ describe("formatQuantity", () => {
 
 describe("formatPercent", () => {
   it("formats with a decimal comma", () => {
-    expect(formatPercent(0.3)).toBe("0,3%");
-    expect(formatPercent("0.15")).toBe("0,15%");
+    expect(formatPercent(0.25)).toBe("0,25%");
+    expect(formatPercent("0.5")).toBe("0,5%");
     expect(formatPercent(2)).toBe("2%");
     expect(formatPercent(0)).toBe("0%");
   });

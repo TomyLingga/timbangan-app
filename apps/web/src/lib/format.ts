@@ -1,4 +1,4 @@
-// Display helpers. Numbers follow Indonesian grouping (1.000.000 and 0,3).
+// Display helpers. Numbers follow Indonesian grouping (1.000.000 and 0,25).
 // Dates read as "20 Nov 2026". Timestamps are shown in plant time (WIB) so
 // every screen agrees, whatever the device clock says.
 

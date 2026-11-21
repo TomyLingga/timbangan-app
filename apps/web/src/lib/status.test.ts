@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { contractStateInfo, latestRunPerEntity, syncEntityLabel, syncStatusInfo } from "@/lib/status";
+import {
+  contractStateInfo,
+  expiredDocumentLabel,
+  expirySummary,
+  latestRunPerEntity,
+  registryStatusInfo,
+  runsBySource,
+  syncEntityLabel,
+  syncStatusInfo,
+} from "@/lib/status";
 import type { SyncRun } from "@/lib/types";
 
 function run(overrides: Partial<SyncRun>): SyncRun {
@@ -58,6 +67,55 @@ describe("syncEntityLabel", () => {
 
   it("shows an unknown entity as it is", () => {
     expect(syncEntityLabel("uoms")).toBe("uoms");
+  });
+});
+
+describe("registryStatusInfo", () => {
+  it("labels the four statuses a driver can have in the registry", () => {
+    expect(registryStatusInfo("NORMAL")).toEqual({ label: "Normal", tone: "success" });
+    expect(registryStatusInfo("WARNING")).toEqual({ label: "Warning", tone: "warning" });
+    expect(registryStatusInfo("BLACKLIST")).toEqual({ label: "Blacklist", tone: "destructive" });
+    expect(registryStatusInfo("UNKNOWN")).toEqual({ label: "Belum ada di VCF", tone: "neutral" });
+  });
+
+  it("treats a missing status as not yet in the registry and shows a new one as it is", () => {
+    expect(registryStatusInfo(null)).toEqual({ label: "Belum ada di VCF", tone: "neutral" });
+    expect(registryStatusInfo("SUSPENDED")).toEqual({ label: "SUSPENDED", tone: "neutral" });
+  });
+});
+
+describe("expiry labels", () => {
+  it("names each expired vehicle document", () => {
+    expect(expiredDocumentLabel("STNK")).toBe("STNK lewat");
+    expect(expiredDocumentLabel("TAX")).toBe("Pajak lewat");
+    expect(expiredDocumentLabel("KIR")).toBe("KIR lewat");
+    expect(expiredDocumentLabel("SIO")).toBe("SIO lewat");
+  });
+
+  it("joins them into one summary line in a fixed order, or gives null", () => {
+    expect(expirySummary(["KIR", "TAX"])).toBe("Pajak lewat, KIR lewat");
+    expect(expirySummary(["STNK", "TAX", "KIR"])).toBe("STNK lewat, Pajak lewat, KIR lewat");
+    expect(expirySummary([])).toBeNull();
+    expect(expirySummary(null)).toBeNull();
+  });
+});
+
+describe("runsBySource", () => {
+  it("puts driver and transporter runs under VCF and the rest under Odoo", () => {
+    const runs = [
+      run({ id: 1, entity: "contracts" }),
+      run({ id: 2, entity: "drivers" }),
+      run({ id: 3, entity: "TRANSPORTERS" }),
+      run({ id: 4, entity: "partners" }),
+    ];
+    const { odoo, vcf } = runsBySource(runs);
+    expect(odoo.map((item) => item.id)).toEqual([1, 4]);
+    expect(vcf.map((item) => item.id)).toEqual([2, 3]);
+  });
+
+  it("names the VCF data sets", () => {
+    expect(syncEntityLabel("drivers")).toBe("Supir");
+    expect(syncEntityLabel("transporters")).toBe("Transporter");
   });
 });
 

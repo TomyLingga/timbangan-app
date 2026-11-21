@@ -280,6 +280,23 @@ describe("errors", () => {
     expect(error.message).toBe("A sync is already running");
   });
 
+  it("keeps the names of the fields the API refused", async () => {
+    const { client } = setup(
+      json(400, { error: { code: "VALIDATION", message: "Invalid body", fields: { plateDisplay: "too short", roles: ["unknown role"] } } }),
+      json(400, { error: { code: "VALIDATION", message: "Invalid body", fields: [{ field: "name", message: "required" }, { path: "address" }] } }),
+      json(409, { error: { code: "DUPLICATE", message: "Already there" } }),
+    );
+    client.setAccessToken("t");
+
+    const asMap = (await client.request("/api/vehicles", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+    const asList = (await client.request("/api/destinations", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+    const without = (await client.request("/api/drivers", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+
+    expect(asMap.fields).toEqual(["plateDisplay", "roles"]);
+    expect(asList.fields).toEqual(["name", "address"]);
+    expect(without.fields).toEqual([]);
+  });
+
   it("falls back to an HTTP code when the body is not the envelope", async () => {
     const { client } = setup(new Response("<html>Bad gateway</html>", { status: 502 }));
     client.setAccessToken("t");

@@ -69,7 +69,58 @@ const SYNC_ENTITIES: Record<string, string> = {
   partners: "Partner",
   product: "Barang",
   products: "Barang",
+  driver: "Supir",
+  drivers: "Supir",
+  transporter: "Transporter",
+  transporters: "Transporter",
 };
+
+/** Entities that come from the driver registry (VCF); the others come from Odoo. */
+const VCF_ENTITIES: ReadonlySet<string> = new Set(["driver", "drivers", "transporter", "transporters"]);
+
+export function runsBySource(runs: readonly SyncRun[]): { odoo: SyncRun[]; vcf: SyncRun[] } {
+  const odoo: SyncRun[] = [];
+  const vcf: SyncRun[] = [];
+  for (const run of runs) {
+    (VCF_ENTITIES.has(run.entity.trim().toLowerCase()) ? vcf : odoo).push(run);
+  }
+  return { odoo, vcf };
+}
+
+const NOT_IN_REGISTRY: StatusInfo = { label: "Belum ada di VCF", tone: "neutral" };
+
+const REGISTRY_STATUSES: Record<string, StatusInfo> = {
+  normal: { label: "Normal", tone: "success" },
+  warning: { label: "Warning", tone: "warning" },
+  blacklist: { label: "Blacklist", tone: "destructive" },
+  unknown: NOT_IN_REGISTRY,
+};
+
+/** Status of a driver in the central driver registry (VCF). */
+export function registryStatusInfo(status: string | null | undefined): StatusInfo {
+  return status ? lookup(REGISTRY_STATUSES, status) : NOT_IN_REGISTRY;
+}
+
+const DOCUMENT_NAMES: Record<string, string> = { STNK: "STNK", TAX: "Pajak", KIR: "KIR" };
+const DOCUMENT_ORDER = ["STNK", "TAX", "KIR"];
+
+/** "Pajak lewat" for the code of an expired vehicle document. */
+export function expiredDocumentLabel(code: string): string {
+  return `${DOCUMENT_NAMES[code] ?? code} lewat`;
+}
+
+/** One line naming every expired document, or null when none is. */
+export function expirySummary(expired: readonly string[] | null | undefined): string | null {
+  if (!expired || expired.length === 0) return null;
+  const rank = (code: string) => {
+    const index = DOCUMENT_ORDER.indexOf(code);
+    return index === -1 ? DOCUMENT_ORDER.length : index;
+  };
+  return [...expired]
+    .sort((a, b) => rank(a) - rank(b))
+    .map(expiredDocumentLabel)
+    .join(", ");
+}
 
 export function syncEntityLabel(entity: string): string {
   return SYNC_ENTITIES[entity.trim().toLowerCase()] ?? entity;

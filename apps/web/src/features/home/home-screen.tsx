@@ -8,15 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
-import { useApiQuery } from "@/hooks/use-api-query";
+import { useApiQuery, type ApiQuery } from "@/hooks/use-api-query";
 import { isApiError } from "@/lib/api-client";
 import { API_URL } from "@/lib/config";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { errorMessage } from "@/lib/messages";
 import { isStaff, roleLabels } from "@/lib/roles";
 import { api } from "@/lib/session";
-import { latestRunPerEntity, syncEntityLabel, syncStatusInfo } from "@/lib/status";
-import type { SyncRunList, User } from "@/lib/types";
+import { latestRunPerEntity, runsBySource, syncEntityLabel, syncStatusInfo } from "@/lib/status";
+import type { SyncRun, SyncRunList, User } from "@/lib/types";
 
 function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
   return (
@@ -36,15 +36,15 @@ function AccountPanel({ user }: { user: User }) {
     <Panel title="Akun yang sedang masuk">
       <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
         <dt className="text-muted-foreground">Nama</dt>
-        <dd className="font-medium break-words">{user.fullName}</dd>
+        <dd className="font-medium wrap-break-word">{user.fullName}</dd>
         <dt className="text-muted-foreground">Nama pengguna</dt>
-        <dd className="break-words">{user.username}</dd>
+        <dd className="wrap-break-word">{user.username}</dd>
         <dt className="text-muted-foreground">Jenis akun</dt>
         <dd>{user.kind === "INTERNAL" ? "Karyawan INL" : "Perusahaan partner"}</dd>
         {user.partner ? (
           <>
             <dt className="text-muted-foreground">Perusahaan</dt>
-            <dd className="break-words">{user.partner.name}</dd>
+            <dd className="wrap-break-word">{user.partner.name}</dd>
           </>
         ) : null}
         <dt className="text-muted-foreground">Peran</dt>
@@ -104,16 +104,50 @@ function HealthPanel() {
   );
 }
 
-function SyncPanel() {
+type RunsQuery = ApiQuery<SyncRunList>;
+
+/** Odoo (contracts, partners, products) and VCF (drivers, transporters) share one run history. */
+function SyncPanels() {
   const runs = useApiQuery("sync-runs", (signal) =>
-    api.request<SyncRunList>("/api/admin/sync/runs", { query: { limit: 12 }, signal }),
+    api.request<SyncRunList>("/api/admin/sync/runs", { query: { limit: 50 }, signal }),
   );
-  const latest = runs.data ? latestRunPerEntity(runs.data.items) : [];
+  const bySource = runsBySource(runs.data?.items ?? []);
+
+  return (
+    <>
+      <SyncPanel
+        title="Salinan data dari Odoo"
+        emptyText="Belum ada pengambilan data dari Odoo yang tercatat."
+        runs={runs}
+        items={bySource.odoo}
+      />
+      <SyncPanel
+        title="Salinan data dari VCF"
+        emptyText="Belum ada pengambilan data dari VCF yang tercatat."
+        runs={runs}
+        items={bySource.vcf}
+      />
+    </>
+  );
+}
+
+function SyncPanel({
+  title,
+  emptyText,
+  runs,
+  items,
+}: {
+  title: string;
+  emptyText: string;
+  runs: RunsQuery;
+  items: SyncRun[];
+}) {
+  const latest = latestRunPerEntity(items);
   const forbidden = isApiError(runs.error) && runs.error.status === 403;
 
   return (
     <Panel
-      title="Salinan data dari Odoo"
+      title={title}
       action={
         <Button variant="ghost" size="sm" onClick={runs.reload} disabled={runs.isLoading}>
           <RefreshCw className={runs.isLoading ? "animate-spin" : undefined} aria-hidden="true" />
@@ -133,7 +167,7 @@ function SyncPanel() {
           {forbidden ? "Riwayat pengambilan data hanya bisa dibuka admin." : errorMessage(runs.error)}
         </p>
       ) : latest.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Belum ada pengambilan data dari Odoo yang tercatat.</p>
+        <p className="text-sm text-muted-foreground">{emptyText}</p>
       ) : (
         <ul className="flex flex-col divide-y text-sm">
           {latest.map((run) => (
@@ -147,7 +181,7 @@ function SyncPanel() {
                 {run.rowsUpserted === null ? "-" : `${formatNumber(run.rowsUpserted)} baris`}
               </span>
               {run.error ? (
-                <span className="col-span-2 text-xs break-words text-destructive">Pesan server: {run.error}</span>
+                <span className="col-span-2 text-xs wrap-break-word text-destructive">Pesan server: {run.error}</span>
               ) : null}
             </li>
           ))}
@@ -169,7 +203,7 @@ export function HomeScreen() {
         <AccountPanel user={user} />
         <div className="flex flex-col gap-4">
           <HealthPanel />
-          {isStaff(user) ? <SyncPanel /> : null}
+          {isStaff(user) ? <SyncPanels /> : null}
         </div>
       </div>
     </div>

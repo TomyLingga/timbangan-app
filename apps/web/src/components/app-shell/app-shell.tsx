@@ -64,7 +64,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
         <div className="flex h-14 shrink-0 items-center border-b border-sidebar-border px-4">
           <AppMark />
         </div>
-        <SidebarNav />
+        <SidebarNav user={user} />
       </aside>
 
       <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b bg-background px-2 sm:px-4 lg:px-6">
@@ -83,7 +83,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
               </SheetTitle>
               <SheetDescription className="sr-only">Menu utama aplikasi</SheetDescription>
             </SheetHeader>
-            <SidebarNav onNavigate={() => setDrawerOpen(false)} />
+            <SidebarNav user={user} onNavigate={() => setDrawerOpen(false)} />
           </SheetContent>
         </Sheet>
 

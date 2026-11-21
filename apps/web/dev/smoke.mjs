@@ -161,7 +161,7 @@ class Browser {
 
   /** Clicks with real mouse events, by CSS selector or by the visible label. */
   async click(selectorOrText) {
-    const point = await this.waitFor(`(() => {
+    const locate = `(() => {
       const wanted = ${JSON.stringify(selectorOrText)};
       let el = null;
       try { el = document.querySelector(wanted); } catch {}
@@ -171,8 +171,17 @@ class Browser {
       el.scrollIntoView({ block: "center" });
       const box = el.getBoundingClientRect();
       return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
-    })()`);
+    })()`;
+    let point = await this.waitFor(locate);
     if (!point) throw new Error(`nothing to click for ${selectorOrText}`);
+    // A sheet that is still sliding in moves its content; wait until the target rests.
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(80);
+      const next = (await this.evaluate(locate)) ?? point;
+      const resting = Math.abs(next.x - point.x) < 0.5 && Math.abs(next.y - point.y) < 0.5;
+      point = next;
+      if (resting) break;
+    }
     const mouse = { x: point.x, y: point.y, button: "left", clickCount: 1 };
     await this.send("Input.dispatchMouseEvent", { ...mouse, type: "mouseMoved", button: "none" });
     await this.send("Input.dispatchMouseEvent", { ...mouse, type: "mousePressed" });
@@ -191,6 +200,21 @@ class Browser {
       await this.send("Input.insertText", { text: piece });
       if (perKey) await sleep(40);
     }
+  }
+
+  /** Sets a field the way React expects: the native setter, then the event React listens to. */
+  async fill(selector, value) {
+    const done = await this.waitFor(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el) return false;
+      const proto = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype
+        : el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, "value").set.call(el, ${JSON.stringify(value)});
+      el.dispatchEvent(new Event(el instanceof HTMLSelectElement ? "change" : "input", { bubbles: true }));
+      return true;
+    })()`);
+    if (!done) throw new Error(`no field ${selector}`);
   }
 
   async screenshot(name) {
@@ -222,6 +246,19 @@ class Browser {
 const visibleRows = `[...document.querySelectorAll('tbody tr')].filter((row) => row.offsetParent !== null).length`;
 const stat = async (route) => (await (await fetch(`${API}/__mock/stats`)).json()).requests[route] ?? 0;
 const location = (browser) => browser.evaluate("location.pathname + location.search");
+/** Expression for the text of the visible table row that contains `needle`, on one line. */
+const rowText = (needle) =>
+  `([...document.querySelectorAll('tbody tr')].find((row) => row.offsetParent !== null && row.innerText.includes(${JSON.stringify(needle)}))?.innerText ?? '').replace(/\\s+/g, ' ')`;
+const pageText = "document.body.innerText.replace(/\\s+/g, ' ')";
+const inSheet = (selector) => `[role="dialog"] ${selector}`;
+const isoDate = (yearsFromNow) => `${new Date().getFullYear() + yearsFromNow}-06-30`;
+
+/** Picks the first option of a partner lookup after typing a part of the name. */
+async function pickPartner(browser, inputSelector, text) {
+  await browser.type(inputSelector, text);
+  await browser.waitFor(`document.querySelector('[role="option"]')?.innerText.includes(${JSON.stringify(text)})`);
+  await browser.click('[role="option"]');
+}
 
 async function signOut(browser) {
   await browser.click("Keluar");
@@ -273,7 +310,7 @@ async function run(browser) {
   check("/kontrak shows rows after signing in", partnerRows === 2, `${partnerRows} rows`);
   const tableText = await browser.evaluate("document.querySelector('table')?.innerText ?? ''");
   check("quantity uses Indonesian grouping with the unit", tableText.includes("1.000.000 Kg") && tableText.includes("750.000,5 Kg"));
-  check("date reads as 31 Des 2026 and tolerance as 0,3%", tableText.includes("31 Des 2026") && tableText.includes("0,3%"));
+  check("date reads as 31 Des 2026 and tolerance as 0,25%", tableText.includes("31 Des 2026") && tableText.includes("0,25%"));
   check("partner account has no sync button", !(await browser.evaluate("document.body.innerText.includes('Ambil dari Odoo')")));
 
   // 4. Expired access token: one refresh, one retry, list still loads.
@@ -361,7 +398,8 @@ async function run(browser) {
     const dialog = document.querySelector('[role="dialog"]');
     if (!dialog) return false;
     const links = [...dialog.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-    return dialog.innerText.includes('Delivery Order') && dialog.innerText.includes('Denah') && links.length === 2;
+    // Beranda, Kontrak, Supir, Kendaraan and Tujuan for a logistics admin; the later modules are plain text.
+    return dialog.innerText.includes('Delivery Order') && dialog.innerText.includes('Denah') && links.length === 5;
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
   await browser.colorScheme("light");
@@ -396,6 +434,237 @@ async function run(browser) {
   await browser.screenshot("10-no-role");
   await browser.click("Keluar");
   check("sign-out works from the no-role page", Boolean(await browser.waitFor("location.pathname === '/login'")));
+
+  // 15. Supir, as a logistics admin: totals per status, search, filter, VCF sync, new driver.
+  await browser.goto(`${API}/api/auth/sso/start?as=admin.contoh`);
+  await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Contoh')");
+  check("menu has Supir, Kendaraan and Tujuan but no Pengguna for a logistics admin", await browser.evaluate(`(() => {
+    const links = [...document.querySelectorAll('aside nav a')].map((a) => a.getAttribute('href'));
+    return ['/supir', '/kendaraan', '/tujuan'].every((href) => links.includes(href)) && !links.includes('/pengguna');
+  })()`));
+  await browser.click('a[href="/supir"]');
+  check("/supir lists the drivers", (await browser.waitFor(visibleRows)) === 10);
+  const chipGroup = '[aria-label="Saring menurut status VCF"]';
+  const chipText = `(() => { const text = document.querySelector('${chipGroup}')?.innerText.replace(/\\s+/g, ' ') ?? ''; return text.includes('…') ? '' : text; })()`;
+  const chips = (await browser.waitFor(chipText)) ?? "";
+  check(
+    "status chips carry the total of each status",
+    ["Semua 10", "Normal 4", "Warning 2", "Blacklist 1", "Belum ada di VCF 3"].every((part) => chips.includes(part)),
+    chips,
+  );
+  check("an expired licence is marked", (await browser.evaluate(rowText("Supir Contoh 05"))).includes("(lewat)"));
+  const pushGroup = '[aria-label="Saring menurut pengiriman ke VCF"]';
+  const pushChipText = `(() => { const text = document.querySelector('${pushGroup}')?.innerText.replace(/\\s+/g, ' ') ?? ''; return text.includes('…') ? '' : text; })()`;
+  const pushChips = (await browser.waitFor(pushChipText)) ?? "";
+  check(
+    "push chips carry the number waiting and failed",
+    ["Semua 10", "Menunggu dikirim 1", "Gagal dikirim 1"].every((part) => pushChips.includes(part)),
+    pushChips,
+  );
+  check("a driver waiting to be sent is marked", (await browser.evaluate(rowText("Supir Contoh 09"))).includes("Menunggu dikirim ke VCF"));
+  const failedRow = await browser.evaluate(rowText("Supir Contoh 10"));
+  check(
+    "a driver that failed to be sent is marked, with the reason hidden",
+    failedRow.includes("Gagal dikirim ke VCF") && failedRow.includes("Lihat alasan") && !failedRow.includes("licence class not accepted"),
+    failedRow,
+  );
+  await browser.click('tbody button[aria-expanded="false"]');
+  check(
+    "the failure reason is shown on request",
+    Boolean(await browser.waitFor(`${rowText("Supir Contoh 10")}.includes('Pesan server: Registry refused the record')`)) &&
+      (await browser.evaluate(`document.querySelector('tbody button[aria-expanded]').getAttribute('aria-expanded') === 'true'`)),
+  );
+  await browser.screenshot("11-supir-light");
+  await browser.type('input[type="search"]', "contoh 03", { perKey: true });
+  check("driver search narrows the list", (await browser.waitFor(`${visibleRows} === 1 && ${visibleRows}`)) === 1 && (await browser.evaluate(rowText("Supir Contoh 03"))).includes("Warning"));
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.waitFor(`${visibleRows} === 10`);
+  await browser.click(`${chipGroup} button:nth-child(4)`);
+  check(
+    "status filter shows only blacklisted drivers",
+    (await browser.waitFor(`${visibleRows} === 1 && ${visibleRows}`)) === 1 &&
+      (await browser.evaluate(rowText("Supir Contoh 04"))).includes("Blacklist") &&
+      (await browser.evaluate(`document.querySelector('${chipGroup} button:nth-child(4)').getAttribute('aria-pressed') === 'true'`)),
+  );
+  await browser.click(`${chipGroup} button:nth-child(1)`);
+  await browser.waitFor(`${visibleRows} === 10`);
+  await browser.click(`${pushGroup} button:nth-child(3)`);
+  check(
+    "push filter shows only the driver that failed to be sent",
+    (await browser.waitFor(`${visibleRows} === 1 && ${visibleRows}`)) === 1 && (await browser.evaluate(rowText("Supir Contoh 10"))).includes("Gagal dikirim ke VCF"),
+  );
+  await browser.click(`${pushGroup} button:nth-child(2)`);
+  check(
+    "push filter shows only the driver waiting to be sent",
+    Boolean(await browser.waitFor(`${visibleRows} === 1 && ${rowText("Supir Contoh 09")} !== ''`)),
+  );
+  await browser.click(`${pushGroup} button:nth-child(1)`);
+  await browser.waitFor(`${visibleRows} === 10`);
+
+  await browser.click("Ambil dari VCF");
+  const vcfSummary = await browser.waitFor("[...document.querySelectorAll('p')].find((p) => p.innerText.startsWith('Selesai dalam'))?.innerText", 10000);
+  check(
+    "VCF sync shows the counts taken, sent and failed",
+    Boolean(vcfSummary) && ["10 supir", "2 transporter", "Dikirim ke VCF: 1 supir, gagal 1."].every((part) => vcfSummary.includes(part)),
+    vcfSummary ?? "no summary",
+  );
+  check("page shows the time of the last VCF sync", Boolean(await browser.hasText("Terakhir diambil dari VCF")));
+  check("totals follow the sync", Boolean(await browser.waitFor(`${chipText}.includes('Belum ada di VCF 1') && ${pushChipText}.includes('Menunggu dikirim 0') && ${pushChipText}.includes('Gagal dikirim 1')`)));
+  check("the driver that was sent is no longer marked", !(await browser.evaluate(rowText("Supir Contoh 09"))).includes("dikirim ke VCF"));
+
+  await browser.click("Supir baru");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("driver form asks for the required fields", Boolean(await browser.hasText("Isi nomor SIM.")) && Boolean(await browser.hasText("Pilih jenis SIM.")));
+  check("driver form says the driver is also sent to VCF", Boolean(await browser.hasText("juga dikirim ke VCF")));
+  await browser.fill(inSheet('input[name="fullName"]'), "Uji Asap Satu");
+  await browser.fill(inSheet('input[name="licenceNo"]'), "uji0001");
+  await browser.fill(inSheet('select[name="licenceClass"]'), "B2 UMUM");
+  await browser.fill(inSheet('input[name="licenceValidUntil"]'), isoDate(2));
+  await browser.click(inSheet('button[type="submit"]'));
+  check("new driver is saved and the returned push state is shown", Boolean(await browser.hasText("Supir Uji Asap Satu ditambahkan dan menunggu dikirim ke VCF.")));
+  const newDriver = await browser.waitFor(rowText("Uji Asap Satu"));
+  check(
+    "new driver is listed as not yet in VCF and waiting to be sent",
+    Boolean(newDriver) && ["UJI0001", "Belum ada di VCF", "Menunggu dikirim ke VCF"].every((part) => newDriver.includes(part)),
+    newDriver ?? "",
+  );
+  await browser.click("Supir baru");
+  await browser.fill(inSheet('input[name="fullName"]'), "Uji Asap Dua");
+  await browser.fill(inSheet('input[name="licenceNo"]'), "UJI0001");
+  await browser.fill(inSheet('select[name="licenceClass"]'), "B1");
+  await browser.fill(inSheet('input[name="licenceValidUntil"]'), isoDate(1));
+  await browser.click(inSheet('button[type="submit"]'));
+  check("a duplicate licence number is explained", Boolean(await browser.hasText("Nomor SIM ini sudah terdaftar.")));
+  await browser.click("Batal");
+
+  // 16. Kendaraan: list, plate check, create with an expired tax date, edit the tare.
+  await browser.click('a[href="/kendaraan"]');
+  check("/kendaraan lists the vehicles", (await browser.waitFor(`location.pathname === '/kendaraan' && ${visibleRows} === 5 && ${visibleRows}`)) === 5);
+  check(
+    "expired documents are summarised per vehicle",
+    (await browser.evaluate(rowText("ZZ 0002 CTH"))).includes("KIR lewat") &&
+      (await browser.evaluate(rowText("ZZ 0004 CTH"))).includes("STNK lewat, Pajak lewat"),
+  );
+  await browser.click("Kendaraan baru");
+  await browser.fill(inSheet('input[name="plateDisplay"]'), "z1");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("a plate that is too short is refused before sending", Boolean(await browser.hasText("Plat terdiri dari 3 sampai 12 huruf dan angka.")) && (await stat("POST /api/vehicles")) === 0);
+  await browser.fill(inSheet('input[name="plateDisplay"]'), "zz 9001 uji");
+  await browser.fill(inSheet('select[name="vehicleTypeCode"]'), "TANGKI");
+  await pickPartner(browser, inSheet('input[name="ownerLookup"]'), "Contoh B");
+  await browser.fill(inSheet('select[name="ownership"]'), "MITRA");
+  await browser.fill(inSheet('input[name="capacityKg"]'), "12000");
+  await browser.fill(inSheet('input[name="productionYear"]'), "2021");
+  await browser.fill(inSheet('input[name="tareKg"]'), "6000");
+  await browser.fill(inSheet('input[name="stnkValidUntil"]'), isoDate(2));
+  await browser.fill(inSheet('input[name="taxValidUntil"]'), "2020-01-15");
+  await browser.screenshot("12-kendaraan-form-light");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("new vehicle is saved", Boolean(await browser.hasText("Kendaraan ZZ 9001 UJI ditambahkan.")));
+  const newVehicle = (await browser.waitFor(rowText("ZZ 9001 UJI"))) ?? "";
+  check(
+    "new vehicle is listed with its owner, numbers and the expired tax date marked",
+    ["Truk tangki", "Transporter Contoh B", "12.000 Kg", "6.000 Kg", "Pajak lewat", "15 Jan 2020 (lewat)"].every((part) => newVehicle.includes(part)),
+    newVehicle,
+  );
+  await browser.click('button[aria-label="Ubah ZZ 9001 UJI"]');
+  await browser.waitFor(`document.querySelector('${inSheet('input[name="tareKg"]')}')?.value === '6000'`);
+  check("tare reason is hidden until the tare is edited", !(await browser.evaluate(`Boolean(document.querySelector('textarea[name="tareReason"]'))`)));
+  await browser.fill(inSheet('input[name="tareKg"]'), "6100");
+  check("tare reason appears when the tare is edited", Boolean(await browser.waitFor(`Boolean(document.querySelector('textarea[name="tareReason"]'))`)));
+  await browser.click(inSheet('button[type="submit"]'));
+  check("a changed tare needs a reason", Boolean(await browser.hasText("Isi alasan perubahan tarra.")));
+  await browser.fill('textarea[name="tareReason"]', "Ganti bak (uji)");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("edited vehicle shows the new tare", Boolean(await browser.hasText("Kendaraan ZZ 9001 UJI diperbarui.")) && Boolean(await browser.waitFor(`${rowText("ZZ 9001 UJI")}.includes('6.100 Kg')`)));
+  await browser.type('input[type="search"]', "zz0003", { perKey: true });
+  check("plate search ignores spaces", (await browser.waitFor(`${visibleRows} === 1 && ${visibleRows}`)) === 1 && (await browser.evaluate(rowText("ZZ 0003 CTH"))).includes("Truk bak"));
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.waitFor(`${visibleRows} === 6`);
+  await browser.screenshot("13-kendaraan-light");
+  await browser.viewport(390, 844, true);
+  await browser.goto(`${WEB}/kendaraan`);
+  const vehicleCards = await browser.waitFor("[...document.querySelectorAll('main ul > li')].filter((li) => li.offsetParent !== null).length");
+  check("phone width shows vehicle cards without horizontal scroll", vehicleCards === 6 && (await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth")), `${vehicleCards} cards`);
+  await browser.screenshot("14-kendaraan-phone-light");
+  await browser.goto(`${WEB}/supir`);
+  const driverCards = await browser.waitFor("[...document.querySelectorAll('main ul > li')].filter((li) => li.offsetParent !== null).length");
+  check(
+    "phone width shows driver cards with the push marks and no horizontal scroll",
+    driverCards === 11 &&
+      Boolean(await browser.hasText("Gagal dikirim ke VCF")) &&
+      (await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth")),
+    `${driverCards} cards`,
+  );
+  await browser.screenshot("14b-supir-phone-light");
+  await browser.viewport(1366, 900);
+
+  // 17. Tujuan: customer filter, create.
+  await browser.goto(`${WEB}/tujuan`);
+  check("/tujuan lists the destinations", (await browser.waitFor(visibleRows)) === 4);
+  await pickPartner(browser, 'input[name="customerFilter"]', "Contoh B");
+  check("customer filter narrows the list", (await browser.waitFor(`${visibleRows} === 2 && ${visibleRows}`)) === 2 && (await browser.evaluate(rowText("Depo Contoh Lama"))).includes("Nonaktif"));
+  await browser.click('button[aria-label="Kosongkan customer"]');
+  await browser.waitFor(`${visibleRows} === 4`);
+  await browser.click("Tujuan baru");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("destination form asks for name and address", Boolean(await browser.hasText("Isi nama tempat.")) && Boolean(await browser.hasText("Isi alamat.")));
+  await pickPartner(browser, inSheet('input[name="customerLookup"]'), "Contoh C");
+  await browser.fill(inSheet('input[name="name"]'), "Gudang Uji Asap");
+  await browser.fill(inSheet('textarea[name="address"]'), "Jalan Uji No. 1");
+  await browser.fill(inSheet('input[name="regency"]'), "Kota Uji");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("new destination is saved", Boolean(await browser.hasText("Tujuan Gudang Uji Asap ditambahkan.")));
+  const newDestination = (await browser.waitFor(rowText("Gudang Uji Asap"))) ?? "";
+  check("new destination is listed with its customer", ["Customer Contoh C", "Jalan Uji No. 1", "Kota Uji"].every((part) => newDestination.includes(part)), newDestination);
+  await browser.screenshot("15-tujuan-light");
+
+  // 18. Beranda shows the VCF sync next to the Odoo sync; /pengguna is refused for a non-admin.
+  await browser.goto(`${WEB}/`);
+  check("Beranda shows the last VCF sync", Boolean(await browser.hasText("Salinan data dari VCF")) && Boolean(await browser.waitFor(`${pageText}.includes('Supir Berhasil')`)));
+  await browser.goto(`${WEB}/pengguna`);
+  check(
+    "/pengguna is refused for an account that is not system admin",
+    Boolean(await browser.hasText("Pengaturan pengguna hanya untuk admin sistem.")) && (await stat("GET /api/admin/users")) === 0,
+  );
+  await signOut(browser);
+
+  // 19. System admin gives a role to the staff account that had none.
+  await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
+  await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Sistem Contoh')");
+  await browser.click('a[href="/pengguna"]');
+  check("/pengguna lists the accounts for the system admin", (await browser.waitFor(visibleRows)) === 6);
+  check("the page says what it is for", Boolean(await browser.hasText("belum punya peran: tetapkan perannya di sini")));
+  await browser.type('input[type="search"]', "staf.baru", { perKey: true });
+  await browser.waitFor(`${visibleRows} === 1 && ${rowText("Staf Baru Contoh")} !== ''`);
+  check("an account without roles is marked", (await browser.evaluate(rowText("Staf Baru Contoh"))).includes("Belum ada peran"));
+  await browser.click('button[aria-label="Atur peran Staf Baru Contoh"]');
+  const offered = (await browser.waitFor(`document.querySelector('[role="dialog"] fieldset')?.innerText.replace(/\\s+/g, ' ')`)) ?? "";
+  check("a staff account is offered staff roles only", offered.includes("Pos registrasi") && offered.includes("Admin sistem") && !offered.includes("Transporter") && !offered.includes("PKS / supplier"), offered);
+  await browser.click(inSheet('input[name="role-REGISTRATION_OPERATOR"]'));
+  await browser.screenshot("16-pengguna-peran-light");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("the role is saved and shown with its Indonesian label", Boolean(await browser.hasText("Peran Staf Baru Contoh disimpan.")) && Boolean(await browser.waitFor(`${rowText("Staf Baru Contoh")}.includes('Pos registrasi')`)));
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.type('input[type="search"]', "super.contoh", { perKey: true });
+  await browser.waitFor(`${visibleRows} === 1 && ${rowText("Admin Sistem Contoh")} !== ''`);
+  await browser.click('tbody [role="switch"]');
+  check("switching off one's own account is explained", Boolean(await browser.hasText("Anda tidak bisa menonaktifkan akun Anda sendiri.")));
+  await browser.click('button[aria-label="Atur peran Admin Sistem Contoh"]');
+  await browser.click(inSheet('input[name="role-SUPER_ADMIN"]'));
+  await browser.click(inSheet('button[type="submit"]'));
+  check("dropping the last admin role from one's own account is explained", Boolean(await browser.hasText("Anda admin sistem terakhir")));
+  await browser.click("Batal");
+  await signOut(browser);
+
+  await browser.goto(`${API}/api/auth/sso/start?as=staf.baru`);
+  check(
+    "the account that got a role no longer sees the no-role page",
+    Boolean(await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')")) &&
+      !(await browser.evaluate("document.body.innerText.includes('Akun belum punya peran')")) &&
+      (await browser.evaluate(`document.querySelector('[data-testid="header-identity"]').innerText.includes('Pos registrasi')`)),
+  );
+  await signOut(browser);
 }
 
 // --- main -------------------------------------------------------------------
@@ -430,8 +699,15 @@ try {
 } finally {
   if (browser) await browser.close();
   for (const child of children) child.kill();
-  await sleep(500);
-  await rm(path.join(outDir, "profile"), { recursive: true, force: true }).catch(() => {});
+  // The browser can hold files in its profile for a moment after it exits; retry until they are gone.
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await sleep(500);
+    const removed = await rm(path.join(outDir, "profile"), { recursive: true, force: true }).then(
+      () => true,
+      () => false,
+    );
+    if (removed) break;
+  }
 }
 
 const failed = results.filter((result) => !result.passed).length;
