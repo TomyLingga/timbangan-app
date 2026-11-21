@@ -68,6 +68,7 @@ const ROUTES: Row[] = [
   row("GET", "/api/lookup/transporters", [["registrations", "CREATE"]]),
 
   row("GET", "/api/trips", [["gate", "VIEW"], ["registrations", "VIEW"]], true),
+  row("GET", "/api/trips/flow", [["gate", "VIEW"], ["registrations", "VIEW"]], true),
   row("GET", "/api/trips/999999/spj", [["registrations", "VIEW"]]),
   row("POST", "/api/trips/999999/spj/printed", [["registrations", "VIEW"]]),
   row("POST", "/api/trips/999999/spj/reissue", [["gate", "EDIT"]]),

@@ -1,4 +1,4 @@
-// Trips for the registration desk, the SPJ print data, reissue and cancel.
+// Trips for the registration desk, the truck flow of the home page, the SPJ print data, reissue and cancel.
 import { and, asc, count, eq, ilike, inArray, isNull, ne, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { alias } from "drizzle-orm/pg-core";
@@ -23,15 +23,16 @@ import {
   tripAllocations,
   trips,
   TRIP_STATUSES,
+  type TripStatus,
   tripSteps,
   vehicles,
   vehicleTypes,
 } from "../db/schema.js";
 import { forbidden, invalidState, notFound } from "../errors.js";
-import { dateText, idParams, lettersAndDigits, likeText, limitParam, PLANT_TIME_ZONE, searchParam } from "../http.js";
+import { dateText, idParams, lettersAndDigits, likeText, limitParam, PLANT_TIME_ZONE, searchParam, todayAtPlant } from "../http.js";
 import { registrationsVisibleTo } from "../registrations/view.js";
 import { issueSpj, revokeSpj } from "./spj.js";
-import { expireDueTrips, loadTrips } from "./view.js";
+import { expireDueTrips, INSIDE_STATUSES, loadTrips } from "./view.js";
 
 const STATUS_MESSAGE = `Status trip harus salah satu dari ${TRIP_STATUSES.join(", ")}; beberapa dipisah koma.`;
 const listQuery = z.object({
@@ -45,6 +46,22 @@ const listQuery = z.object({
   limit: limitParam,
 });
 const reasonBody = z.object({ reason: z.string("Alasan wajib diisi.").trim().min(1, "Alasan wajib diisi.").max(500, "Alasan terlalu panjang.") });
+
+/** The `date` filter of the list: the trip is expected that plant day, or checked in on it. */
+const onPlantDay = (date: string) =>
+  or(
+    sql`coalesce(${trips.plannedArrival}, ${registrations.plannedDate}) = ${date}`,
+    sql`(${trips.checkedInAt} at time zone ${PLANT_TIME_ZONE})::date = ${date}`,
+  );
+/** Trucks expected at the gate: the gate's "akan datang hari ini" list asks for these statuses with today's date. */
+const UPCOMING_STATUSES: TripStatus[] = ["ISSUED", "EXPIRED"];
+/** Trucks that left the plant through check-out. */
+const LEFT_STATUSES: TripStatus[] = ["COMPLETED", "REJECTED"];
+/** Trips counted by the direction of their registration. */
+const byDirection = {
+  in: sql`count(*) filter (where ${registrations.direction} = 'IN')`.mapWith(Number),
+  out: sql`count(*) filter (where ${registrations.direction} = 'OUT')`.mapWith(Number),
+};
 
 const linePartner = alias(partners, "line_partner");
 const transporterOf = alias(partners, "spj_transporter");
@@ -97,14 +114,7 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
     const plate = query.q ? lettersAndDigits(query.q) : "";
     const pattern = query.q ? likeText(query.q) : null;
     const conditions: (SQL | undefined)[] = [query.status?.length ? inArray(trips.status, query.status) : undefined];
-    if (query.date) {
-      conditions.push(
-        or(
-          sql`coalesce(${trips.plannedArrival}, ${registrations.plannedDate}) = ${query.date}`,
-          sql`(${trips.checkedInAt} at time zone ${PLANT_TIME_ZONE})::date = ${query.date}`,
-        ),
-      );
-    }
+    if (query.date) conditions.push(onPlantDay(query.date));
     if (pattern) {
       conditions.push(
         or(
@@ -125,6 +135,28 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
       .orderBy(sql`coalesce(${trips.plannedArrival}, ${registrations.plannedDate}) nulls last`, asc(trips.id))
       .limit(query.limit);
     return { items: await loadTrips(orm, ids.map((row) => row.id)), total: counted?.total ?? 0 };
+  });
+
+  // the home page's truck flow: counts, not rows, so a busy day is not cut at the page size of the list
+  app.get("/api/trips/flow", listers, async () => {
+    const now = context.now();
+    await expireDueTrips(orm, now);
+    const today = todayAtPlant(now);
+    const counted = (where: SQL | undefined) =>
+      orm.select(byDirection).from(trips).innerJoin(registrations, eq(registrations.id, trips.registrationId)).where(where);
+    const [upcoming] = await counted(and(inArray(trips.status, UPCOMING_STATUSES), onPlantDay(today)));
+    const [finishedToday] = await counted(
+      and(inArray(trips.status, LEFT_STATUSES), sql`(${trips.completedAt} at time zone ${PLANT_TIME_ZONE})::date = ${today}`),
+    );
+    const inside = await orm
+      .select({ stepCode: trips.currentStep, ...byDirection })
+      .from(trips)
+      .innerJoin(registrations, eq(registrations.id, trips.registrationId))
+      .where(inArray(trips.status, INSIDE_STATUSES))
+      .groupBy(trips.currentStep)
+      .orderBy(sql`${trips.currentStep} asc nulls last`);
+    const zero = { in: 0, out: 0 };
+    return { date: today, upcoming: upcoming ?? zero, inside, finishedToday: finishedToday ?? zero };
   });
 
   /** The active SPJ of a trip the account may see. */
