@@ -49,6 +49,15 @@ export async function seedContract(database: Database, seed: ContractSeed): Prom
   );
 }
 
+/** A typed destination as a DO carries it since migration 0008. */
+export const DESTINATION = {
+  destName: "Gudang Contoh",
+  destAddress: "Jl. Contoh 1",
+  destDistrict: "Kec. Contoh",
+  destRegency: "Kab. Contoh",
+  destProvince: "Prov. Contoh",
+};
+
 export async function seedDestination(database: Database, name: string, partnerId: number | null = null): Promise<number> {
   return one(database, "insert into destinations (partner_id, name, address, district, regency, province) values ($1, $2, 'Jl. Contoh 1', 'Kec. Contoh', 'Kab. Contoh', 'Prov. Contoh') returning id", [partnerId, name]);
 }

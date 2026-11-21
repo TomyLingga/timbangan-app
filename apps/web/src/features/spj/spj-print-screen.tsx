@@ -32,7 +32,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function destinationText(line: SpjLine): string {
   const destination = line.destination;
   if (!destination) return "-";
-  return [destination.name, destination.address, destination.regency].filter(Boolean).join(", ");
+  return [destination.name, destination.address, destination.district, destination.regency, destination.province].filter(Boolean).join(", ");
 }
 
 function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {

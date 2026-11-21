@@ -2,7 +2,7 @@
 // phase 3 routes, so they carry the same rows a real truck would.
 import type { Database } from "../../src/db/client.js";
 import { generateStationKey } from "../../src/stations/keys.js";
-import { phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle } from "./fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle } from "./fixtures.js";
 import { seedStaff } from "./users.js";
 
 export interface StationSeed {
@@ -143,7 +143,7 @@ export async function weighingApp(options: { plateAttempts?: number } = {}) {
     const doIds: number[] = [];
     for (const qty of seed.dos ?? [30_000]) {
       const created = await call("POST", "/api/delivery-orders", "logistics", {
-        doDate: "2026-11-20", contractId: sale, qty, destinationId: place, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-30", transporterId: companies.transporter1,
+        doDate: "2026-11-20", contractId: sale, qty, ...DESTINATION, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-30", transporterId: companies.transporter1,
       });
       if (created.statusCode !== 201) throw new Error(`DO failed: ${created.body}`);
       const order = created.json().deliveryOrder as { id: number };

@@ -1,6 +1,7 @@
 // How a trip is shown, and the trip statuses the rules group together.
 import { and, asc, eq, inArray, isNull, lt } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { type AttachedFile, tripSlipsOf } from "../attachments/view.js";
 import type { Orm } from "../db/client.js";
 import {
   cardAssignments,
@@ -60,6 +61,8 @@ export interface TripView {
   card: { uid: string; label: string | null } | null;
   checkedInAt: Date | null;
   cancelReason: string | null;
+  /** Weighbridge slips of the supplier's own scale (label SLIP_TIMBANG). */
+  slips: AttachedFile[];
 }
 
 /** The trips with these ids, in the order of the ids. */
@@ -104,6 +107,7 @@ export async function loadTrips(orm: Orm, ids: number[]): Promise<TripView[]> {
     .from(cardAssignments)
     .innerJoin(rfidCards, eq(rfidCards.id, cardAssignments.cardId))
     .where(and(inArray(cardAssignments.tripId, ids), isNull(cardAssignments.releasedAt)));
+  const slips = await tripSlipsOf(orm, ids);
 
   const views = new Map<number, TripView>();
   for (const row of rows) {
@@ -153,6 +157,7 @@ export async function loadTrips(orm: Orm, ids: number[]): Promise<TripView[]> {
       card: card ? { uid: card.uid, label: card.label } : null,
       checkedInAt: trip.checkedInAt,
       cancelReason: trip.cancelReason,
+      slips: slips.get(trip.id) ?? [],
     });
   }
   return ids.map((id) => views.get(id)).filter((view): view is TripView => view !== undefined);

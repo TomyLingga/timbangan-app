@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phase3App, seedContract, seedDestination, siteCode } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedContract, seedDestination, siteCode } from "./helpers/fixtures.js";
 
 async function setup() {
   const context = await phase3App();
@@ -12,7 +12,7 @@ async function setup() {
   const anywhere = await seedDestination(database, "Gudang Umum");
   const customerPlace = await seedDestination(database, "Gudang Pembeli Satu", companies.customer1);
   const otherPlace = await seedDestination(database, "Gudang Pembeli Dua", companies.customer2);
-  const base = { doDate: "2026-11-20", qty: 120_000, destinationId: anywhere, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-30" };
+  const base = { doDate: "2026-11-20", qty: 120_000, ...DESTINATION, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-30" };
   const create = async (body: object, as = "logistics") => context.call("POST", "/api/delivery-orders", as, { ...base, ...body });
   const createOk = async (body: object) => {
     const response = await create(body);
@@ -26,7 +26,7 @@ async function setup() {
 describe("POST /api/delivery-orders", () => {
   it("fills partner, product, unit, contract number and customer PO from the sales contract and numbers the DO", async () => {
     const { create, contracts, companies, products, places, site } = await setup();
-    const response = await create({ contractId: contracts.sale, destinationId: places.customerPlace, transporterId: companies.transporter1, truckCount: 4, transportTerms: "FRANCO", remark: "catatan" });
+    const response = await create({ contractId: contracts.sale, transporterId: companies.transporter1, truckCount: 4, transportTerms: "FRANCO", remark: "catatan" });
     expect(response.statusCode).toBe(201);
     expect(response.json().deliveryOrder).toEqual({
       id: expect.any(Number),
@@ -40,7 +40,7 @@ describe("POST /api/delivery-orders", () => {
       qty: 120000,
       uom: "kg",
       tolerancePct: 0.25,
-      destination: { id: places.customerPlace, name: "Gudang Pembeli Satu", address: "Jl. Contoh 1", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" },
+      destination: { id: null, name: "Gudang Contoh", address: "Jl. Contoh 1", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" },
       deliveryFrom: "2026-11-20",
       deliveryUntil: "2026-11-30",
       transportTerms: "FRANCO",
@@ -87,11 +87,11 @@ describe("POST /api/delivery-orders", () => {
   });
 
   it("checks the destination, the transporter, the dates and the quantity", async () => {
-    const { create, companies, products, places } = await setup();
+    const { create, companies, products } = await setup();
     const body = { partnerId: companies.customer1, productId: products.olein };
     const fieldOf = async (extra: object) => (await create({ ...body, ...extra })).json().error?.fields?.[0]?.field;
-    expect(await fieldOf({ destinationId: places.otherPlace })).toBe("destinationId");
-    expect(await fieldOf({ destinationId: 999_999 })).toBe("destinationId");
+    expect(await fieldOf({ destName: " " })).toBe("destName");
+    expect(await fieldOf({ destRegency: null })).toBe("destRegency");
     expect(await fieldOf({ transporterId: companies.supplier1 })).toBe("transporterId");
     expect(await fieldOf({ deliveryUntil: "2026-11-19" })).toBe("deliveryUntil");
     expect(await fieldOf({ qty: 0 })).toBe("qty");
@@ -211,6 +211,6 @@ describe("GET /api/delivery-orders", () => {
     expect((await call("GET", `/api/delivery-orders/${otherTransporter.id}`, "angkut1")).statusCode).toBe(404);
     const detail = await call("GET", `/api/delivery-orders/${sent.id}`, "angkut1");
     expect(detail.statusCode).toBe(200);
-    expect(detail.json()).toEqual({ deliveryOrder: expect.objectContaining({ doNo: "DO-B", status: "SENT" }), trips: [] });
+    expect(detail.json()).toEqual({ deliveryOrder: expect.objectContaining({ doNo: "DO-B", status: "SENT" }), trips: [], files: [] });
   });
 });

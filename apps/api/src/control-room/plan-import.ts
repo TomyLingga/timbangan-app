@@ -2,9 +2,11 @@
 //
 // Loads the plant plan of one site from local files that stay out of git:
 //   { "site": "<code>", "viewBox": [w, h], "svg": "<path of the drawing, relative to the JSON file>",
+//     "image": "<optional path of a PNG or JPEG picture of the plan, relative to the JSON file>",
 //     "zones": { "REG": [[x, y], ...], ... } }   (polygon points as fractions of the plan's width and height)
-// The drawing is checked and copied below FILE_STORAGE_DIR; the polygons go to zones.map_shape. Only counts are
-// printed, never the paths or the figures, so the output can be pasted anywhere.
+// The drawing and the picture are checked and copied below FILE_STORAGE_DIR; the polygons go to zones.map_shape.
+// The picture is shown under the zones, so the fractions refer to it too. Only counts and sizes are printed, never
+// the paths or the figures, so the output can be pasted anywhere.
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadConfig } from "../config.js";
@@ -25,14 +27,21 @@ export async function runPlanImport(
   let database: Database | undefined;
   try {
     const config = loadConfig(env);
-    const raw = JSON.parse(await readFile(file, "utf8")) as { svg?: unknown };
+    const raw = JSON.parse(await readFile(file, "utf8")) as { svg?: unknown; image?: unknown };
     if (typeof raw.svg !== "string" || !raw.svg) throw new Error('The plan file has no "svg" path.');
     const svgText = await readFile(resolve(dirname(file), raw.svg), "utf8");
+    const imageBytes = typeof raw.image === "string" && raw.image ? await readFile(resolve(dirname(file), raw.image)) : undefined;
     database = await open(config.databaseUrl);
-    const result = await importPlan(database, config.files.dir, raw, svgText);
+    const result = await importPlan(database, config.files.dir, raw, svgText, imageBytes);
+    const image = result.image;
+    const imageText = !image
+      ? ""
+      : "format" in image
+        ? `; image ${image.format.toUpperCase()} ${image.width} x ${image.height} px, ${image.status}`
+        : `; image ${image.status === "removed" ? "removed" : "none stored"}`;
     print(
       `Plan imported for site ${result.site}: ${result.zones} zones (${result.changed} changed, ${result.unchanged} unchanged); ` +
-        `drawing ${result.svgBytes} bytes, ${result.svgChanged ? "written" : "unchanged"}.`,
+        `drawing ${result.svgBytes} bytes, ${result.svgChanged ? "written" : "unchanged"}${imageText}.`,
     );
     return 0;
   } catch (error) {

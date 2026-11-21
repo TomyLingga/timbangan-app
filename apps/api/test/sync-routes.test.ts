@@ -18,10 +18,23 @@ describe("POST /api/admin/sync/odoo", () => {
     const { post, database } = await withOdoo();
     const response = await post("logistics");
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ contracts: 8, partners: 2, products: 3, skipped: 3, durationMs: expect.any(Number) });
+    expect(response.json()).toEqual({ contracts: 8, partners: 2, products: 3, skipped: 3, tanks: { status: "SKIPPED", reason: "Lokasi induk tangki di Odoo belum diatur (ODOO_TANK_PARENT_LOCATION_ID); tangki tidak disinkronkan." }, durationMs: expect.any(Number) });
     expect(await database.query("select count(*)::int as n from erp_contracts")).toEqual([{ n: 8 }]);
 
     expect((await post("logistics")).json()).toMatchObject({ contracts: 0, partners: 0, products: 0, skipped: 0 });
+  });
+
+  it("also copies the tanks when the parent location is configured", async () => {
+    const odoo = await startFakeOdoo(sampleOdooRecords());
+    const context = await testApp({ ...odoo.env, ODOO_TANK_PARENT_LOCATION_ID: "40" });
+    await seedStaff(context.database, "logistics", LOGISTICS);
+    const response = await context.app.inject({ method: "POST", url: "/api/admin/sync/odoo", headers: await bearer(context.app, "logistics") });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().tanks).toEqual({ status: "OK", written: 4, deactivated: 0, skipped: 0 });
+    expect(await context.database.query("select entity, status from erp_sync_runs order by id")).toEqual([
+      { entity: "CONTRACT", status: "OK" },
+      { entity: "TANK", status: "OK" },
+    ]);
   });
 
   it("is open to staff with contracts:EDIT only", async () => {
@@ -142,8 +155,15 @@ describe("sync:odoo command", () => {
     const lines: string[] = [];
     const code = await runSyncOdoo({ ...base, ...odoo.env }, (line) => lines.push(line), async () => ({ ...database, close: async () => {} }));
     expect(code).toBe(0);
-    expect(lines.join("\n")).toMatch(/^Odoo sync finished in \d+ ms: 8 contracts, 2 partners, 3 products written; 3 lines skipped\.$/);
+    expect(lines.join("\n")).toMatch(
+      /^Odoo sync finished in \d+ ms: 8 contracts, 2 partners, 3 products written; 3 lines skipped\.\nTanks skipped: ODOO_TANK_PARENT_LOCATION_ID is not set\.$/,
+    );
     expect(await database.query("select status from erp_sync_runs")).toEqual([{ status: "OK" }]);
+
+    lines.length = 0;
+    const withTanks = { ...base, ...odoo.env, ODOO_TANK_PARENT_LOCATION_ID: "40" };
+    expect(await runSyncOdoo(withTanks, (line) => lines.push(line), async () => ({ ...database, close: async () => {} }))).toBe(0);
+    expect(lines[1]).toBe("Tanks: 4 written, 0 made inactive, 0 skipped.");
   });
 
   it("explains missing settings and a failed run, and exits with 1", async () => {

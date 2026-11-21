@@ -5,6 +5,7 @@ import { Check, CircleCheck, CreditCard, Loader2, OctagonX, ScanLine, TriangleAl
 import { motion, useReducedMotion } from "motion/react";
 
 import { ActionSheet } from "@/components/action-sheet";
+import { AttachmentList } from "@/components/attachments";
 import { SelectField, TextField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
 import { AccessDenied, Notice, PageHeader } from "@/components/page-parts";
@@ -268,6 +269,19 @@ function TruckCard({ trip }: { trip: Trip }) {
           <dd className="tabular-nums">{formatDateTime(trip.spj?.validUntil ?? null)}</dd>
         </div>
       </dl>
+      {trip.direction === "IN" ? (
+        <div className="flex flex-col gap-2 border-t pt-4">
+          <p className="text-xs text-muted-foreground">Slip timbang PKS</p>
+          <AttachmentList
+            title="Slip timbang PKS"
+            files={trip.slips ?? []}
+            max={3}
+            canChange={false}
+            emptyText="Tidak ada slip timbang yang dilampirkan."
+            testId="gate-slips"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

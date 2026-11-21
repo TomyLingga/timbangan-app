@@ -123,9 +123,10 @@ async function run(browser) {
   check("Beranda shows API health", Boolean(await browser.hasText("Terhubung")));
   check("partner account gets no Odoo panel", !(await browser.evaluate("document.body.innerText.includes('Salinan data dari Odoo')")));
   check(
-    "a partner's Beranda has no truck flow and no error, and does not ask for the trip flow",
-    (await browser.evaluate(`!document.querySelector('[aria-label="Truk per tahap"]') && !document.querySelector('main [role="alert"]')`)) &&
-      (await stat("GET /api/trips/flow")) === 0,
+    "a partner's Beranda has no stage list, no plant map and no error, and asks for neither",
+    (await browser.evaluate(`!document.querySelector('[aria-label="Truk per tahap"]') && !document.querySelector('[data-testid="home-plant"]') && !document.querySelector('main [role="alert"]')`)) &&
+      (await stat("GET /api/trips/flow")) === 0 &&
+      (await stat("GET /api/control-room/state")) === 0,
   );
   check(
     "a partner's Beranda counts its own registrations",
@@ -195,9 +196,11 @@ async function run(browser) {
   check("no history entry keeps the token (root landing)", !historyAfterRoot.some((url) => url.startsWith(WEB) && url.includes("token=")));
   check("staff account sees the Odoo panel on Beranda", Boolean(await browser.hasText("Salinan data dari Odoo")));
   check(
-    "Beranda draws the truck flow per stage from GET /api/trips/flow",
+    "Beranda of staff without the control room lists the trucks per stage from GET /api/trips/flow, without a map",
     Boolean(await browser.waitFor(`(document.querySelector('[aria-label="Truk per tahap"]')?.innerText ?? '').replace(/\\s+/g, ' ').includes('Akan datang 1')`)) &&
-      (await stat("GET /api/trips/flow")) > 0,
+      (await browser.evaluate(`!document.querySelector('[data-testid="home-plant"]') && !document.querySelector('main svg filter')`)) &&
+      (await stat("GET /api/trips/flow")) > 0 &&
+      (await stat("GET /api/control-room/state")) === 0,
   );
   check("exchange was called once for the root landing", (await stat("POST /api/auth/sso/exchange")) === 1);
 
@@ -236,7 +239,9 @@ async function run(browser) {
     // Every page but Pengguna for a logistics admin. The plant map now is the control room (module dashboard),
     // which this account does not hold, so nothing is listed as planned any more.
     // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
-    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/tujuan', '/kartu', '/laporan', '/stasiun'];
+    // and since migration 0006 the plant masters: Tangki and Segel
+    // Tujuan left the menu: the destination is typed on each DO (owner's decision, 22 November 2026)
+    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/stasiun'];
     return !dialog.innerText.includes('Belum tersedia') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
@@ -276,9 +281,9 @@ async function run(browser) {
   // 15. Supir, as a logistics admin: totals per status, search, filter, VCF sync, new driver.
   await browser.goto(`${API}/api/auth/sso/start?as=admin.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Contoh')");
-  check("menu has Supir, Kendaraan and Tujuan but no Pengguna for a logistics admin", await browser.evaluate(`(() => {
+  check("menu has Supir and Kendaraan but neither Tujuan nor Pengguna for a logistics admin", await browser.evaluate(`(() => {
     const links = [...document.querySelectorAll('aside nav a')].map((a) => a.getAttribute('href'));
-    return ['/supir', '/kendaraan', '/tujuan'].every((href) => links.includes(href)) && !links.includes('/pengguna');
+    return ['/supir', '/kendaraan'].every((href) => links.includes(href)) && !links.includes('/pengguna') && !links.includes('/tujuan');
   })()`));
   await browser.click('a[href="/supir"]');
   check("/supir lists the drivers", (await browser.waitFor(visibleRows)) === 10);
@@ -437,25 +442,17 @@ async function run(browser) {
   await browser.screenshot("14b-supir-phone-light");
   await browser.viewport(1366, 900);
 
-  // 17. Tujuan: customer filter, create.
-  await browser.goto(`${WEB}/tujuan`);
-  check("/tujuan lists the destinations", (await browser.waitFor(visibleRows)) === 4);
-  await pickPartner(browser, 'input[name="customerFilter"]', "Contoh B");
-  check("customer filter narrows the list", (await browser.waitFor(`${visibleRows} === 2 && ${visibleRows}`)) === 2 && (await browser.evaluate(rowText("Depo Contoh Lama"))).includes("Nonaktif"));
-  await browser.click('button[aria-label="Kosongkan customer"]');
-  await browser.waitFor(`${visibleRows} === 4`);
-  await browser.click("Tujuan baru");
-  await browser.click(inSheet('button[type="submit"]'));
-  check("destination form asks for name and address", Boolean(await browser.hasText("Isi nama tempat.")) && Boolean(await browser.hasText("Isi alamat.")));
-  await pickPartner(browser, inSheet('input[name="customerLookup"]'), "Contoh C");
-  await browser.fill(inSheet('input[name="name"]'), "Gudang Uji Asap");
-  await browser.fill(inSheet('textarea[name="address"]'), "Jalan Uji No. 1");
-  await browser.fill(inSheet('input[name="regency"]'), "Kota Uji");
-  await browser.click(inSheet('button[type="submit"]'));
-  check("new destination is saved", Boolean(await browser.hasText("Tujuan Gudang Uji Asap ditambahkan.")));
-  const newDestination = (await browser.waitFor(rowText("Gudang Uji Asap"))) ?? "";
-  check("new destination is listed with its customer", ["Customer Contoh C", "Jalan Uji No. 1", "Kota Uji"].every((part) => newDestination.includes(part)), newDestination);
-  await browser.screenshot("15-tujuan-light");
+  // 17. The destinations master is no longer offered: not in the menu, not in the command palette.
+  await browser.goto(`${WEB}/`);
+  await browser.waitFor("document.body.innerText.includes('Akun yang sedang masuk')");
+  await browser.click('button[aria-label="Cari halaman"][aria-keyshortcuts]');
+  await browser.waitFor(`document.querySelector('[role="listbox"][aria-label="Halaman"]')`);
+  await browser.type('input[aria-label="Cari halaman"]', "tujuan");
+  check(
+    "the command palette has no Tujuan page",
+    Boolean(await browser.waitFor(`document.querySelector('[role="listbox"][aria-label="Halaman"]')?.innerText.includes('Tidak ada halaman dengan nama itu.')`)),
+  );
+  await browser.pressEscape();
 
   // 18. Beranda shows the VCF sync next to the Odoo sync; /pengguna is refused without the users module.
   await browser.goto(`${WEB}/`);
@@ -583,13 +580,60 @@ async function run(browser) {
   await browser.goto(`${WEB}/`);
   await signOut(browser);
 
+  // 19c. Beranda of a holder of the dashboard module (the local account): the live plant map instead of the stages.
+  const flowBeforeMap = await stat("GET /api/trips/flow");
+  await partnerSignIn(browser, "petugas.lokal");
+  check(
+    "Beranda of a dashboard holder shows the live plant map on the plan picture, the trucks per zone and the control room link",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const map = document.querySelector('[data-testid="home-plant"]');
+        if (!map) return false;
+        const picture = map.querySelector('[data-testid="plan-image"]')?.getAttribute('href') ?? '';
+        const zones = map.querySelectorAll('[data-testid="zone-counts"] li').length;
+        const markers = map.querySelectorAll('[data-trip]').length;
+        const link = map.querySelector('a[href="/ruang-kontrol"]')?.innerText.includes('Buka ruang kontrol');
+        return picture.startsWith('blob:') && zones === 9 && markers > 0 && link;
+      })()`),
+    ) &&
+      (await browser.evaluate(`!document.querySelector('[aria-label="Truk per tahap"]') && !document.querySelector('main svg filter')`)) &&
+      (await stat("GET /api/trips/flow")) === flowBeforeMap &&
+      (await stat("GET /api/control-room/plan-image")) > 0,
+  );
+  await browser.evaluate(`document.querySelector('[data-testid="home-plant"] [data-trip]').focus()`);
+  check(
+    "a marker on Beranda shows its tooltip on focus and opens no timeline",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="home-plant"] [role="tooltip"]')?.innerText.includes('ZZ')`)) &&
+      (await browser.evaluate(`!document.querySelector('[data-testid="home-plant"] [data-trip]').getAttribute('aria-label').includes('garis waktu')`)),
+  );
+  await browser.screenshot("19-beranda-denah-light");
+  await signOut(browser);
+
   await phaseThree(browser);
   await phaseFour(browser);
+  await phaseFive(browser);
 }
 
 // --- phase 3: registration, delivery order, SPJ, the post ---------------------
 
 const noHorizontalScroll = "document.documentElement.scrollWidth <= window.innerWidth";
+/** The path of the draft that got a weighbridge slip in step 22b, for the post in step 37. */
+let slipRegistrationPath = null;
+
+/** Chooses a made-up file in the file input inside `scope`, as a person picking it would. */
+async function chooseFile(browser, scope, { name, type, text }) {
+  await browser.waitFor(`Boolean(document.querySelector(${JSON.stringify(`${scope} input[type="file"]`)}))`);
+  await browser.evaluate(`(() => {
+    const input = document.querySelector(${JSON.stringify(`${scope} input[type="file"]`)});
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([${JSON.stringify(text)}], ${JSON.stringify(name)}, { type: ${JSON.stringify(type)} }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+}
+
+const PDF_TEXT = "%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n";
+
 const textOf = (selector) => `(document.querySelector(${JSON.stringify(selector)})?.innerText ?? '').replace(/\\s+/g, ' ')`;
 
 async function partnerSignIn(browser, username) {
@@ -738,9 +782,22 @@ async function phaseThree(browser) {
   await pickOption(browser, 'input[name="contractLookup"]', "0124/CONTOH");
   await fillTruck(browser, { scope: "main", prefix: "truck", plate: "ZZ 0001 CTH", licence: "CONTOH0002" });
   await browser.fill('input[name="letters.0.originNetKg"]', "1000");
+  await chooseFile(browser, '[data-testid="form-slips"]', { name: "slip.docx", type: "application/msword", text: "bukan slip" });
+  check("the form refuses a file that is not a PDF or a picture", Boolean(await browser.hasText("Pilih berkas PDF atau gambar JPEG, PNG, atau WebP.")));
+  await chooseFile(browser, '[data-testid="form-slips"]', { name: "slip-pks.pdf", type: "application/pdf", text: PDF_TEXT });
+  check(
+    "a weighbridge slip is uploaded on the form and waits for the save",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="form-slips"]')}.includes('slip-pks.pdf')`)) && (await stat("POST /api/files")) === 1,
+  );
   await browser.click("Simpan draf");
   const draftPath = await browser.waitFor("location.pathname.startsWith('/registrasi/r-') && location.pathname");
   check("a registration is saved as a draft", Boolean(draftPath) && Boolean(await browser.hasText("Registrasi disimpan sebagai draf.")));
+  check(
+    "the slip is linked to the truck of the draft and listed in the detail",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="trip-slips-1"]')}.includes('slip-pks.pdf')`)) &&
+      (await stat("POST /api/registrations/:id/trips/:tripId/files")) === 1,
+  );
+  slipRegistrationPath = draftPath;
   await browser.click("Ubah draf");
   check(
     "the draft opens in its form with the contract, the truck looked up again and the letter",
@@ -748,6 +805,7 @@ async function phaseThree(browser) {
       Boolean(await browser.waitFor(`${textOf("main")}.includes('Surat kendaraan') && ${textOf("main")}.includes('Supir Contoh 02')`)) &&
       (await browser.evaluate(`document.querySelector('input[name="letters.0.originNetKg"]').value === '1000'`)),
   );
+  check("the draft form lists the slip it already has", Boolean(await browser.waitFor(`${textOf('[data-testid="form-slips"]')}.includes('slip-pks.pdf')`)));
   await browser.fill('input[name="letters.0.originNetKg"]', "1500");
   await browser.click("Kirim registrasi");
   check(
@@ -774,8 +832,11 @@ async function phaseThree(browser) {
   await browser.waitFor(`location.pathname === '/delivery-order' && ${visibleRows} > 0`);
   await browser.click("DO baru");
   await pickOption(browser, inSheet('input[name="contractLookup"]'), "0045/CONTOH");
-  await browser.waitFor(`Boolean(document.querySelector('select[name="destinationId"] option[value="t-1"]'))`);
-  await browser.fill(inSheet('select[name="destinationId"]'), "t-1");
+  await browser.fill(inSheet('input[name="destName"]'), "Gudang Uji Ketik");
+  await browser.fill(inSheet('textarea[name="destAddress"]'), "Jalan Uji No. 2");
+  await browser.fill(inSheet('input[name="destDistrict"]'), "Kecamatan Uji");
+  await browser.fill(inSheet('input[name="destRegency"]'), "Kota Uji");
+  await browser.fill(inSheet('input[name="destProvince"]'), "Provinsi Uji");
   await browser.fill(inSheet('input[name="qty"]'), "38002");
   await pickOption(browser, inSheet('input[name="transporterLookup"]'), "Contoh A");
   await browser.screenshot("22-do-form-light");
@@ -1129,6 +1190,149 @@ async function phaseFour(browser) {
   await browser.viewport(1366, 900);
   await browser.goto(`${WEB}/`);
   await signOut(browser);
+}
+
+async function phaseFive(browser) {
+  // 35. Tangki: tanks from Odoo with the product name Odoo keeps, the note, the active switch, the sync.
+  await staffSignIn(browser, "admin.contoh");
+  const menu = await menuLinks(browser);
+  check("Tangki and Segel are in the menu of a holder of plant_masters", menu.includes("/tangki") && menu.includes("/segel"), menu);
+  await browser.click('a[href="/tangki"]');
+  check("/tangki lists the tanks", (await browser.waitFor(`location.pathname === '/tangki' && ${visibleRows}`)) === 5);
+  const pfad = await browser.evaluate(rowText("TK-201"));
+  check("a tank from Odoo shows the product name Odoo keeps and its source", pfad.includes("PFAD") && pfad.includes("Odoo"), pfad);
+  check("the page says the tanks are kept in Odoo", Boolean(await browser.hasText("Data tangki dikelola di Odoo.")));
+  await browser.type('main input[type="search"]', "pfad");
+  check("search narrows the tanks", (await browser.waitFor(`location.search.includes('q=pfad') && ${visibleRows} === 1 && ${visibleRows}`)) === 1);
+  await browser.goto(`${WEB}/tangki`);
+  await browser.waitFor(`${visibleRows} === 5`);
+  await browser.click('button[aria-label="Tangki TK-101 aktif"]');
+  check(
+    "the switch turns a tank off",
+    Boolean(await browser.hasText("Tangki TK-101 dinonaktifkan.")) && Boolean(await browser.waitFor(`${rowText("TK-101")}.includes('Nonaktif')`)),
+  );
+  await browser.click("Ambil dari Odoo");
+  check("the Odoo sync reports its tank step", Boolean(await browser.hasText("Tangki dari Odoo: 0 tangki baru atau berubah.")));
+  await browser.screenshot("40-tangki-light");
+
+  // 36. Segel: status filter, a roll of seals, voiding an available seal.
+  await browser.click('a[href="/segel"]');
+  check("/segel lists the seal stock", (await browser.waitFor(`location.pathname === '/segel' && ${visibleRows}`)) === 12);
+  await browser.goto(`${WEB}/segel?status=AVAILABLE`);
+  check("the status filter keeps the available seals", (await browser.waitFor(`${visibleRows} === 9 && ${visibleRows}`)) === 9);
+  await browser.click("Tambah segel");
+  await browser.fill(inSheet('input[name="prefix"]'), "lc-");
+  await browser.fill(inSheet('input[name="from"]'), "13");
+  await browser.fill(inSheet('input[name="to"]'), "20");
+  check("the form shows the first and the last number of the roll", Boolean(await browser.waitFor(`${textOf('[data-testid="seal-preview"]')}.includes('LC-000013 sampai LC-000020: 8 segel.')`)));
+  await browser.click(inSheet('button[type="submit"]'));
+  check("a roll of seals is added and counted", Boolean(await browser.hasText("8 segel ditambahkan (LC-000013 sampai LC-000020).")) && Boolean(await browser.waitFor(`${visibleRows} === 17`)));
+  await browser.click('button[aria-label="Batalkan segel LC-000004"]');
+  await browser.click(inSheet('button[type="submit"]'));
+  check("an available seal is voided after a confirmation", Boolean(await browser.hasText("Segel LC-000004 dibatalkan.")) && Boolean(await browser.waitFor(`${visibleRows} === 16`)));
+  await browser.screenshot("41-segel-light");
+  await browser.colorScheme("dark");
+  await browser.viewport(390, 844, true);
+  for (const page of ["/tangki", "/segel"]) {
+    await browser.goto(`${WEB}${page}`);
+    await browser.waitFor("document.querySelector('main h1')");
+    await sleep(400);
+    check(`${page} has no horizontal scroll on a phone in the dark theme`, await browser.evaluate(noHorizontalScroll));
+    await browser.screenshot(`42${page.replace("/", "-")}-phone-dark`);
+  }
+  await browser.viewport(1440, 900);
+  await browser.colorScheme("light");
+
+  // 37. Lampiran of a delivery order: logistics adds and removes, the transporter opens.
+  const token = await apiSession("admin.contoh");
+  const ordersOf = async (status) =>
+    (await (await fetch(`${API}/api/delivery-orders?status=${status}&limit=50`, { headers: { authorization: `Bearer ${token}` } })).json()).items;
+  const draft = (await ordersOf("DRAFT"))[0];
+  const sent = (await ordersOf("SENT")).find((order) => order.transporter?.name === "Transporter Contoh A");
+  await browser.goto(`${WEB}/delivery-order/${draft.id}`);
+  check("a DO shows its Lampiran block", Boolean(await browser.waitFor(`${textOf('[data-testid="do-files"]')}.includes('Belum ada lampiran.')`)));
+  const uploadsBefore = await stat("POST /api/files");
+  await chooseFile(browser, '[data-testid="do-files"]', { name: "surat-do.pdf", type: "application/pdf", text: PDF_TEXT });
+  check(
+    "logistics attaches the DO letter",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="do-files"]')}.includes('surat-do.pdf')`)) &&
+      (await stat("POST /api/files")) === uploadsBefore + 1 &&
+      (await stat("POST /api/delivery-orders/:id/files")) === 1,
+  );
+  await browser.click('button[aria-label="Hapus surat-do.pdf"]');
+  await browser.click("Ya, hapus");
+  check("a file is removed after a confirmation", Boolean(await browser.waitFor(`${textOf('[data-testid="do-files"]')}.includes('Belum ada lampiran.')`)));
+  await browser.goto(`${WEB}/delivery-order/${sent.id}`);
+  await chooseFile(browser, '[data-testid="do-files"]', { name: "surat-do-kirim.pdf", type: "application/pdf", text: PDF_TEXT });
+  await browser.waitFor(`${textOf('[data-testid="do-files"]')}.includes('surat-do-kirim.pdf')`);
+  await browser.screenshot("43-do-lampiran-light");
+  await signOut(browser);
+  await partnerSignIn(browser, "transporter.contoh");
+  await browser.goto(`${WEB}/delivery-order/${sent.id}`);
+  check(
+    "the transporter sees the letter and cannot change the files",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="do-files"]')}.includes('surat-do-kirim.pdf')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="do-files"] input[type="file"]'))`)),
+  );
+  const reads = await stat("GET /api/files/:id");
+  await browser.click('button[aria-label="Buka surat-do-kirim.pdf"]');
+  check("Buka fetches the file for a new tab", Boolean(await browser.waitFor(`true`)) && (await waitStat("GET /api/files/:id", reads + 1)));
+  await signOut(browser);
+
+  // 37b. The printed SPJ of a truck of the DO made in step 23 shows the destination typed on that DO.
+  {
+    const reader = await apiSession("admin.contoh");
+    const get = async (path) => (await fetch(`${API}${path}`, { headers: { authorization: `Bearer ${reader}` } })).json();
+    let printed = null;
+    for (const trip of (await get("/api/trips?limit=50")).items ?? []) {
+      if (trip.direction !== "OUT" || !trip.spj) continue;
+      const spj = (await get(`/api/trips/${trip.id}/spj`)).spj;
+      if (spj?.lines?.some((line) => line.destination?.name === "Gudang Uji Ketik")) {
+        printed = trip.id;
+        break;
+      }
+    }
+    await staffSignIn(browser, "admin.contoh");
+    await browser.goto(`${WEB}/spj/${printed}/cetak`);
+    check(
+      "the printed SPJ shows the typed destination",
+      Boolean(printed) &&
+        Boolean(await browser.waitFor(`${textOf('[data-testid="spj-sheet"]')}.includes('Gudang Uji Ketik, Jalan Uji No. 2, Kecamatan Uji, Kota Uji, Provinsi Uji')`)),
+      String(printed),
+    );
+    await browser.goto(`${WEB}/`);
+    await signOut(browser);
+  }
+
+  // 38. The post shows the slip of the scanned truck and opens it.
+  if (slipRegistrationPath) {
+    // the sign-outs above ended the earlier API session
+    const reader = await apiSession("admin.contoh");
+    const registration = (
+      await (await fetch(`${API}/api/registrations/${slipRegistrationPath.split("/").at(-1)}`, { headers: { authorization: `Bearer ${reader}` } })).json()
+    ).registration;
+    await staffSignIn(browser, "pos.contoh");
+    await browser.click('a[href="/pos"]');
+    await browser.waitFor(`location.pathname === '/pos' && document.activeElement?.id === 'gate-scan'`);
+    await browser.typeFocused(registration.trips[0].spj.barcodeToken);
+    await browser.pressEnter();
+    check("the scanned truck shows the slip of the PKS", Boolean(await browser.waitFor(`${textOf('[data-testid="gate-slips"]')}.includes('slip-pks.pdf')`)));
+    const before = await stat("GET /api/files/:id");
+    await browser.click('[data-testid="gate-slips"] button[aria-label="Buka slip-pks.pdf"]');
+    check("the post opens the slip", await waitStat("GET /api/files/:id", before + 1));
+    await browser.screenshot("44-pos-slip-light");
+    await browser.goto(`${WEB}/`);
+    await signOut(browser);
+  }
+}
+
+/** Waits until the mock has answered `route` at least `count` times. */
+async function waitStat(route, count) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    if ((await stat(route)) >= count) return true;
+    await sleep(100);
+  }
+  return false;
 }
 
 // --- main -------------------------------------------------------------------

@@ -47,6 +47,8 @@ describe("application shell", () => {
     });
     expect(preflight.statusCode).toBe(204);
     expect(preflight.headers["access-control-allow-origin"]).toBe("http://web.test:3000");
+    // the web app changes records with PUT and PATCH and removes attachments with DELETE
+    expect(String(preflight.headers["access-control-allow-methods"]).split(/,\s*/)).toEqual(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
   });
 
   it("answers an unknown route with the JSON error envelope", async () => {

@@ -42,7 +42,7 @@ describe("syncOdoo", () => {
     const { database, sync, clock, header, odoo } = await setup();
     const result = await sync();
     // 5 purchase lines (the draft is skipped) + 3 sale lines (draft and the freight line are skipped)
-    expect(result).toEqual({ contracts: 8, partners: 2, products: 3, skipped: 3, durationMs: expect.any(Number) });
+    expect(result).toEqual({ contracts: 8, partners: 2, products: 3, skipped: 3, tanks: { status: "SKIPPED", reason: "Lokasi induk tangki di Odoo belum diatur (ODOO_TANK_PARENT_LOCATION_ID); tangki tidak disinkronkan." }, durationMs: expect.any(Number) });
 
     const rows = await contracts(database);
     expect(rows.map((row) => row.erp_ref)).toEqual([

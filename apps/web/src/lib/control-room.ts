@@ -37,6 +37,8 @@ export interface ZoneStat {
 export interface ControlRoomState {
   generatedAt: string;
   plantDay: string;
+  /** The picture of the plan (GET /api/control-room/plan-image), null when none was imported. */
+  planImage: { width: number; height: number; version: string } | null;
   zones: ControlRoomZone[];
   trucks: ControlRoomTruck[];
   upcoming: { in: number; out: number };
@@ -166,6 +168,11 @@ export function markerCapacity(box: Pick<Box, "width" | "height">, marker: { wid
   return columns * rows;
 }
 
+/** Whether one marker may stand in the box: it may stick out by a quarter of its width or a third of its height. */
+export function markerFits(box: Pick<Box, "width" | "height">, marker: { width: number; height: number }): boolean {
+  return marker.width <= box.width * 1.25 && marker.height <= box.height * 1.5;
+}
+
 /**
  * Places `count` markers of one size on a grid inside a zone's box (pixels): rows filled from the top left, the
  * group centred in the box. When they do not all fit, the last place shows a "+n" chip. A zone smaller than one
@@ -205,4 +212,10 @@ export function zoneSummary(zones: ControlRoomZone[], stats: ZoneStat[], inside:
     return `${shortZoneName(zone)} ${count === 0 ? "kosong" : `${count} truk`}.`;
   });
   return [`Truk di dalam pabrik: ${inside}.`, ...parts].join(" ");
+}
+
+/** The number of trucks per zone, in plan order, with the zone's short name and colour (the row under the map). */
+export function zoneCounts(zones: ControlRoomZone[], stats: ZoneStat[]): { code: string; name: string; color: string | null; count: number }[] {
+  const counts = new Map(stats.map((stat) => [stat.zone, stat.count]));
+  return zones.map((zone) => ({ code: zone.code, name: shortZoneName(zone), color: zone.color, count: counts.get(zone.code) ?? 0 }));
 }

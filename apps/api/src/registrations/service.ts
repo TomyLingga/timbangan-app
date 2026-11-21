@@ -15,6 +15,7 @@ import {
   registrations,
   spjDocuments,
   tripAllocations,
+  tripFiles,
   trips,
   vehicles,
   vehicleTypes,
@@ -26,6 +27,7 @@ import { nextDocumentNo } from "../numbering.js";
 import { defaultSite, readSetting, siteById } from "../settings.js";
 import { issueSpj } from "../trips/spj.js";
 import { ARRIVED_STATUSES } from "../trips/view.js";
+import { SLIP_LABEL } from "../attachments/view.js";
 import { checkRegistration, doRemaining } from "./checks.js";
 
 type Field = { field: string; message: string };
@@ -159,7 +161,15 @@ export async function writeRegistration(
   if (!fields.length && new Set(keys).size !== keys.length) fields.push({ field: "allocations", message: "Kontrak atau DO yang sama dipilih dua kali." });
   if (fields.length) throw fail(fields);
 
-  // drafts being replaced give back what they held before anything is computed again
+  // drafts being replaced give back what they held before anything is computed again; the weighbridge slips of a
+  // truck are kept by its place in the list and linked again to the new row
+  const keptSlips = existing
+    ? await tx
+        .select({ seq: trips.seq, fileId: tripFiles.fileId, label: tripFiles.label, addedBy: tripFiles.addedBy, addedAt: tripFiles.addedAt })
+        .from(tripFiles)
+        .innerJoin(trips, eq(trips.id, tripFiles.tripId))
+        .where(and(eq(trips.registrationId, existing.id), eq(tripFiles.label, SLIP_LABEL)))
+    : [];
   if (existing) {
     await tx.delete(trips).where(eq(trips.registrationId, existing.id));
     await tx.delete(registrationAllocations).where(eq(registrationAllocations.registrationId, existing.id));
@@ -427,6 +437,8 @@ export async function writeRegistration(
       })
       .returning({ id: trips.id });
     if (!created) throw new Error("The trip was not created.");
+    const slips = keptSlips.filter((slip) => slip.seq === index + 1);
+    if (slips.length) await tx.insert(tripFiles).values(slips.map(({ seq: _seq, ...slip }) => ({ ...slip, tripId: created.id })));
     for (const [allocationIndex, allocationId] of allocationIds.entries()) {
       const letter = letters.find((item) => item.allocationSeq === allocationIndex + 1);
       const [share] = await tx

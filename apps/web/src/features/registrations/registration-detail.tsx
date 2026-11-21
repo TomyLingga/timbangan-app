@@ -6,6 +6,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { ArrowLeft, ChevronDown, ChevronUp, CircleCheck, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
+import { AttachmentList } from "@/components/attachments";
 import { FindingsList } from "@/components/findings-list";
 import { AccessDenied, ListError, ListSkeleton, Notice } from "@/components/page-parts";
 import { StatusBadge } from "@/components/status-badge";
@@ -14,6 +15,7 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { DIRECTION_LABELS } from "@/features/registrations/registrations-screen";
 import { TripWorkPanel } from "@/features/trips/trip-work";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { canChangeSlips, MAX_TRIP_SLIPS } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
 import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canView, isStaff } from "@/lib/permissions";
@@ -22,6 +24,9 @@ import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/li
 import type { Registration, Trip, User } from "@/lib/types";
 
 const yesNo = (value: boolean | null) => (value === null ? "-" : value ? "Ya" : "Tidak");
+
+const slipPath = (registration: Registration, trip: Trip) =>
+  `/api/registrations/${encodeURIComponent(String(registration.id))}/trips/${encodeURIComponent(String(trip.id))}/files`;
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -74,12 +79,15 @@ function TripCard({
   registration,
   user,
   onReissue,
+  onSlipsChanged,
 }: {
   trip: Trip;
   registration: Registration;
   user: User;
   /** Present when the account may reissue the SPJ of this truck. */
   onReissue?: () => void;
+  /** Reloads the registration after a slip was added or removed. */
+  onSlipsChanged: () => void;
 }) {
   const incoming = registration.direction === "IN";
   const allocationName = (seq: number) => {
@@ -149,6 +157,29 @@ function TripCard({
         </ul>
       ) : null}
 
+      {incoming ? (
+        <div className="mt-3 flex flex-col gap-2 border-t pt-3">
+          <h4 className="text-sm font-medium">Slip timbang</h4>
+          <AttachmentList
+            title={`Slip timbang truk ${trip.seq}`}
+            files={trip.slips ?? []}
+            max={MAX_TRIP_SLIPS}
+            canChange={canChangeSlips(user, registration)}
+            onAdd={async (file) => {
+              await api.request(slipPath(registration, trip), { method: "POST", body: { fileId: file.id } });
+              onSlipsChanged();
+            }}
+            onRemove={async (file) => {
+              await api.request(`${slipPath(registration, trip)}/${encodeURIComponent(String(file.id))}`, { method: "DELETE" });
+              onSlipsChanged();
+            }}
+            emptyText="Belum ada slip timbang dari PKS."
+            hint="Slip timbangan PKS: PDF sampai 10 MB atau foto sampai 5 MB."
+            testId={`trip-slips-${trip.seq}`}
+          />
+        </div>
+      ) : null}
+
       {trip.cancelReason ? (
         <p className="mt-3 border-t pt-3 text-sm">
           <span className="font-medium">Alasan batal: </span>
@@ -192,6 +223,7 @@ type PendingAction = "approve" | "reject" | "cancel" | "submit" | null;
 const CREATED_NOTICES: Record<string, string> = {
   draf: "Registrasi disimpan sebagai draf. Kirim registrasi ini bila datanya sudah lengkap.",
   kirim: "Registrasi dikirim.",
+  slip: "Registrasi disimpan sebagai draf, tetapi slip timbang belum terlampir. Tambahkan slip di truknya, lalu kirim registrasi.",
 };
 
 function RegistrationView({ user, id }: { user: User; id: string }) {
@@ -343,6 +375,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
               registration={registration}
               user={user}
               onReissue={canReissueSpj(user) && mayBeReissued(trip, registration) ? () => setReissuing(trip) : undefined}
+              onSlipsChanged={() => setReloadToken((token) => token + 1)}
             />
           ))}
         </ul>

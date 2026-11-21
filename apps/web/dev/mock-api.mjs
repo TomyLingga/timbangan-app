@@ -29,6 +29,8 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { createServer } from "node:http";
 
+import { controlRoomRoutes } from "./mock-control-room.mjs";
+
 const PORT = Number(process.env.PORT ?? 3100);
 const HOST = process.env.HOST ?? "localhost";
 const WEB_ORIGIN = (process.env.WEB_ORIGIN ?? "http://localhost:3000").replace(/\/+$/, "");
@@ -100,6 +102,8 @@ const modules = [
   ["loading", "Muat", ["VIEW", "CREATE", "EDIT"], false],
   ["sealing", "Segel", ["VIEW", "CREATE", "EDIT"], false],
   ["reports", "Laporan", ["VIEW"], false],
+  // phase 5, migration 0006: tanks and seals, staff only
+  ["plant_masters", "Master pabrik", ["VIEW", "CREATE", "EDIT"], false],
 ].map(([code, name, levels, partnerAllowed]) => ({ code, name, levels, partnerAllowed }));
 
 const everything = () => Object.fromEntries(modules.map((item) => [item.code, item.levels.at(-1)]));
@@ -139,7 +143,8 @@ const users = [
     password: "contoh-123",
   },
   { id: "u-6", kind: "INTERNAL", username: "super.contoh", fullName: "Admin Sistem Contoh", permissions: everything(), partner: null },
-  { id: "u-7", kind: "INTERNAL", username: "petugas.lokal", fullName: "Petugas Lokal Contoh", permissions: everything(), partner: null, password: "contoh-123" },
+  // dashboard is not one of the modules above (apps/api src/auth/permissions.ts); it opens the plant map on Beranda
+  { id: "u-7", kind: "INTERNAL", username: "petugas.lokal", fullName: "Petugas Lokal Contoh", permissions: { ...everything(), dashboard: "VIEW" }, partner: null, password: "contoh-123" },
 ];
 users.forEach((user, index) => {
   user.employeeNo = user.kind === "INTERNAL" ? `EMP-CONTOH-${String(index + 1).padStart(2, "0")}` : null;
@@ -321,7 +326,7 @@ function corsHeaders(request) {
     "access-control-allow-origin": origin,
     "access-control-allow-credentials": "true",
     "access-control-allow-headers": "authorization, content-type",
-    "access-control-allow-methods": "GET, POST, PUT, PATCH, OPTIONS",
+    "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     vary: "Origin",
   };
 }
@@ -410,6 +415,13 @@ function guard(request, response, needs = [], { staffOnly = false } = {}) {
     return null;
   }
   return user;
+}
+
+/** The control room routes of dev/mock-control-room.mjs behind this mock's guard (staff with dashboard VIEW). */
+function controlRoom(request, response) {
+  for (const [key, value] of Object.entries(corsHeaders(request))) response.setHeader(key, value);
+  controlRoomRoutes(request, response, { allow: (req, res) => guard(req, res, [["dashboard", "VIEW"]], { staffOnly: true }) !== null });
+  return response.statusCode;
 }
 
 const invalid = (request, response, fields) =>
@@ -640,6 +652,26 @@ function doNumber(date = new Date()) {
   return `${String(seq).padStart(3, "0")}/DO/${SITE.code}/${ROMAN[Number(month) - 1]}/${year}`;
 }
 
+const DEST_FIELDS = ["destName", "destAddress", "destDistrict", "destRegency", "destProvince"];
+const DEST_LABELS = { destName: "Nama tujuan", destAddress: "Alamat tujuan", destDistrict: "Kecamatan tujuan", destRegency: "Kabupaten atau kota tujuan", destProvince: "Provinsi tujuan" };
+
+/** The typed destination of a DO as the API shows it; `id` is the master row of DOs made before migration 0008. */
+const typedDestination = (order) => ({
+  id: order.destinationId ?? null,
+  name: order.destName ?? null,
+  address: order.destAddress ?? null,
+  district: order.destDistrict ?? null,
+  regency: order.destRegency ?? null,
+  province: order.destProvince ?? null,
+});
+
+/** A seeded DO keeps the copy of its customer's first destination, the way migration 0008 copied it. */
+function seedDestinationOf(partner) {
+  const row = destinations.find((item) => item.partner?.id === partner.id);
+  if (!row) return { destinationId: null };
+  return { destinationId: row.id, destName: row.name, destAddress: row.address, destDistrict: row.district, destRegency: row.regency, destProvince: row.province };
+}
+
 function seedOrder(contractNo, extra) {
   const source = contracts.find((item) => item.contractNo === contractNo);
   const order = {
@@ -654,7 +686,7 @@ function seedOrder(contractNo, extra) {
     qty: 60000,
     uom: "Kg",
     tolerancePct: source.tolerancePct,
-    destinationId: destinations.find((item) => item.partner?.id === source.partner.id)?.id ?? null,
+    ...seedDestinationOf(source.partner),
     deliveryFrom: daysFromNow(-1),
     deliveryUntil: daysFromNow(14),
     transportTerms: "FRANCO",
@@ -734,7 +766,6 @@ const orderPlanned = (order, exceptRegistrationId = null) =>
 
 function publicOrder(order) {
   const contractRow = contracts.find((item) => item.id === order.contractId) ?? null;
-  const destinationRow = destinations.find((item) => item.id === order.destinationId) ?? null;
   const planned = orderPlanned(order);
   const orderTrips = trips.filter((trip) =>
     registrationOf(trip).allocations.some((allocation) => allocation.deliveryOrderId === order.id),
@@ -751,9 +782,7 @@ function publicOrder(order) {
     qty: order.qty,
     uom: order.uom,
     tolerancePct: order.tolerancePct,
-    destination: destinationRow
-      ? (({ id, name, address, district, regency, province }) => ({ id, name, address, district, regency, province }))(destinationRow)
-      : null,
+    destination: typedDestination(order),
     deliveryFrom: order.deliveryFrom,
     deliveryUntil: order.deliveryUntil,
     transportTerms: order.transportTerms,
@@ -803,6 +832,7 @@ function publicTrip(trip) {
     card: card ? { uid: card.uid, label: card.label } : null,
     checkedInAt: trip.checkedInAt,
     cancelReason: trip.cancelReason ?? null,
+    slips: (trip.slips ?? []).map(publicAttachment),
   };
 }
 
@@ -1147,6 +1177,8 @@ function writeRegistration(registration, plan, user) {
     allocations: plan.allocations,
     findings: [],
   });
+  // the weighbridge slips of a truck stay with its place in the list, as in the API
+  const keptSlips = new Map(tripsOf(registration).map((trip) => [trip.seq, trip.slips ?? []]));
   for (const trip of tripsOf(registration)) trips.splice(trips.indexOf(trip), 1);
   const count = plan.trips.length;
   const shares = plan.allocations.map((allocation) => (allocation.qtyPlanned === null ? null : splitShares(allocation.qtyPlanned, count)));
@@ -1211,6 +1243,7 @@ function writeRegistration(registration, plan, user) {
       id: `trip-${nextTripId++}`,
       registrationId: registration.id,
       seq: index + 1,
+      slips: keptSlips.get(index + 1) ?? [],
       tripNo: null,
       status: "DRAFT",
       vehicleId: vehicleRow.id,
@@ -2144,9 +2177,10 @@ function applyOrder(order, body, creating) {
     if (typeof body.qty !== "number" || !(body.qty > 0)) fields.qty = "Positive number";
     next.qty = body.qty;
   }
-  if (has("destinationId")) {
-    if (!destinations.some((item) => item.id === body.destinationId)) fields.destinationId = "Unknown destination";
-    next.destinationId = body.destinationId;
+  // the destination is typed on the DO (apps/api migration 0008): name and regency for a draft
+  for (const name of DEST_FIELDS) if (has(name)) next[name] = optionalText(body[name]);
+  for (const [name, message] of [["destName", "Nama tujuan wajib diisi."], ["destRegency", "Kabupaten atau kota tujuan wajib diisi."]]) {
+    if (!(name in next ? next[name] : creating ? null : order[name])) fields[name] = message;
   }
   if (has("transporterId")) {
     if (body.transporterId && partnerRole(findPartner(body.transporterId) ?? { id: "p-0" }) !== "transporter") fields.transporterId = "Unknown transporter";
@@ -2177,6 +2211,245 @@ function applyOrder(order, body, creating) {
 }
 
 // --- routes -----------------------------------------------------------------
+
+// --- migration 0008: tanks from Odoo, seals, files on DOs and trucks (apps/api src/plant-masters, src/files,
+// src/attachments) -------------------------------------------------------------------------------------------------
+
+let nextTankId = 1;
+const tanks = [
+  ["TK-101", "WH/Tangki/TK-101", products.cpo, null, 2_000_000, true, "ODOO"],
+  ["TK-102", "WH/Tangki/TK-102", null, "Olein", 1_500_000, true, "ODOO"],
+  ["TK-201", "WH/Tangki/TK-201", null, "PFAD", null, true, "ODOO"],
+  ["TK-202", "WH/Tangki/TK-202", products.stearin, null, null, false, "ODOO"],
+  ["TK-LAMA", "Tangki lama", null, null, 500_000, true, "LOCAL"],
+].map(([code, name, product, productLabel, capacityKg, isActive, source]) => ({
+  id: `t-${nextTankId++}`, code, name, product: product ? { id: product.id, name: product.name } : null, productLabel, capacityKg, isActive, source,
+}));
+
+let nextSealId = 1;
+const seals = [];
+for (let n = 1; n <= 12; n++) {
+  seals.push({ id: `sl-${nextSealId++}`, sealNo: `LC-${String(n).padStart(6, "0")}`, kind: "LOCIS", status: n <= 2 ? "USED" : n === 3 ? "VOID" : "AVAILABLE", batchRef: "LC-000001..LC-000012", createdAt: daysAgoIso(3), trip: null });
+}
+
+let nextFileId = 1;
+const storedFiles = new Map();
+const MAX_PDF = 10 * 1024 * 1024;
+const MAX_IMAGE = 5 * 1024 * 1024;
+
+const publicAttachment = (link) => {
+  const file = storedFiles.get(link.fileId);
+  return {
+    id: link.fileId,
+    label: link.label ?? null,
+    originalName: file?.originalName ?? null,
+    mimeType: file?.mimeType ?? "application/octet-stream",
+    sizeBytes: file?.bytes.length ?? 0,
+    addedAt: link.addedAt,
+    addedBy: link.addedBy,
+  };
+};
+
+/** The one file part of a multipart body: its name and bytes; null when there is none. */
+async function readFilePart(request) {
+  const type = request.headers["content-type"] ?? "";
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(type);
+  if (!boundary) return null;
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+  const marker = Buffer.from(`--${boundary[1] ?? boundary[2]}`);
+  let at = body.indexOf(marker);
+  while (at !== -1) {
+    const next = body.indexOf(marker, at + marker.length);
+    if (next === -1) break;
+    const part = body.subarray(at + marker.length + 2, next - 2);
+    const split = part.indexOf("\r\n\r\n");
+    const head = part.subarray(0, split).toString("utf8");
+    const name = /filename="([^"]*)"/i.exec(head);
+    if (name) return { name: name[1], bytes: part.subarray(split + 4) };
+    at = next;
+  }
+  return null;
+}
+
+const fileKind = (bytes) => {
+  if (bytes.subarray(0, 5).toString("latin1") === "%PDF-") return "application/pdf";
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (bytes.subarray(0, 4).toString("latin1") === "RIFF" && bytes.subarray(8, 12).toString("latin1") === "WEBP") return "image/webp";
+  return null;
+};
+
+/** Whether a partner account sees the registration (apps/api registrations/view.ts registrationsVisibleTo). */
+const seesRegistration = (user, registration) =>
+  user.kind === "INTERNAL" ||
+  (registration.direction === "IN" ? registration.partner?.id === user.partner?.id : registration.transporterId === user.partner?.id);
+
+/** GET /api/files/:id: staff read all; a partner its company's uploads and files linked to its own DO or registration. */
+function mayReadFile(user, id) {
+  if (user.kind === "INTERNAL") return true;
+  const file = storedFiles.get(id);
+  if (file?.partnerId && file.partnerId === user.partner?.id) return true;
+  if (deliveryOrders.some((order) => order.transporterId === user.partner?.id && order.status !== "DRAFT" && (order.files ?? []).some((link) => link.fileId === id))) return true;
+  return trips.some((trip) => (trip.slips ?? []).some((link) => link.fileId === id) && seesRegistration(user, registrationOf(trip)));
+}
+
+const linkedAnywhere = (id) =>
+  deliveryOrders.some((order) => (order.files ?? []).some((link) => link.fileId === id)) || trips.some((trip) => (trip.slips ?? []).some((link) => link.fileId === id));
+
+function plantAndFileRoutes() {
+  return {
+    "GET /api/tanks": (request, response, url) => {
+      if (!guard(request, response, [["plant_masters", "VIEW"]], { staffOnly: true })) return 0;
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const active = url.searchParams.get("active");
+      const items = tanks
+        .filter((tank) => !q || [tank.code, tank.name, tank.productLabel].some((text) => includesText(text, q)))
+        .filter((tank) => !active || String(tank.isActive) === active)
+        .sort((a, b) => a.code.localeCompare(b.code));
+      return send(request, response, 200, { items });
+    },
+
+    "PATCH /api/tanks/:id": async (request, response, url, id) => {
+      if (!guard(request, response, [["plant_masters", "EDIT"]], { staffOnly: true })) return 0;
+      const tank = tanks.find((item) => item.id === id);
+      if (!tank) return fail(request, response, 404, "NOT_FOUND", "Tangki tidak ditemukan.");
+      const body = await readJson(request);
+      if (tank.source === "ODOO" && Object.keys(body).some((key) => key !== "isActive")) {
+        return fail(request, response, 409, "FROM_ERP", "Tangki ini dari Odoo. Ubah datanya di Odoo; di sini hanya bisa diaktifkan atau dinonaktifkan.");
+      }
+      if (typeof body.isActive === "boolean") tank.isActive = body.isActive;
+      return send(request, response, 200, { tank });
+    },
+
+    "GET /api/seals": (request, response, url) => {
+      if (!guard(request, response, [["plant_masters", "VIEW"]], { staffOnly: true })) return 0;
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const status = url.searchParams.get("status") ?? "";
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      const matches = seals.filter((seal) => (!status || seal.status === status) && (!q || includesText(seal.sealNo, q))).sort((a, b) => a.sealNo.localeCompare(b.sealNo));
+      return send(request, response, 200, { items: matches.slice(0, limit), total: matches.length });
+    },
+
+    "POST /api/seals/batch": async (request, response) => {
+      if (!guard(request, response, [["plant_masters", "CREATE"]], { staffOnly: true })) return 0;
+      const body = await readJson(request);
+      const { kind = "LOCIS", prefix = "", from, to, width } = body;
+      if (![from, to, width].every(Number.isInteger) || to < from || to - from + 1 > 5000 || String(to).length > width) {
+        return invalid(request, response, { to: "Nomor segel tidak valid." });
+      }
+      const number = (n) => `${String(prefix).toUpperCase()}${String(n).padStart(width, "0")}`;
+      let created = 0;
+      for (let n = from; n <= to; n++) {
+        if (seals.some((seal) => seal.kind === kind && seal.sealNo === number(n))) continue;
+        seals.push({ id: `sl-${nextSealId++}`, sealNo: number(n), kind, status: "AVAILABLE", batchRef: `${number(from)}..${number(to)}`, createdAt: nowIso(), trip: null });
+        created++;
+      }
+      return send(request, response, 201, { created, skipped: to - from + 1 - created, first: number(from), last: number(to) });
+    },
+
+    "PATCH /api/seals/:id": async (request, response, url, id) => {
+      if (!guard(request, response, [["plant_masters", "EDIT"]], { staffOnly: true })) return 0;
+      const seal = seals.find((item) => item.id === id);
+      if (!seal) return fail(request, response, 404, "NOT_FOUND", "Segel tidak ditemukan.");
+      if (seal.status !== "AVAILABLE") return fail(request, response, 409, "INVALID_STATE", "Hanya segel yang belum dipakai yang bisa dibatalkan.");
+      seal.status = "VOID";
+      return send(request, response, 200, { seal });
+    },
+
+    "POST /api/files": async (request, response) => {
+      const user = authenticate(request, response);
+      if (!user) return 0;
+      if (user.kind === "PARTNER" ? !can(user, "registrations", "CREATE") : Object.keys(user.permissions).length === 0) {
+        return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+      }
+      const part = await readFilePart(request);
+      if (!part) return invalid(request, response, { file: "Kirim satu berkas sebagai multipart/form-data." });
+      const mimeType = fileKind(part.bytes);
+      if (!mimeType) return invalid(request, response, { file: "Berkas harus PDF atau gambar JPEG, PNG, atau WebP." });
+      if (part.bytes.length > (mimeType === "application/pdf" ? MAX_PDF : MAX_IMAGE)) {
+        return fail(request, response, 413, "FILE_TOO_LARGE", "Berkas paling besar 10 MB, gambar paling besar 5 MB.");
+      }
+      const id = `f-${nextFileId++}`;
+      storedFiles.set(id, { bytes: part.bytes, mimeType, originalName: part.name.slice(0, 200) || null, partnerId: user.kind === "PARTNER" ? user.partner.id : null });
+      return send(request, response, 201, { id, originalName: part.name || null, mimeType, sizeBytes: part.bytes.length });
+    },
+
+    "GET /api/files/:id": (request, response, url, id) => {
+      const user = authenticate(request, response);
+      if (!user) return 0;
+      const file = storedFiles.get(id);
+      if (!file || !mayReadFile(user, id)) return fail(request, response, 404, "NOT_FOUND", "Berkas tidak ditemukan.");
+      response.writeHead(200, {
+        ...corsHeaders(request),
+        "content-type": file.mimeType,
+        "content-disposition": `inline; filename="${(file.originalName ?? "berkas").replace(/[^\x20-\x7e]|["\\]/g, "_")}"`,
+        "x-content-type-options": "nosniff",
+      });
+      response.end(file.bytes);
+      return 200;
+    },
+
+    "POST /api/delivery-orders/:id/files": async (request, response, url, id) => {
+      const user = guard(request, response, [["delivery_orders", "CREATE"]], { staffOnly: true });
+      if (!user) return 0;
+      const order = deliveryOrders.find((item) => item.id === id);
+      if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
+      if (!["DRAFT", "SENT"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "Lampiran DO hanya bisa diubah selama DO berstatus DRAFT atau SENT.");
+      const { fileId } = await readJson(request);
+      const file = storedFiles.get(fileId);
+      if (!file || file.partnerId) return invalid(request, response, { fileId: "Berkas tidak ditemukan." });
+      if (linkedAnywhere(fileId)) return fail(request, response, 409, "DUPLICATE", "Berkas ini sudah dilampirkan.");
+      order.files ??= [];
+      if (order.files.length >= 5) return fail(request, response, 409, "TOO_MANY_FILES", "Paling banyak 5 lampiran per DO.");
+      order.files.push({ fileId, label: null, addedAt: nowIso(), addedBy: { id: user.id, fullName: user.fullName } });
+      return send(request, response, 201, { files: order.files.map(publicAttachment) });
+    },
+
+    "DELETE /api/delivery-orders/:id/files/:fileId": (request, response, url, id, fileId) => {
+      if (!guard(request, response, [["delivery_orders", "CREATE"]], { staffOnly: true })) return 0;
+      const order = deliveryOrders.find((item) => item.id === id);
+      if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
+      if (!["DRAFT", "SENT"].includes(order.status)) return fail(request, response, 409, "INVALID_STATE", "Lampiran DO hanya bisa diubah selama DO berstatus DRAFT atau SENT.");
+      const before = (order.files ?? []).length;
+      order.files = (order.files ?? []).filter((link) => link.fileId !== fileId);
+      if (order.files.length === before) return fail(request, response, 404, "NOT_FOUND", "Lampiran tidak ditemukan.");
+      return send(request, response, 200, { files: order.files.map(publicAttachment) });
+    },
+
+    "POST /api/registrations/:id/trips/:tripId/files": async (request, response, url, id, tripId) => slipChange(request, response, id, tripId, null),
+    "DELETE /api/registrations/:id/trips/:tripId/files/:fileId": (request, response, url, id, tripId) =>
+      slipChange(request, response, id, tripId, decodeURIComponent(url.pathname.split("/").at(-1))),
+  };
+}
+
+/** Adds (fileId null: from the body) or removes a weighbridge slip, with the rules of apps/api attachments/routes.ts. */
+async function slipChange(request, response, id, tripId, removeId) {
+  const user = guard(request, response, [["registrations", "CREATE"]]);
+  if (!user) return 0;
+  if (user.kind === "INTERNAL" && !can(user, "registrations", "EDIT")) return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+  const registration = registrations.find((item) => item.id === id);
+  if (!registration || !seesRegistration(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
+  const trip = trips.find((item) => item.id === tripId && item.registrationId === id);
+  if (!trip) return fail(request, response, 404, "NOT_FOUND", "Truk tidak ditemukan.");
+  if (registration.direction !== "IN") return fail(request, response, 409, "INVALID_STATE", "Slip timbang hanya untuk registrasi incoming.");
+  if (user.kind === "PARTNER" && registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Slip timbang hanya bisa diubah selama registrasi masih draf.");
+  trip.slips ??= [];
+  if (removeId !== null) {
+    const before = trip.slips.length;
+    trip.slips = trip.slips.filter((link) => link.fileId !== removeId);
+    if (trip.slips.length === before) return fail(request, response, 404, "NOT_FOUND", "Slip timbang tidak ditemukan.");
+    return send(request, response, 200, { files: trip.slips.map(publicAttachment) });
+  }
+  const { fileId } = await readJson(request);
+  const file = storedFiles.get(fileId);
+  if (!file || (file.partnerId && file.partnerId !== registration.partner?.id)) return invalid(request, response, { fileId: "Berkas tidak ditemukan." });
+  if (linkedAnywhere(fileId)) return fail(request, response, 409, "DUPLICATE", "Berkas ini sudah dilampirkan.");
+  if (trip.slips.length >= 3) return fail(request, response, 409, "TOO_MANY_FILES", "Paling banyak 3 slip timbang per truk.");
+  trip.slips.push({ fileId, label: "SLIP_TIMBANG", addedAt: nowIso(), addedBy: { id: user.id, fullName: user.fullName } });
+  return send(request, response, 201, { files: trip.slips.map(publicAttachment) });
+}
 
 const routes = {
   "GET /api/health": (request, response) => send(request, response, 200, { status: "ok" }),
@@ -2287,7 +2560,8 @@ const routes = {
       });
     }
     syncRunning = false;
-    return send(request, response, 200, { ...result, durationMs: Date.now() - started });
+    // the tank step of migration 0008: the made-up tanks are already in step with Odoo
+    return send(request, response, 200, { ...result, tanks: { status: "OK", written: 0, deactivated: 0, skipped: 0 }, durationMs: Date.now() - started });
   },
 
   "GET /api/admin/sync/runs": (request, response, url) => {
@@ -2682,7 +2956,7 @@ const routes = {
       return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     }
     const orderTrips = trips.filter((trip) => registrationOf(trip).allocations.some((allocation) => allocation.deliveryOrderId === order.id));
-    return send(request, response, 200, { deliveryOrder: publicOrder(order), trips: orderTrips.map(publicTrip) });
+    return send(request, response, 200, { deliveryOrder: publicOrder(order), trips: orderTrips.map(publicTrip), files: (order.files ?? []).map(publicAttachment) });
   },
 
   "POST /api/delivery-orders": async (request, response) => {
@@ -2729,6 +3003,8 @@ const routes = {
     if (order.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya DO berstatus DRAFT yang bisa dikirim.");
     const transporterId = body.transporterId ?? order.transporterId;
     if (!transporterId) return invalid(request, response, { transporterId: "Pilih transporter sebelum DO dikirim." });
+    const missing = Object.fromEntries(DEST_FIELDS.filter((name) => !order[name]).map((name) => [name, `${DEST_LABELS[name]} wajib diisi sebelum DO dikirim.`]));
+    if (Object.keys(missing).length > 0) return invalid(request, response, missing);
     if (partnerRole(findPartner(transporterId) ?? { id: "p-0" }) !== "transporter") {
       return invalid(request, response, { transporterId: "Transporter harus partner transporter." });
     }
@@ -2923,7 +3199,14 @@ const routes = {
 
   // --- trips and SPJ --------------------------------------------------------------
 
-  // staff only, like the list; counts by stage for the truck flow on Beranda
+  // the control room of dev/mock-control-room.mjs (demo plan, standing still), for the plant map on Beranda
+  "GET /api/control-room/state": controlRoom,
+  "GET /api/control-room/stream": controlRoom,
+  "GET /api/control-room/plan.svg": controlRoom,
+  "GET /api/control-room/plan-image": controlRoom,
+  "GET /api/control-room/trips/:id": controlRoom,
+
+  // staff only, like the list; counts by stage for Beranda
   "GET /api/trips/flow": (request, response) => {
     if (!guard(request, response, [["gate", "VIEW"], ["registrations", "VIEW"]], { staffOnly: true })) return 0;
     const today = plantDate().iso;
@@ -2984,7 +3267,6 @@ const routes = {
     const lines = registration.allocations.map((allocation) => {
       const contractRow = contracts.find((item) => item.id === allocation.contractId) ?? null;
       const order = deliveryOrders.find((item) => item.id === allocation.deliveryOrderId) ?? null;
-      const destinationRow = order ? destinations.find((item) => item.id === order.destinationId) : null;
       const source = contractRow ?? order;
       return {
         contractNo: contractRow?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? "-",
@@ -2993,9 +3275,7 @@ const routes = {
         qtyPlanned: trip.allocations[allocation.seq - 1]?.qtyPlanned ?? null,
         uom: source.uom ?? "Kg",
         partner: ref(source.partner),
-        destination: destinationRow
-          ? (({ id: destinationId, name, address, district, regency, province }) => ({ id: destinationId, name, address, district, regency, province }))(destinationRow)
-          : null,
+        destination: order?.destName ? typedDestination(order) : null,
       };
     });
     return send(request, response, 200, {
@@ -3149,6 +3429,7 @@ const routes = {
 };
 
 Object.assign(routes, phaseFourRoutes());
+Object.assign(routes, plantAndFileRoutes());
 
 /**
  * Routes written with ":id" match one path segment in that place; a second

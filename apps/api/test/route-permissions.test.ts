@@ -11,7 +11,7 @@ import { migrate } from "../src/db/migrate.js";
 import { emptyDatabase, TEST_JWT_SECRET } from "./helpers/app.js";
 import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
 
-type Method = "GET" | "POST" | "PUT" | "PATCH";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type Need = [ModuleCode, PermissionLevel];
 interface Row {
   method: Method;
@@ -105,8 +105,14 @@ const ROUTES: Row[] = [
   row("GET", "/api/seals", [["plant_masters", "VIEW"]], true),
   row("POST", "/api/seals/batch", [["plant_masters", "CREATE"]], true),
   row("PATCH", "/api/seals/999999", [["plant_masters", "EDIT"]], true),
-  row("POST", "/api/files", [], true),
-  row("GET", "/api/files/999999", [], true),
+  // partner accounts upload their slips (registrations CREATE) and read what is theirs; the rest answers 404
+  row("POST", "/api/files", []),
+  row("GET", "/api/files/999999", []),
+  row("POST", "/api/delivery-orders/999999/files", [["delivery_orders", "CREATE"]], true),
+  row("DELETE", "/api/delivery-orders/999999/files/1", [["delivery_orders", "CREATE"]], true),
+  // a partner needs CREATE (its default), staff EDIT
+  row("POST", "/api/registrations/999999/trips/1/files", [["registrations", "EDIT"]]),
+  row("DELETE", "/api/registrations/999999/trips/1/files/1", [["registrations", "EDIT"]]),
 
   // the work list shows the steps of the modules the account views; one step answers 404 outside them
   row("GET", "/api/work/steps", [], true),

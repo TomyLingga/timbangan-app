@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newBarcodeToken, normaliseToken, TOKEN_ALPHABET } from "../src/trips/spj.js";
-import { phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
 
 const DAY = 86_400_000;
 
@@ -28,7 +28,7 @@ async function setup() {
   const sale = await seedContract(database, { no: "SC-501/CONTOH", direction: "OUT", partnerId: companies.customer1, productId: products.olein });
   const place = await seedDestination(database, "Gudang Tujuan Contoh");
   const outgoing = async () => {
-    const order = (await call("POST", "/api/delivery-orders", "logistics", { doDate: "2026-11-20", contractId: sale, qty: 30_000, destinationId: place, deliveryFrom: "2026-11-20", transporterId: companies.transporter1 })).json().deliveryOrder;
+    const order = (await call("POST", "/api/delivery-orders", "logistics", { doDate: "2026-11-20", contractId: sale, qty: 30_000, ...DESTINATION, deliveryFrom: "2026-11-20", transporterId: companies.transporter1 })).json().deliveryOrder;
     await call("POST", `/api/delivery-orders/${order.id}/send`, "logistics", {});
     await call("POST", `/api/delivery-orders/${order.id}/accept`, "angkut1", {});
     const response = await call("POST", "/api/registrations", "angkut1", {
@@ -95,7 +95,7 @@ describe("SPJ print data", () => {
 
     const { order, registration } = await outgoing();
     const out = (await call("GET", `/api/trips/${registration.trips[0].id}/spj`, "angkut1")).json().spj;
-    expect(out).toMatchObject({ direction: "OUT", lines: [{ doNo: order.doNo, contractNo: "SC-501/CONTOH", qtyPlanned: 30000, partner: { id: companies.customer1 }, destination: { id: place, name: "Gudang Tujuan Contoh", address: "Jl. Contoh 1" } }] });
+    expect(out).toMatchObject({ direction: "OUT", lines: [{ doNo: order.doNo, contractNo: "SC-501/CONTOH", qtyPlanned: 30000, partner: { id: companies.customer1 }, destination: { id: null, name: "Gudang Contoh", address: "Jl. Contoh 1", regency: "Kab. Contoh" } }] });
   });
 
   it("answers 404 for a trip without an active SPJ", async () => {

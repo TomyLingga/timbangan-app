@@ -1,6 +1,6 @@
 // The two journeys phase 3 has to carry from registration to check-in, through the HTTP routes only.
 import { describe, expect, it } from "vitest";
-import { phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
 
 describe("phase 3 scenarios", () => {
   it("(a) one incoming truck with two purchase contracts, from the supplier's registration to check-in", async () => {
@@ -86,7 +86,7 @@ describe("phase 3 scenarios", () => {
     // the logistics admin writes and sends the DO; the transporter accepts it with four trucks
     const order = (
       await call("POST", "/api/delivery-orders", "logistics", {
-        doDate: "2026-11-20", contractId: sale, qty: 100_002, destinationId: place, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-27", transportTerms: "FRANCO",
+        doDate: "2026-11-20", contractId: sale, qty: 100_002, ...DESTINATION, deliveryFrom: "2026-11-20", deliveryUntil: "2026-11-27", transportTerms: "FRANCO",
       })
     ).json().deliveryOrder;
     expect(order).toMatchObject({ status: "DRAFT", partner: { id: companies.customer1 }, contract: { contractNo: "SC-901/CONTOH" } });

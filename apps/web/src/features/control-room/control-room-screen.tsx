@@ -94,7 +94,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
   const tvQuery = useSyncExternalStore(subscribeNever, readTvMode, () => false);
   const tv = wall || tvQuery;
   const live = useLiveControlRoom();
-  const plan = usePlanDrawing();
+  const plan = usePlanDrawing(live.state ? live.state.planImage ?? null : undefined);
   const now = useNow();
   const [selected, setSelected] = useState<number | null>(null);
   const [cursorHidden, setCursorHidden] = useState(false);
@@ -141,7 +141,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <Legend tv={tv} />
-            {!plan.markup && plan.loaded ? <p className="text-xs text-muted-foreground">Gambar denah belum tersedia; zona tetap ditampilkan.</p> : null}
+            {plan.backdrop.kind === "none" && plan.loaded ? <p className="text-xs text-muted-foreground">Gambar denah belum tersedia; zona tetap ditampilkan.</p> : null}
           </div>
         </section>
         <div className={cn("flex min-w-0 flex-col gap-4", tv && "min-h-0")}>

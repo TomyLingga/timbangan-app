@@ -181,6 +181,16 @@ export function sampleOdooRecords(): Record<string, OdooRow[]> {
       { id: 23, name: "Freight", default_code: false, uom_id: [1, "Unit"], type: "service", location_type: false, active: true },
       { id: 24, name: "Minyak Goreng 1L", default_code: "MG1", uom_id: [9, "Karton"], type: "product", location_type: "finish_product", active: false },
     ],
+    // storage tanks: internal children of location 40; the rest must not be copied
+    "stock.location": [
+      { id: 301, name: "TK-101", complete_name: "WH/Tangki/TK-101", comment: "CPO", usage: "internal", active: true, location_id: [40, "WH/Tangki"] },
+      { id: 302, name: "TK-102", complete_name: "WH/Tangki/TK-102", comment: "rbd palm olein", usage: "internal", active: true, location_id: [40, "WH/Tangki"] },
+      { id: 303, name: "TK-201", complete_name: "WH/Tangki/TK-201", comment: "PFAD", usage: "internal", active: true, location_id: [40, "WH/Tangki"] },
+      { id: 304, name: "TK-301", complete_name: "WH/Tangki/TK-301", comment: false, usage: "internal", active: true, location_id: [40, "WH/Tangki"] },
+      { id: 305, name: "TK-OLD", complete_name: "WH/Tangki/TK-OLD", comment: "CPO", usage: "internal", active: false, location_id: [40, "WH/Tangki"] },
+      { id: 306, name: "TK-GROUP", complete_name: "WH/Tangki/TK-GROUP", comment: false, usage: "view", active: true, location_id: [40, "WH/Tangki"] },
+      { id: 307, name: "GD-1", complete_name: "WH/Gudang/GD-1", comment: "CPO", usage: "internal", active: true, location_id: [8, "WH/Gudang"] },
+    ],
     "res.partner": [
       { id: 11, name: "PT PKS A", ref: "V011", street: "Jl. Kebun 1", street2: false, city: "Simalungun", active: true },
       { id: 12, name: "PT Customer C", ref: false, street: false, street2: false, city: false, active: true },

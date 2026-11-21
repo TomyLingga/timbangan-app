@@ -68,30 +68,31 @@ describe("POST /api/files", () => {
     expect(rows.map((row) => row.storage_key.split(".").at(-1))).toEqual(["jpg", "webp"]);
   });
 
-  it("refuses what is not one of the three images, a file over 5 MB, a request without a file, and keeps nothing", async () => {
+  it("refuses what is not a PDF or one of the three images, an image over 5 MB, a request without a file, and keeps nothing", async () => {
     const { upload, database, config, app, staff } = await setup();
     const text = await upload({ name: "foto.png", type: "image/png", bytes: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>") });
     expect(text.statusCode).toBe(400);
-    expect(text.json().error).toMatchObject({ code: "VALIDATION", fields: [{ field: "file", message: "Berkas harus gambar JPEG, PNG, atau WebP." }] });
+    expect(text.json().error).toMatchObject({ code: "VALIDATION", fields: [{ field: "file", message: "Berkas harus PDF atau gambar JPEG, PNG, atau WebP." }] });
     const big = await upload({ bytes: Buffer.concat([PNG_BYTES, Buffer.alloc(5 * 1024 * 1024)]) });
     expect(big.statusCode).toBe(413);
-    expect(big.json().error).toEqual({ code: "FILE_TOO_LARGE", message: "Berkas paling besar 5 MB." });
+    expect(big.json().error).toEqual({ code: "FILE_TOO_LARGE", message: "Berkas paling besar 10 MB, gambar paling besar 5 MB." });
     const exactly = await upload({ bytes: Buffer.concat([PNG_BYTES, Buffer.alloc(5 * 1024 * 1024 - PNG_BYTES.length)]) });
     expect(exactly.statusCode).toBe(201);
     const json = await app.inject({ method: "POST", url: "/api/files", headers: staff, payload: { file: "x" } });
     expect(json.statusCode).toBe(400);
-    expect(json.json().error.fields).toEqual([{ field: "file", message: "Kirim satu gambar sebagai multipart/form-data." }]);
+    expect(json.json().error.fields).toEqual([{ field: "file", message: "Kirim satu berkas sebagai multipart/form-data." }]);
     expect(await database.query("select count(*)::int as n from files")).toEqual([{ n: 1 }]);
     expect((await stored(config.files.dir)).length).toBe(1);
   });
 
-  it("is for staff accounts only, both ways", async () => {
+  it("takes uploads from partners too, but a partner never reads a staff photo that is not linked to it", async () => {
     const { upload, app, staff } = await setup();
     const partner = await bearer(app, "mitra");
-    expect((await upload({ bytes: PNG_BYTES }, partner)).statusCode).toBe(403);
+    expect((await upload({ bytes: PNG_BYTES }, partner)).statusCode).toBe(201);
     expect((await upload({ bytes: PNG_BYTES }, { authorization: "Bearer nope" })).statusCode).toBe(401);
     const id = (await upload({ bytes: PNG_BYTES })).json().id;
-    expect((await app.inject({ method: "GET", url: `/api/files/${id}`, headers: partner })).statusCode).toBe(403);
+    // 404, not 403: the id tells nothing
+    expect((await app.inject({ method: "GET", url: `/api/files/${id}`, headers: partner })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/api/files/999999", headers: staff })).statusCode).toBe(404);
   });
 });

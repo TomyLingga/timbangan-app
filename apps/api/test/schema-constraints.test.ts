@@ -70,8 +70,8 @@ function reject(label: string, sql: string) {
 
 describe("migrated schema", () => {
   it("has the tables, indexes and reference rows of the design", async () => {
-    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(49);
-    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(132);
+    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(50);
+    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(136);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
     expect(await count("select count(*) n from modules")).toBe(20);
     // every module is active since 0007 switched on the dashboard

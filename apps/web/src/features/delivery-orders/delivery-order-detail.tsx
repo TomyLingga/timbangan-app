@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, ListPlus } from "lucide-react";
 
+import { AttachmentList } from "@/components/attachments";
 import { DataList, type Column } from "@/components/data-list";
 import { AccessDenied, ListEmpty, ListError, ListSkeleton } from "@/components/page-parts";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { canChangeDoFiles, MAX_DO_FILES } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { canCreateOutgoing, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
@@ -95,7 +97,9 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
   if (query.hasError) return <ListError title="DO belum bisa dimuat" error={query.error} onRetry={query.reload} />;
   if (!query.data) return <ListSkeleton label="Memuat DO" />;
   const { deliveryOrder: order, trips } = query.data;
+  const files = query.data.files ?? [];
   const accepted = order.status.toUpperCase() === "ACCEPTED";
+  const filesPath = `/api/delivery-orders/${encodeURIComponent(String(order.id))}/files`;
 
   return (
     <div className="flex flex-col gap-5">
@@ -135,9 +139,9 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
           <Fact label="Sisa">{formatQuantity(order.qtyRemaining, order.uom)}</Fact>
           <Fact label="Toleransi">{formatNumber(order.tolerancePct)}%</Fact>
           <Fact label="Tujuan">
-            {order.destination.name}
+            {order.destination?.name ?? "-"}
             <span className="block text-xs text-muted-foreground">
-              {[order.destination.address, order.destination.regency, order.destination.province].filter(Boolean).join(", ")}
+              {[order.destination?.address, order.destination?.district, order.destination?.regency, order.destination?.province].filter(Boolean).join(", ")}
             </span>
           </Fact>
           <Fact label="Masa kirim">
@@ -154,6 +158,35 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
           {order.acceptedAt ? <Fact label="Diterima">{formatDateTime(order.acceptedAt)}</Fact> : null}
           {order.remark ? <Fact label="Catatan">{order.remark}</Fact> : null}
         </dl>
+      </section>
+
+      <section aria-labelledby="do-files" className="rounded-2xl border bg-card p-4 sm:p-5">
+        <h2 id="do-files" className="text-sm font-semibold">
+          Lampiran ({formatNumber(files.length)})
+        </h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {canChangeDoFiles(user, order)
+            ? "Surat DO dan berkas lain untuk transporter. Bisa ditambah atau dihapus selama DO berstatus draf atau terkirim."
+            : "Surat DO dan berkas lain dari logistik."}
+        </p>
+        <div className="mt-3">
+          <AttachmentList
+            title="Lampiran DO"
+            files={files}
+            max={MAX_DO_FILES}
+            canChange={canChangeDoFiles(user, order)}
+            onAdd={async (file) => {
+              await api.request(filesPath, { method: "POST", body: { fileId: file.id } });
+              query.reload();
+            }}
+            onRemove={async (file) => {
+              await api.request(`${filesPath}/${encodeURIComponent(String(file.id))}`, { method: "DELETE" });
+              query.reload();
+            }}
+            emptyText="Belum ada lampiran."
+            testId="do-files"
+          />
+        </div>
       </section>
 
       <section aria-labelledby="do-trucks" className="flex flex-col gap-3">

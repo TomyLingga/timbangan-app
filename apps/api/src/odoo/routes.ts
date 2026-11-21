@@ -25,7 +25,7 @@ export function registerSyncRoutes(app: FastifyInstance, context: AppContext, gu
     if (running) throw new AppError(409, "SYNC_RUNNING", "Sinkronisasi Odoo sedang berjalan.");
     running = true;
     try {
-      return await syncOdoo(context.database, new OdooClient(context.config.odoo), context.now);
+      return await syncOdoo(context.database, new OdooClient(context.config.odoo), context.now, { tankParentLocationId: context.config.odooTankParentLocationId });
     } catch (error) {
       request.log.error({ err: error }, "odoo sync failed");
       throw new AppError(502, "SYNC_FAILED", "Sinkronisasi Odoo gagal. Lihat riwayat sinkronisasi.");

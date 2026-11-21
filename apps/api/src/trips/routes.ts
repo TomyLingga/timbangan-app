@@ -10,7 +10,6 @@ import type { Orm } from "../db/client.js";
 import {
   cardAssignments,
   deliveryOrders,
-  destinations,
   drivers,
   erpContracts,
   partners,
@@ -209,13 +208,18 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
         contractUom: erpContracts.uom,
         partnerId: linePartner.id,
         partnerName: linePartner.name,
-        destination: { id: destinations.id, name: destinations.name, address: destinations.address, district: destinations.district, regency: destinations.regency, province: destinations.province },
+        // typed on the DO since migration 0008; DOs made before carry the copy of their master row
+        destinationId: deliveryOrders.destinationId,
+        destName: deliveryOrders.destName,
+        destAddress: deliveryOrders.destAddress,
+        destDistrict: deliveryOrders.destDistrict,
+        destRegency: deliveryOrders.destRegency,
+        destProvince: deliveryOrders.destProvince,
       })
       .from(tripAllocations)
       .innerJoin(registrationAllocations, eq(registrationAllocations.id, tripAllocations.registrationAllocationId))
       .leftJoin(erpContracts, eq(erpContracts.id, registrationAllocations.contractId))
       .leftJoin(deliveryOrders, eq(deliveryOrders.id, registrationAllocations.deliveryOrderId))
-      .leftJoin(destinations, eq(destinations.id, deliveryOrders.destinationId))
       .innerJoin(products, or(eq(products.id, erpContracts.productId), eq(products.id, deliveryOrders.productId)))
       .innerJoin(linePartner, or(eq(linePartner.id, erpContracts.partnerId), eq(linePartner.id, deliveryOrders.partnerId)))
       .where(eq(tripAllocations.tripId, id))
@@ -240,7 +244,10 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
           qtyPlanned: line.qtyPlanned,
           uom: line.doUom ?? line.contractUom,
           partner: { id: line.partnerId, name: line.partnerName },
-          destination: line.destination?.id ? line.destination : null,
+          destination:
+            line.destName !== null
+              ? { id: line.destinationId, name: line.destName, address: line.destAddress, district: line.destDistrict, regency: line.destRegency, province: line.destProvince }
+              : null,
         })),
       },
     };

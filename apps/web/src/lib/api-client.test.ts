@@ -355,3 +355,63 @@ describe("errors", () => {
     expect(failure).toBe(abort);
   });
 });
+
+/** A stand-in for XMLHttpRequest that answers from a queue of [status, body] and records each send. */
+function fakeXhr(...answers: Array<[number, unknown]>) {
+  const sent: Array<{ url: string; headers: Record<string, string>; body: unknown }> = [];
+  const make = () => {
+    const headers: Record<string, string> = {};
+    let url = "";
+    const request = {
+      status: 0,
+      responseText: "",
+      withCredentials: false,
+      upload: { onprogress: null as ((event: { lengthComputable: boolean; loaded: number; total: number }) => void) | null },
+      onload: null as (() => void) | null,
+      onerror: null as (() => void) | null,
+      open: (_method: string, target: string) => {
+        url = target;
+      },
+      setRequestHeader: (name: string, value: string) => {
+        headers[name.toLowerCase()] = value;
+      },
+      send: (body: unknown) => {
+        sent.push({ url, headers: { ...headers }, body });
+        const answer = answers.shift();
+        queueMicrotask(() => {
+          if (!answer) return request.onerror?.();
+          request.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
+          request.status = answer[0];
+          request.responseText = JSON.stringify(answer[1]);
+          request.onload?.();
+        });
+      },
+    };
+    return request as unknown as XMLHttpRequest;
+  };
+  return { make, sent };
+}
+
+describe("upload", () => {
+  it("sends the file as multipart with the token, reports progress, and renews the token once on 401", async () => {
+    const xhr = fakeXhr([401, errorBody("UNAUTHENTICATED")], [201, { id: 7 }]);
+    const fetchMock = fakeFetch(json(200, { accessToken: "fresh" }));
+    const client = createApiClient({ baseUrl: BASE, fetch: fetchMock as unknown as typeof fetch, xhr: xhr.make });
+    client.setAccessToken("old");
+    const progress: number[] = [];
+    const answer = await client.upload<{ id: number }>("/api/files", new Blob(["%PDF-1.7"]), "slip.pdf", { onProgress: (value) => progress.push(value) });
+    expect(answer).toEqual({ id: 7 });
+    expect(xhr.sent.map((item) => item.headers.authorization)).toEqual(["Bearer old", "Bearer fresh"]);
+    expect(xhr.sent[0]?.url).toBe(`${BASE}/api/files`);
+    expect((xhr.sent[0]?.body as FormData).get("file")).toBeInstanceOf(Blob);
+    expect(progress.at(-1)).toBe(1);
+    expect(progress).toContain(0.5);
+  });
+
+  it("throws the API error of a refused file", async () => {
+    const xhr = fakeXhr([413, errorBody("FILE_TOO_LARGE", "Berkas terlalu besar.")]);
+    const client = createApiClient({ baseUrl: BASE, fetch: fakeFetch() as unknown as typeof fetch, xhr: xhr.make });
+    client.setAccessToken("token");
+    await expect(client.upload("/api/files", new Blob(["x"]), "a.png")).rejects.toMatchObject({ status: 413, code: "FILE_TOO_LARGE" });
+  });
+});

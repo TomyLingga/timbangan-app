@@ -11,7 +11,7 @@
 import type { Database } from "../db/client.js";
 import { PLANT_TIME_ZONE, todayAtPlant } from "../http.js";
 import { DEMO_ZONE_SHAPES } from "./demo-plan.js";
-import { hasPlanSvg } from "./plan.js";
+import { hasPlanSvg, readPlanImageInfo } from "./plan.js";
 
 export interface ZoneView {
   code: string;
@@ -41,6 +41,8 @@ export interface TruckView {
 export interface ControlRoomState {
   generatedAt: string;
   plantDay: string;
+  /** The picture of the plan served by GET /api/control-room/plan-image, or null when none was imported. */
+  planImage: { width: number; height: number; version: string } | null;
   zones: ZoneView[];
   trucks: TruckView[];
   upcoming: { in: number; out: number };
@@ -229,6 +231,8 @@ export async function computeState(database: Database, now: Date, filesDir: stri
   const [site] = await database.query<{ code: string }>("select code from sites order by id limit 1");
   // without an imported drawing the demo plan is served, so its zones are drawn as well
   const demo = site ? !(await hasPlanSvg(filesDir, site.code)) : true;
+  const image = site ? await readPlanImageInfo(filesDir, site.code) : null;
+  const planImage = image ? { width: image.width, height: image.height, version: image.version } : null;
   const zones: ZoneView[] = zoneRows.map((row) => ({
     code: row.code,
     name: row.name,
@@ -286,6 +290,7 @@ export async function computeState(database: Database, now: Date, filesDir: stri
   return {
     generatedAt: now.toISOString(),
     plantDay,
+    planImage,
     zones,
     trucks,
     upcoming,

@@ -31,7 +31,9 @@ describe("tanks", () => {
     const created = await call("POST", "/api/tanks", "pembuat", { code: " tk-101 ", name: "Tangki 101", productId: cpo, capacityKg: 2_000_000 });
     expect(created.statusCode, created.body).toBe(201);
     const tank = created.json().tank;
-    expect(tank).toEqual({ id: expect.any(Number), code: "TK-101", name: "Tangki 101", product: { id: cpo, name: "Minyak Contoh Mentah" }, capacityKg: 2_000_000, isActive: true });
+    expect(tank).toEqual({
+      id: expect.any(Number), code: "TK-101", name: "Tangki 101", product: { id: cpo, name: "Minyak Contoh Mentah" }, productLabel: null, capacityKg: 2_000_000, isActive: true, source: "LOCAL",
+    });
     await call("POST", "/api/tanks", "pabrik", { code: "TK-201", productId: olein });
     await call("POST", "/api/tanks", "pabrik", { code: "TK-301", isActive: false });
 
@@ -46,6 +48,34 @@ describe("tanks", () => {
     expect(changed.json().tank).toMatchObject({ code: "TK-101", name: "Tangki CPO 101", product: null, capacityKg: null, isActive: false });
     expect((await audit("TANK_CREATED")).length).toBe(3);
     expect(await audit("TANK_CHANGED")).toEqual([expect.objectContaining({ entity_id: tank.id })]);
+  });
+
+  it("keeps a tank synced from Odoo read only here, except switching it on and off", async () => {
+    const { call, database, audit } = await setup();
+    const [row] = await database.query<{ id: number }>(
+      "insert into storage_tanks (site_id, code, name, product_label, erp_ref) select id, 'TK-501', 'WH/Tangki/TK-501', 'PFAD', 'stock.location,501' from sites order by id limit 1 returning id",
+    );
+    const id = Number(row?.id);
+    await call("POST", "/api/tanks", "pabrik", { code: "TK-LOKAL" });
+
+    const listed = (await call("GET", "/api/tanks?q=pfad", "lihat")).json().items;
+    expect(listed).toEqual([{ id, code: "TK-501", name: "WH/Tangki/TK-501", product: null, productLabel: "PFAD", capacityKg: null, isActive: true, source: "ODOO" }]);
+
+    for (const body of [{ name: "Ganti" }, { code: "TK-502" }, { isActive: false, capacityKg: 5 }, { productId: null }]) {
+      const refused = await call("PATCH", `/api/tanks/${id}`, "pabrik", body);
+      expect(refused.statusCode, JSON.stringify(body)).toBe(409);
+      expect(refused.json().error).toEqual({ code: "FROM_ERP", message: "Tangki ini dari Odoo. Ubah datanya di Odoo; di sini hanya bisa diaktifkan atau dinonaktifkan." });
+    }
+    const off = await call("PATCH", `/api/tanks/${id}`, "pabrik", { isActive: false });
+    expect(off.statusCode, off.body).toBe(200);
+    expect(off.json().tank).toMatchObject({ isActive: false, source: "ODOO", name: "WH/Tangki/TK-501" });
+    expect(await audit("TANK_CHANGED")).toEqual([expect.objectContaining({ entity_id: id })]);
+    // a local tank can still be changed in full
+    const local = (await call("GET", "/api/tanks?q=LOKAL", "lihat")).json().items[0];
+    expect(local.source).toBe("LOCAL");
+    expect((await call("PATCH", `/api/tanks/${local.id}`, "pabrik", { name: "Tangki lokal" })).statusCode).toBe(200);
+    // the code of a synced tank cannot be taken by a new local one either
+    expect((await call("POST", "/api/tanks", "pabrik", { code: "tk-501" })).statusCode).toBe(409);
   });
 
   it("refuses a code used at the site, a bad code, an unknown product, a negative capacity and an unknown tank", async () => {

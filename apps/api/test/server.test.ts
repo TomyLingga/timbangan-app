@@ -41,12 +41,12 @@ describe("migrate command", () => {
 
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
     expect(lines).toEqual([
-      "Applied 7 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql, 0005_weighing.sql, 0006_field_steps.sql, 0007_control_room.sql",
+      "Applied 8 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql, 0005_weighing.sql, 0006_field_steps.sql, 0007_control_room.sql, 0008_tanks_attachments.sql",
     ]);
 
     lines.length = 0;
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Nothing to apply: 7 migrations were applied before."]);
+    expect(lines).toEqual(["Nothing to apply: 8 migrations were applied before."]);
   });
 
   it("prints the reason and exits with 1 when it cannot run", async () => {

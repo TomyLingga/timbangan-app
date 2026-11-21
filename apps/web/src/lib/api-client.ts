@@ -91,12 +91,24 @@ export interface ApiClientOptions {
   fetch?: typeof fetch;
   /** Called once when a session that was in use can no longer be renewed. */
   onSignedOut?: () => void;
+  /** Makes the request object of an upload; tests pass a stand-in. */
+  xhr?: () => XMLHttpRequest;
+}
+
+export interface UploadOptions {
+  /** Called with the part sent so far, from 0 to 1. */
+  onProgress?: (fraction: number) => void;
 }
 
 export interface ApiClient {
   request<T = unknown>(path: string, options?: RequestOptions): Promise<T>;
   /** A file answer (a CSV export): the body as a blob and the file name the server gave, with the same session handling. */
   download(path: string, options?: RequestOptions): Promise<{ blob: Blob; fileName: string | null }>;
+  /**
+   * Sends one file as multipart/form-data (field `file`) with the same session handling, reporting progress.
+   * XMLHttpRequest is used because fetch cannot report upload progress.
+   */
+  upload<T = unknown>(path: string, file: Blob, fileName: string, options?: UploadOptions): Promise<T>;
   /** Asks for a new access token with the refresh cookie. False means no session. */
   refresh(): Promise<boolean>;
   setAccessToken(token: string | null): void;
@@ -152,6 +164,7 @@ function toApiError(status: number, body: unknown): ApiError {
 export function createApiClient(options: ApiClientOptions): ApiClient {
   const { baseUrl, onSignedOut } = options;
   const doFetch: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
+  const makeXhr = options.xhr ?? (() => new XMLHttpRequest());
 
   let accessToken: string | null = null;
   let refreshInFlight: Promise<boolean> | null = null;
@@ -239,9 +252,50 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return { blob: await response.blob(), fileName };
   }
 
+  function sendUpload(path: string, file: Blob, fileName: string, options: UploadOptions, token: string | null): Promise<{ status: number; body: unknown }> {
+    return new Promise((resolve, reject) => {
+      const xhr = makeXhr();
+      xhr.open("POST", buildUrl(baseUrl, path));
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("accept", "application/json");
+      if (token) xhr.setRequestHeader("authorization", `Bearer ${token}`);
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) options.onProgress?.(event.loaded / event.total);
+      };
+      xhr.onload = () => {
+        let body: unknown;
+        try {
+          body = xhr.responseText ? (JSON.parse(xhr.responseText) as unknown) : undefined;
+        } catch {
+          body = undefined;
+        }
+        resolve({ status: xhr.status, body });
+      };
+      xhr.onerror = () => reject(new ApiError(0, NETWORK_ERROR, "The API could not be reached"));
+      const form = new FormData();
+      form.append("file", file, fileName);
+      xhr.send(form);
+    });
+  }
+
+  async function upload<T>(path: string, file: Blob, fileName: string, uploadOptions: UploadOptions = {}): Promise<T> {
+    const tokenUsed = accessToken;
+    let answer = await sendUpload(path, file, fileName, uploadOptions, tokenUsed);
+    if (answer.status === 401) {
+      const alreadyRenewed = accessToken !== null && accessToken !== tokenUsed;
+      if (!alreadyRenewed && !(await refresh())) throw signedOut();
+      answer = await sendUpload(path, file, fileName, uploadOptions, accessToken);
+      if (answer.status === 401) throw signedOut();
+    }
+    if (answer.status < 200 || answer.status >= 300) throw toApiError(answer.status, answer.body);
+    uploadOptions.onProgress?.(1);
+    return answer.body as T;
+  }
+
   return {
     request,
     download,
+    upload,
     refresh,
     setAccessToken(token) {
       accessToken = token;

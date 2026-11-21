@@ -9,18 +9,7 @@ import { driverPayload, validateDriver, validateVehicle, type DriverValues } fro
 import { cardUidError, normalizeCardUid } from "@/lib/gate-input";
 import { plateDisplay, plateError, plateKey } from "@/lib/plate";
 import { wholeKg } from "@/lib/quantity";
-import type {
-  Contract,
-  DeliveryOrder,
-  Direction,
-  LookupDriver,
-  LookupVehicle,
-  PartnerRef,
-  QualityParameter,
-  Registration,
-  Trip,
-  VehicleType,
-} from "@/lib/types";
+import type { Contract, DeliveryOrder, DeliveryOrderDestination, Direction, LookupDriver, LookupVehicle, PartnerRef, QualityParameter, Registration, Trip, VehicleType } from "@/lib/types";
 
 export type FormErrors = Record<string, string>;
 
@@ -566,7 +555,12 @@ export interface DeliveryOrderValues {
   qty: string;
   uom: string;
   tolerancePct: string;
-  destinationId: string;
+  /** The destination is typed on the DO: name and regency for a draft, all five before it is sent. */
+  destName: string;
+  destAddress: string;
+  destDistrict: string;
+  destRegency: string;
+  destProvince: string;
   deliveryFrom: string;
   deliveryUntil: string;
   transportTerms: string;
@@ -585,7 +579,11 @@ export const EMPTY_DELIVERY_ORDER: DeliveryOrderValues = {
   qty: "",
   uom: "Kg",
   tolerancePct: "",
-  destinationId: "",
+  destName: "",
+  destAddress: "",
+  destDistrict: "",
+  destRegency: "",
+  destProvince: "",
   deliveryFrom: "",
   deliveryUntil: "",
   transportTerms: "",
@@ -603,7 +601,8 @@ export function validateDeliveryOrder(values: DeliveryOrderValues): FormErrors {
   }
   const qty = decimalNumber(values.qty);
   if (qty === null || qty <= 0) errors.qty = "Isi quantity lebih dari nol.";
-  if (!values.destinationId) errors.destinationId = "Pilih tujuan.";
+  if (!text(values.destName)) errors.destName = "Isi nama tujuan.";
+  if (!text(values.destRegency)) errors.destRegency = "Isi kabupaten atau kota tujuan.";
   if (!values.deliveryFrom) errors.deliveryFrom = "Isi tanggal mulai kirim.";
   if (values.deliveryFrom && values.deliveryUntil && values.deliveryUntil < values.deliveryFrom) {
     errors.deliveryUntil = "Tanggal akhir tidak boleh sebelum tanggal mulai.";
@@ -642,7 +641,11 @@ export function deliveryOrderPayload(
     qty: decimalNumber(values.qty),
     uom: textOrNull(values.uom),
     tolerancePct: text(values.tolerancePct) ? decimalNumber(values.tolerancePct) : null,
-    destinationId: values.destinationId || null,
+    destName: textOrNull(values.destName),
+    destAddress: textOrNull(values.destAddress),
+    destDistrict: textOrNull(values.destDistrict),
+    destRegency: textOrNull(values.destRegency),
+    destProvince: textOrNull(values.destProvince),
     deliveryFrom: values.deliveryFrom || null,
     deliveryUntil: values.deliveryUntil || null,
     transportTerms: textOrNull(values.transportTerms),
@@ -652,6 +655,24 @@ export function deliveryOrderPayload(
   };
   if (mode === "draft") return all;
   return Object.fromEntries(Object.entries(all).filter(([, value]) => value !== null));
+}
+
+/** The parts of the typed destination the API still needs before a DO is sent, in words for a sentence. */
+export function destinationGaps(destination: DeliveryOrderDestination | null): string[] {
+  const parts: Array<[keyof DeliveryOrderDestination, string]> = [
+    ["name", "nama"],
+    ["address", "alamat"],
+    ["district", "kecamatan"],
+    ["regency", "kabupaten atau kota"],
+    ["province", "provinsi"],
+  ];
+  return parts.filter(([key]) => !text(String(destination?.[key] ?? ""))).map(([, label]) => label);
+}
+
+/** "Gudang A, Jl. B 1, Kec. C, Kab. D, Prov. E", leaving out the empty parts. */
+export function destinationLine(destination: DeliveryOrderDestination | null): string {
+  if (!destination) return "-";
+  return [destination.name, destination.address, destination.district, destination.regency, destination.province].filter((part) => part && part.trim()).join(", ") || "-";
 }
 
 // --- RFID card ---------------------------------------------------------------------

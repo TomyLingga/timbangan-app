@@ -1,10 +1,13 @@
 // Copies contracts from Odoo 13 into erp_contracts (one row per contract line), with the partners and
-// products they refer to. Read-only on the Odoo side. A run is incremental (headers changed after the last
-// successful cursor) and idempotent: a row is written only when a copied value differs.
+// products they refer to, then the storage tanks (internal children of one stock.location). Read-only on the
+// Odoo side. The contract step is incremental (headers changed after the last successful cursor); both steps are
+// idempotent: a row is written only when a copied value differs.
 import { and, desc, eq, inArray, isNotNull, type SQL, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import type { Database, Orm } from "../db/client.js";
-import { erpContracts, erpSyncRuns, partners, products } from "../db/schema.js";
+import { erpContracts, erpSyncRuns, partners, products, storageTanks } from "../db/schema.js";
+import { productForLabel } from "../plant-masters/tank-products.js";
+import { defaultSite } from "../settings.js";
 import type { OdooClient, OdooDomain, OdooRecord } from "./client.js";
 import { datePart, many2one, numberOrNull, textOrNull } from "./values.js";
 
@@ -15,8 +18,30 @@ export interface SyncResult {
   products: number;
   /** Contract lines read from Odoo and not copied: drafts, service lines, lines without product or partner. */
   skipped: number;
+  /** The tank step: what it wrote, or why it did not run. */
+  tanks: TankStepResult;
   durationMs: number;
 }
+
+export type TankStepResult =
+  | {
+      status: "OK";
+      /** Tanks inserted or changed (also a vanished tank that came back). */
+      written: number;
+      /** Tanks no longer in Odoo, made inactive. */
+      deactivated: number;
+      /** Locations not copied: without a name, or with a code another tank of the site already holds. */
+      skipped: number;
+    }
+  | { status: "SKIPPED"; reason: string };
+
+export interface SyncOptions {
+  /** The stock.location whose internal children are the tanks; without it the tank step is skipped. */
+  tankParentLocationId?: number | null;
+}
+
+export const TANKS_NOT_CONFIGURED = "Lokasi induk tangki di Odoo belum diatur (ODOO_TANK_PARENT_LOCATION_ID); tangki tidak disinkronkan.";
+const TANK_FIELDS = ["id", "name", "complete_name", "comment", "active", "location_id"];
 
 type ContractState = "OPEN" | "CLOSED" | "CANCELLED";
 type Category = "CPO" | "BULK_LIQUID" | "PACKED" | "OTHER";
@@ -306,14 +331,90 @@ async function writeToDatabase(tx: Orm, read: Awaited<ReturnType<typeof readFrom
 }
 
 /**
+ * The tank step: every active internal child of the parent location becomes a storage tank of the default site,
+ * found again by erp_ref `stock.location,<id>`: code = name, name = complete_name, product matched from the comment
+ * (kept as product_label either way). A local tank (without erp_ref) with the same code is taken over. A synced
+ * tank Odoo no longer lists is made inactive; nothing is deleted. Writes its own erp_sync_runs row (entity TANK).
+ */
+export async function syncTanks(database: Database, client: OdooClient, now: () => Date, parentLocationId: number): Promise<TankStepResult> {
+  const orm = database.db;
+  const [run] = await orm.insert(erpSyncRuns).values({ erpSystem: "ODOO", entity: "TANK", startedAt: now() }).returning({ id: erpSyncRuns.id });
+  if (!run) throw new Error("The sync run could not be recorded.");
+  try {
+    const locations = await client.searchRead(
+      "stock.location",
+      [["location_id", "=", parentLocationId], ["usage", "=", "internal"], ["active", "=", true]],
+      TANK_FIELDS,
+    );
+    return await orm.transaction(async (tx) => {
+      const site = await defaultSite(tx);
+      const at = now();
+      const candidates = await tx.select({ id: products.id, name: products.name, code: products.code, category: products.category }).from(products).where(eq(products.erpSystem, "ODOO"));
+      const tanks = await tx.select().from(storageTanks).where(eq(storageTanks.siteId, site.id));
+      const seen = new Set<string>();
+      let written = 0;
+      let skipped = 0;
+      let deactivated = 0;
+      for (const location of locations) {
+        const erpRef = `stock.location,${location.id}`;
+        seen.add(erpRef);
+        const code = textOrNull(location.name)?.trim();
+        if (!code) {
+          skipped++;
+          continue;
+        }
+        const label = textOrNull(location.comment)?.trim() || null;
+        const values = { code, name: textOrNull(location.complete_name)?.trim() || code, productId: productForLabel(label, candidates), productLabel: label };
+        let current = tanks.find((tank) => tank.erpRef === erpRef);
+        const holder = tanks.find((tank) => tank.code === code && tank !== current);
+        if (holder && (current || holder.erpRef !== null)) {
+          // the code belongs to another tank of the site: copying it would break the unique code
+          skipped++;
+          continue;
+        }
+        if (!current && holder) current = holder; // a local tank kept before the sync: it becomes the synced one
+        if (!current) {
+          const [inserted] = await tx.insert(storageTanks).values({ siteId: site.id, erpRef, isActive: true, ...values }).returning();
+          if (inserted) tanks.push(inserted);
+          written++;
+          continue;
+        }
+        const back = current.erpRemovedAt !== null;
+        const differs =
+          current.erpRef !== erpRef || current.code !== values.code || current.name !== values.name || current.productId !== values.productId || current.productLabel !== values.productLabel;
+        if (!differs && !back) continue;
+        const change = { erpRef, ...values, ...(back ? { isActive: true, erpRemovedAt: null } : {}) };
+        await tx.update(storageTanks).set(change).where(eq(storageTanks.id, current.id));
+        Object.assign(current, change);
+        written++;
+      }
+      for (const tank of tanks) {
+        if (tank.erpRef === null || !tank.erpRef.startsWith("stock.location,") || seen.has(tank.erpRef) || tank.erpRemovedAt !== null) continue;
+        await tx.update(storageTanks).set({ isActive: false, erpRemovedAt: at }).where(eq(storageTanks.id, tank.id));
+        deactivated++;
+      }
+      await tx.update(erpSyncRuns).set({ status: "OK", finishedAt: now(), rowsUpserted: written + deactivated }).where(eq(erpSyncRuns.id, run.id));
+      return { status: "OK" as const, written, deactivated, skipped };
+    });
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    await orm.update(erpSyncRuns).set({ status: "FAILED", finishedAt: now(), error: text }).where(eq(erpSyncRuns.id, run.id));
+    throw error;
+  }
+}
+
+/**
  * One sync run. Writes an erp_sync_runs row (entity CONTRACT) whose cursor is the newest header write_date
  * seen so far. On failure nothing of the run is kept except that row, marked FAILED with the error text.
+ * Then the tank step, when a parent location is configured; it records its own run, and a failure there throws
+ * after the contracts are kept.
  */
-export async function syncOdoo(database: Database, client: OdooClient, now: () => Date): Promise<SyncResult> {
+export async function syncOdoo(database: Database, client: OdooClient, now: () => Date, options: SyncOptions = {}): Promise<SyncResult> {
   const orm = database.db;
   const started = performance.now();
   const [run] = await orm.insert(erpSyncRuns).values({ erpSystem: "ODOO", entity: "CONTRACT", startedAt: now() }).returning({ id: erpSyncRuns.id });
   if (!run) throw new Error("The sync run could not be recorded.");
+  let contractStep: Omit<SyncResult, "tanks" | "durationMs">;
   try {
     const [last] = await orm
       .select({ cursor: erpSyncRuns.cursorValue })
@@ -332,10 +433,14 @@ export async function syncOdoo(database: Database, client: OdooClient, now: () =
         .where(eq(erpSyncRuns.id, run.id));
       return written;
     });
-    return { ...counts, skipped: read.skipped, durationMs: Math.round(performance.now() - started) };
+    contractStep = { ...counts, skipped: read.skipped };
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     await orm.update(erpSyncRuns).set({ status: "FAILED", finishedAt: now(), error: text }).where(eq(erpSyncRuns.id, run.id));
     throw error;
   }
+  const tanks: TankStepResult = options.tankParentLocationId
+    ? await syncTanks(database, client, now, options.tankParentLocationId)
+    : { status: "SKIPPED", reason: TANKS_NOT_CONFIGURED };
+  return { ...contractStep, tanks, durationMs: Math.round(performance.now() - started) };
 }

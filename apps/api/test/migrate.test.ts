@@ -34,18 +34,18 @@ afterEach(async () => {
 describe("migrate", () => {
   it("applies the project's migrations to an empty database and records them", async () => {
     const result = await migrate(database);
-    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql"], skipped: [] });
+    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql"], skipped: [] });
 
     const tables = await publicTables();
     expect(tables).toContain("schema_migrations");
-    expect(tables.filter((name) => name !== "schema_migrations")).toHaveLength(49);
+    expect(tables.filter((name) => name !== "schema_migrations")).toHaveLength(50);
     expect(await database.query("select code from sites")).toEqual([{ code: "SMK" }]);
     expect(await database.query("select count(*)::int as n from modules")).toEqual([{ n: 20 }]);
 
     const recorded = await database.query<{ name: string; checksum: string; applied_at: Date }>(
       "select name, checksum, applied_at from schema_migrations order by name",
     );
-    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql"]);
+    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql"]);
     const text = (await readFile(join(MIGRATIONS_DIR, "0001_schema.sql"), "utf8")).replaceAll("\r\n", "\n");
     expect(recorded[0]?.checksum).toBe(createHash("sha256").update(text).digest("hex"));
     expect(recorded[0]?.applied_at).toBeInstanceOf(Date);
@@ -54,8 +54,8 @@ describe("migrate", () => {
   it("applies nothing on a second run", async () => {
     await migrate(database);
     const result = await migrate(database);
-    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql"] });
-    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 7 }]);
+    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql"] });
+    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 8 }]);
     expect(await database.query("select count(*)::int as n from sites")).toEqual([{ n: 1 }]);
   });
 

@@ -1,5 +1,5 @@
 // Plant masters (module plant_masters): the storage tanks a load or an unload goes to, and the stock of seal
-// numbers the seal officer takes from.
+// numbers the seal officer takes from. Tanks copied from Odoo (erp_ref set) are read only here, except isActive.
 import { and, asc, count, eq, ilike, or, type SQL } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -8,7 +8,7 @@ import type { Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import { products, SEAL_KINDS, SEAL_STATUSES, seals, storageTanks, trips, tripSeals } from "../db/schema.js";
-import { duplicate, invalid, invalidState, notFound, violatedUnique } from "../errors.js";
+import { duplicate, invalid, invalidState, notFound, refused, violatedUnique } from "../errors.js";
 import { idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
 import { defaultSite } from "../settings.js";
 
@@ -88,8 +88,12 @@ export const tankView = (tank: TankRow, productName: string | null) => ({
   code: tank.code,
   name: tank.name,
   product: tank.productId === null ? null : { id: tank.productId, name: productName },
+  /** The product name Odoo keeps on the tank location, shown when no synced product matched it. */
+  productLabel: tank.productLabel,
   capacityKg: tank.capacityKg,
   isActive: tank.isActive,
+  /** ODOO: copied by the Odoo sync and read only here except isActive; LOCAL: kept in this application. */
+  source: tank.erpRef === null ? ("LOCAL" as const) : ("ODOO" as const),
 });
 
 /** Seals with the trip that carries each one, if any. */
@@ -126,6 +130,7 @@ export function registerPlantMasterRoutes(app: FastifyInstance, context: AppCont
     if (!found) throw invalid("productId", "Produk tidak ditemukan.");
   };
   const codeTaken = (code: string) => duplicate(`Kode tangki ${code} sudah dipakai.`);
+  const fromErp = () => refused("FROM_ERP", "Tangki ini dari Odoo. Ubah datanya di Odoo; di sini hanya bisa diaktifkan atau dinonaktifkan.");
   const oneTank = async (db: Orm, id: number) => {
     const [view] = await loadTanks(db, eq(storageTanks.id, id));
     if (!view) throw notFound("Tangki");
@@ -139,7 +144,9 @@ export function registerPlantMasterRoutes(app: FastifyInstance, context: AppCont
       orm,
       and(
         eq(storageTanks.siteId, site.id),
-        query.q ? or(ilike(storageTanks.code, likeText(query.q)), ilike(storageTanks.name, likeText(query.q))) : undefined,
+        query.q
+          ? or(ilike(storageTanks.code, likeText(query.q)), ilike(storageTanks.name, likeText(query.q)), ilike(storageTanks.productLabel, likeText(query.q)))
+          : undefined,
         query.productId === undefined ? undefined : eq(storageTanks.productId, query.productId),
         query.active === undefined ? undefined : eq(storageTanks.isActive, query.active === "true"),
       ),
@@ -180,6 +187,7 @@ export function registerPlantMasterRoutes(app: FastifyInstance, context: AppCont
       const tank = await orm.transaction(async (tx) => {
         const [current] = await tx.select().from(storageTanks).where(eq(storageTanks.id, id)).for("update");
         if (!current) throw notFound("Tangki");
+        if (current.erpRef !== null && Object.entries(body).some(([key, value]) => key !== "isActive" && value !== undefined)) throw fromErp();
         await checkProduct(tx, body.productId);
         if (body.code !== undefined && body.code !== current.code) {
           const [taken] = await tx.select({ id: storageTanks.id }).from(storageTanks).where(and(eq(storageTanks.siteId, current.siteId), eq(storageTanks.code, body.code)));

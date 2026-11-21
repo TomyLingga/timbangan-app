@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { X } from "lucide-react";
 
+import { AttachmentList, type ListedFile } from "@/components/attachments";
 import { ContractLookup } from "@/components/contract-lookup";
 import { TextAreaField, TextField } from "@/components/form-fields";
 import { ListError, ListSkeleton, PageHeader } from "@/components/page-parts";
@@ -12,12 +13,13 @@ import { Button } from "@/components/ui/button";
 import { dropErrors, FormSection, SubmitBar, focusFirstInvalid } from "@/features/registrations/form-parts";
 import { lookUpDriver, lookUpVehicle, TruckFields } from "@/features/registrations/truck-fields";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { MAX_TRIP_SLIPS } from "@/lib/attachments";
 import { formatNumber, formatQuantity } from "@/lib/format";
 import { isApiError } from "@/lib/api-client";
 import { registrationErrorMessage } from "@/lib/messages";
 import { documentTotals, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
-import type { Contract, PartnerRef, QualityParameter, Registration, VehicleType } from "@/lib/types";
+import type { Contract, PartnerRef, QualityParameter, Registration, UploadedFile, VehicleType } from "@/lib/types";
 import {
   emptyLetter,
   emptyTruck,
@@ -115,6 +117,9 @@ function IncomingFormBody({
   const [plannedDate, setPlannedDate] = useState(initial?.plannedDate || plantToday());
   const [truck, setTruck] = useState<TruckValues>(() => initial?.truck ?? emptyTruck("truck"));
   const [remark, setRemark] = useState(initial?.remark ?? "");
+  // slips already linked to the draft's truck, and slips uploaded here that are linked once the registration is saved
+  const [linkedSlips, setLinkedSlips] = useState<ListedFile[]>(() => draft?.trips[0]?.slips ?? []);
+  const [pendingSlips, setPendingSlips] = useState<UploadedFile[]>([]);
   const [errors, setErrors] = useState<FormErrors>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [pending, setPending] = useState<"draft" | "submit" | null>(null);
@@ -148,11 +153,28 @@ function IncomingFormBody({
     }
     setPending(submit ? "submit" : "draft");
     try {
+      // New slips can only be linked to a saved truck: the registration is saved as a draft first, the slips are
+      // linked, and only then is it sent.
+      const linkFirst = pendingSlips.length > 0;
       const { registration } = await api.request<{ registration: Registration }>(
         draft ? `/api/registrations/${encodeURIComponent(String(draft.id))}` : "/api/registrations",
-        { method: draft ? "PUT" : "POST", body: incomingPayload(values, submit) },
+        { method: draft ? "PUT" : "POST", body: incomingPayload(values, submit && !linkFirst) },
       );
-      router.push(`/registrasi/${encodeURIComponent(String(registration.id))}?baru=${submit ? "kirim" : "draf"}`);
+      const id = encodeURIComponent(String(registration.id));
+      if (linkFirst) {
+        const tripId = registration.trips[0]?.id;
+        try {
+          for (const slip of pendingSlips) {
+            await api.request(`/api/registrations/${id}/trips/${encodeURIComponent(String(tripId))}/files`, { method: "POST", body: { fileId: slip.id } });
+          }
+        } catch {
+          // the draft is kept; the slips can be added again from its page
+          router.push(`/registrasi/${id}?baru=slip`);
+          return;
+        }
+        if (submit) await api.request(`/api/registrations/${id}/submit`, { method: "POST" });
+      }
+      router.push(`/registrasi/${id}?baru=${submit ? "kirim" : "draf"}`);
     } catch (error) {
       const placed = isApiError(error) ? registrationFieldErrors("IN", error.fieldMessages) : { errors: {}, unplaced: [] };
       setErrors(placed.errors);
@@ -280,7 +302,38 @@ function IncomingFormBody({
         ) : null}
       </FormSection>
 
-      <FormSection title="5. Catatan">
+      <FormSection
+        title="5. Slip timbang"
+        description="Slip dari timbangan PKS untuk truk ini, paling banyak tiga berkas. Slip ikut terkirim saat registrasi disimpan."
+      >
+        <AttachmentList
+          title="Slip timbang truk 1"
+          files={[...linkedSlips, ...pendingSlips]}
+          max={MAX_TRIP_SLIPS}
+          canChange
+          onAdd={async (file) => {
+            setPendingSlips((current) => [...current, file]);
+          }}
+          onRemove={async (file) => {
+            if (pendingSlips.some((slip) => slip.id === file.id)) {
+              setPendingSlips((current) => current.filter((slip) => slip.id !== file.id));
+              return;
+            }
+            const tripId = draft?.trips[0]?.id;
+            if (!draft || tripId === undefined) return;
+            await api.request(
+              `/api/registrations/${encodeURIComponent(String(draft.id))}/trips/${encodeURIComponent(String(tripId))}/files/${encodeURIComponent(String(file.id))}`,
+              { method: "DELETE" },
+            );
+            setLinkedSlips((current) => current.filter((slip) => slip.id !== file.id));
+          }}
+          emptyText="Belum ada slip timbang."
+          hint="PDF sampai 10 MB atau foto slip sampai 5 MB."
+          testId="form-slips"
+        />
+      </FormSection>
+
+      <FormSection title="6. Catatan">
         <TextAreaField label="Catatan" name="remark" optional rows={2} value={remark} onChange={setRemark} />
       </FormSection>
 

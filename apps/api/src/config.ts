@@ -24,6 +24,8 @@ const envSchema = z.object({
   ODOO_DB: z.string().optional(),
   ODOO_UID: z.coerce.number("must be the numeric id of the Odoo user").int().positive().optional(),
   ODOO_PASSWORD: z.string().optional(),
+  // the stock.location whose internal children are the storage tanks; without it the sync skips the tanks
+  ODOO_TANK_PARENT_LOCATION_ID: z.coerce.number("must be the numeric id of the Odoo location").int().positive().optional(),
   PORTAL_API_URL: baseUrl("PORTAL_API_URL").optional(),
   PORTAL_WEB_URL: baseUrl("PORTAL_WEB_URL").optional(),
   PORTAL_APP_NAME: z.string().optional(),
@@ -76,6 +78,8 @@ export interface Config {
   refreshTokenTtlDays: number;
   /** null when the group is incomplete: the routes that need it answer 503 NOT_CONFIGURED. */
   odoo: OdooConfig | null;
+  /** The Odoo stock.location whose internal children are the tanks; null: the sync skips the tank step. */
+  odooTankParentLocationId: number | null;
   portal: PortalConfig | null;
   vcf: VcfConfig | null;
   /** Lower case; compared with the portal email of an account at sign-in. */
@@ -105,6 +109,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       e.ODOO_URL && e.ODOO_DB && e.ODOO_UID && e.ODOO_PASSWORD
         ? { url: e.ODOO_URL, db: e.ODOO_DB, uid: e.ODOO_UID, password: e.ODOO_PASSWORD }
         : null,
+    odooTankParentLocationId: e.ODOO_TANK_PARENT_LOCATION_ID ?? null,
     portal:
       e.PORTAL_API_URL && e.PORTAL_WEB_URL && e.PORTAL_APP_NAME
         ? { apiUrl: e.PORTAL_API_URL, webUrl: e.PORTAL_WEB_URL, appName: e.PORTAL_APP_NAME }

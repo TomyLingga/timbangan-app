@@ -5,6 +5,8 @@ import {
   cardPayload,
   decimalNumber,
   deliveryOrderPayload,
+  destinationGaps,
+  destinationLine,
   EMPTY_DELIVERY_ORDER,
   emptyLetter,
   emptyTruck,
@@ -436,7 +438,8 @@ describe("validateDeliveryOrder and deliveryOrderPayload", () => {
     contractId: "c-8",
     qty: "40000",
     uom: "Kg",
-    destinationId: "t-1",
+    destName: "Gudang Contoh",
+    destRegency: "Kab. Contoh",
     deliveryFrom: "2026-11-21",
     transporterId: "p-3",
   };
@@ -464,7 +467,8 @@ describe("validateDeliveryOrder and deliveryOrderPayload", () => {
     expect(errors).toEqual({
       doDate: "Isi tanggal DO.",
       qty: "Isi quantity lebih dari nol.",
-      destinationId: "Pilih tujuan.",
+      destName: "Isi nama tujuan.",
+      destRegency: "Isi kabupaten atau kota tujuan.",
       deliveryUntil: "Tanggal akhir tidak boleh sebelum tanggal mulai.",
       truckCount: "Isi jumlah truk dengan angka bulat lebih dari nol.",
       tolerancePct: "Isi persen dari 0 sampai 100.",
@@ -477,7 +481,8 @@ describe("validateDeliveryOrder and deliveryOrderPayload", () => {
       contractId: "c-8",
       qty: 40000,
       uom: "Kg",
-      destinationId: "t-1",
+      destName: "Gudang Contoh",
+      destRegency: "Kab. Contoh",
       deliveryFrom: "2026-11-21",
       transporterId: "p-3",
       truckCount: 4,
@@ -491,6 +496,22 @@ describe("validateDeliveryOrder and deliveryOrderPayload", () => {
       truckCount: null,
       remark: null,
     });
+  });
+});
+
+describe("destinationGaps and destinationLine", () => {
+  const typed = { id: null, name: "Gudang Contoh", address: "Jl. Contoh 1", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" };
+
+  it("names the parts a DO still needs before it is sent", () => {
+    expect(destinationGaps(typed)).toEqual([]);
+    expect(destinationGaps({ ...typed, address: null, district: " ", province: null })).toEqual(["alamat", "kecamatan", "provinsi"]);
+    expect(destinationGaps(null)).toEqual(["nama", "alamat", "kecamatan", "kabupaten atau kota", "provinsi"]);
+  });
+
+  it("writes the destination on one line without the empty parts", () => {
+    expect(destinationLine(typed)).toBe("Gudang Contoh, Jl. Contoh 1, Kec. Contoh, Kab. Contoh, Prov. Contoh");
+    expect(destinationLine({ ...typed, address: null, district: null, province: null })).toBe("Gudang Contoh, Kab. Contoh");
+    expect(destinationLine(null)).toBe("-");
   });
 });
 

@@ -1,7 +1,7 @@
 // Which menu entries an account gets, in menu order: a module shows from level
 // view. The page behind each entry applies the same rule on a direct visit.
 
-import { canManageStations, canSeeApprovals, canSeeDrivers, canSeeReports, canView, isStaff } from "@/lib/permissions";
+import { canManageStations, canSeeApprovals, canSeeDrivers, canSeePlantMasters, canSeeReports, canView, isStaff } from "@/lib/permissions";
 import type { ModuleCode, User } from "@/lib/types";
 
 export type NavHref =
@@ -14,8 +14,9 @@ export type NavHref =
   | "/kontrak"
   | "/supir"
   | "/kendaraan"
-  | "/tujuan"
   | "/kartu"
+  | "/tangki"
+  | "/segel"
   | "/laporan"
   | "/stasiun"
   | "/pengguna";
@@ -34,8 +35,10 @@ const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> 
   { href: "/kontrak", visible: view("contracts") },
   { href: "/supir", visible: canSeeDrivers },
   { href: "/kendaraan", visible: view("vehicles") },
-  { href: "/tujuan", visible: view("destinations") },
   { href: "/kartu", visible: view("rfid_cards") },
+  // tanks and seals are staff only (apps/api src/plant-masters/routes.ts)
+  { href: "/tangki", visible: canSeePlantMasters },
+  { href: "/segel", visible: canSeePlantMasters },
   { href: "/laporan", visible: canSeeReports },
   // the station list itself needs weighbridge EDIT (apps/api stations/routes.ts)
   { href: "/stasiun", visible: canManageStations },

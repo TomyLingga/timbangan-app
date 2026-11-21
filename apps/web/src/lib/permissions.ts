@@ -141,6 +141,17 @@ export const canCheckOut = (user: MaybeUser) => canCreate(user, "gate");
 /** POST /api/trips/:id/spj/reissue: gate EDIT. */
 export const canReissueSpj = (user: MaybeUser) => canEdit(user, "gate");
 
+// --- plant masters (tanks and seals) ------------------------------------------------
+
+/** GET /api/tanks and /api/seals: plant_masters VIEW, staff only. */
+export const canSeePlantMasters = (user: MaybeUser) => isStaff(user) && canView(user, "plant_masters");
+/** PATCH /api/tanks/:id (a tank from Odoo: only isActive): plant_masters EDIT. */
+export const canToggleTanks = (user: MaybeUser) => isStaff(user) && canEdit(user, "plant_masters");
+/** POST /api/seals/batch: plant_masters CREATE. */
+export const canAddSeals = (user: MaybeUser) => isStaff(user) && canCreate(user, "plant_masters");
+/** PATCH /api/seals/:id to VOID: plant_masters EDIT. */
+export const canVoidSeals = (user: MaybeUser) => isStaff(user) && canEdit(user, "plant_masters");
+
 // --- user administration --------------------------------------------------------------
 
 /** The modules an account of this kind can be given: partner accounts only the partner-allowed ones. */

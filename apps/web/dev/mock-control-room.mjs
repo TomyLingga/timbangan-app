@@ -5,24 +5,28 @@
 //   node dev/mock-control-room.mjs
 //
 // It answers just enough of the rest of the API for the page to open: POST /api/auth/refresh (always signed in),
-// GET /api/me (a staff account holding dashboard VIEW), POST /api/auth/logout. It can later be imported by
-// dev/mock-api.mjs through `controlRoomRoutes()`.
+// GET /api/me (a staff account holding dashboard VIEW), POST /api/auth/logout, GET /api/health. dev/mock-api.mjs
+// imports `controlRoomRoutes()` and passes its own sign-in check.
 //
 // Environment:
 //   PORT           port to listen on (default 3120)
 //   HOST           interface to bind (default localhost)
 //   WEB_ORIGIN     origin of the web app, for CORS (default http://localhost:3000)
 //   MOCK_TICK_MS   how often the day moves on (default 4000; 0 moves only on POST /__mock/tick)
-//   MOCK_PLAN      "demo" (default) or "real": the drawing and zone polygons from MOCK_PLAN_DIR
-//   MOCK_PLAN_DIR  folder with plan.json and its drawing (default <repository>/.data/plan, which git ignores)
+//   MOCK_PLAN      "demo" (default) or "real": the drawing, the picture and the zone polygons from MOCK_PLAN_DIR.
+//                  The demo plan has a made-up picture drawn here in code; "real" reads the picture plan.json names.
+//   MOCK_PLAN_DIR  folder with plan.json, its drawing and its picture (default <repository>/.data/plan, which git
+//                  ignores)
 //
 // Helpers the real API does not have:
 //   POST /__mock/tick   moves the day on by one step now
 
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { crc32, deflateSync } from "node:zlib";
 
 const PORT = Number(process.env.PORT ?? 3120);
 const HOST = process.env.HOST ?? "localhost";
@@ -68,12 +72,101 @@ const DEMO_SHAPES = {
   UNLOADING: box(0.19, 0.46, 0.27, 0.63),
 };
 
+/** A PNG file from RGB rows. */
+function encodePng(width, height, rgb) {
+  const chunk = (type, data) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.writeUInt8(8, 8);
+  header.writeUInt8(2, 9); // RGB
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) rgb.copy(rows, y * (width * 3 + 1) + 1, y * width * 3, (y + 1) * width * 3);
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([signature, chunk("IHDR", header), chunk("IDAT", deflateSync(rows)), chunk("IEND", Buffer.alloc(0))]);
+}
+
+/**
+ * A made-up picture of the demo plant, in the manner of a light CAD print: grey roads and roofs, dark outlines and
+ * tank rings on white, laid out like DEMO_PLAN_SVG. Nothing here comes from the real site.
+ */
+function demoPicture() {
+  const width = 1000;
+  const height = 560;
+  const rgb = Buffer.alloc(width * height * 3, 255);
+  const dot = (x, y, shade) => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return;
+    rgb.fill(shade, (y * width + x) * 3, (y * width + x) * 3 + 3);
+  };
+  const fill = (x1, y1, x2, y2, shade) => {
+    for (let y = y1; y < y2; y++) for (let x = x1; x < x2; x++) dot(x, y, shade);
+  };
+  const outline = (x1, y1, x2, y2, shade, thick = 1) => {
+    fill(x1, y1, x2, y1 + thick, shade);
+    fill(x1, y2 - thick, x2, y2, shade);
+    fill(x1, y1, x1 + thick, y2, shade);
+    fill(x2 - thick, y1, x2, y2, shade);
+  };
+  const ring = (cx, cy, r, shade) => {
+    for (let y = cy - r - 1; y <= cy + r + 1; y++) {
+      for (let x = cx - r - 1; x <= cx + r + 1; x++) {
+        const d = Math.hypot(x - cx, y - cy);
+        if (Math.abs(d - r) < 0.9) dot(x, y, shade);
+      }
+    }
+  };
+  outline(20, 20, 980, 540, 60, 2);
+  // roads
+  fill(50, 50, 950, 76, 214);
+  fill(50, 484, 950, 510, 214);
+  fill(50, 50, 76, 510, 214);
+  fill(924, 50, 950, 510, 214);
+  fill(440, 76, 466, 484, 214);
+  fill(466, 306, 924, 334, 214);
+  fill(810, 510, 850, 540, 214);
+  // tank farm
+  outline(96, 96, 424, 224, 120);
+  for (const [cx, r] of [[140, 34], [210, 30], [275, 30], [340, 30], [396, 20]]) ring(cx, 160, r, 70);
+  // buildings
+  for (const [x1, y1, x2, y2] of [[490, 96, 630, 216], [700, 190, 900, 290], [690, 96, 900, 166], [110, 266, 174, 358], [500, 420, 640, 476], [110, 400, 190, 460]]) {
+    fill(x1, y1, x2, y2, 232);
+    outline(x1, y1, x2, y2, 70);
+  }
+  // weighbridge
+  fill(592, 352, 668, 382, 190);
+  outline(592, 352, 668, 382, 40, 2);
+  for (let x = 604; x < 668; x += 12) fill(x, 352, x + 1, 382, 120);
+  return { bytes: encodePng(width, height, rgb), type: "image/png", width, height };
+}
+
+/** Width and height of a PNG from its header. */
+const pngSize = (bytes) => ({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) });
+
 function loadPlan() {
-  if (PLAN_MODE === "demo") return { svg: DEMO_PLAN_SVG, shapes: DEMO_SHAPES };
+  if (PLAN_MODE === "demo") return { svg: DEMO_PLAN_SVG, shapes: DEMO_SHAPES, image: demoPicture() };
   const plan = JSON.parse(readFileSync(path.join(PLAN_DIR, "plan.json"), "utf8"));
-  return { svg: readFileSync(path.resolve(PLAN_DIR, plan.svg), "utf8"), shapes: plan.zones };
+  let image = null;
+  if (typeof plan.image === "string") {
+    const bytes = readFileSync(path.resolve(PLAN_DIR, plan.image));
+    const isPng = bytes.subarray(0, 4).toString("hex") === "89504e47";
+    if (!isPng) throw new Error("The mock reads PNG plan pictures only.");
+    image = { bytes, type: "image/png", ...pngSize(bytes) };
+  }
+  return { svg: readFileSync(path.resolve(PLAN_DIR, plan.svg), "utf8"), shapes: plan.zones, image };
 }
 const plan = loadPlan();
+// MOCK_PLAN_IMAGE=off leaves the picture out, to see the line drawing the page falls back to
+if (process.env.MOCK_PLAN_IMAGE === "off") plan.image = null;
+const planImage = plan.image
+  ? { width: plan.image.width, height: plan.image.height, version: createHash("sha256").update(plan.image.bytes).digest("hex").slice(0, 16) }
+  : null;
 
 // The zones and colours of apps/api migrations/0002_seed.sql.
 const ZONES = [
@@ -344,6 +437,7 @@ function buildState() {
   return {
     generatedAt,
     plantDay: new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()),
+    planImage,
     zones: ZONES,
     trucks: placed,
     upcoming: { ...upcoming },
@@ -405,11 +499,16 @@ function json(response, status, body) {
 
 const signedIn = (request) => request.headers.authorization === `Bearer ${TOKEN}`;
 
-/** The control room routes; answers false when the request is for something else. */
-export function controlRoomRoutes(request, response) {
+/**
+ * The control room routes; answers false when the request is for something else. `allow(request, response)` checks
+ * the caller and answers the refusal itself when it returns false (dev/mock-api.mjs passes its own guard).
+ */
+export function controlRoomRoutes(request, response, { allow } = {}) {
   const url = new URL(request.url ?? "/", "http://mock.local");
   if (!url.pathname.startsWith("/api/control-room/")) return false;
-  if (!signedIn(request)) {
+  if (allow) {
+    if (!allow(request, response)) return true;
+  } else if (!signedIn(request)) {
     json(response, 401, { error: { code: "UNAUTHENTICATED", message: "Silakan masuk terlebih dahulu." } });
     return true;
   }
@@ -420,6 +519,15 @@ export function controlRoomRoutes(request, response) {
   if (url.pathname === "/api/control-room/plan.svg") {
     response.writeHead(200, { "content-type": "image/svg+xml; charset=utf-8", "x-content-type-options": "nosniff", "cache-control": "private, no-cache" });
     response.end(plan.svg);
+    return true;
+  }
+  if (url.pathname === "/api/control-room/plan-image") {
+    if (!plan.image) {
+      json(response, 404, { error: { code: "NOT_FOUND", message: "Gambar denah tidak ditemukan." } });
+      return true;
+    }
+    response.writeHead(200, { "content-type": plan.image.type, "x-content-type-options": "nosniff", "cache-control": "private, max-age=300", etag: `"${planImage.version}"` });
+    response.end(plan.image.bytes);
     return true;
   }
   const trip = /^\/api\/control-room\/trips\/(\d+)$/.exec(url.pathname);
@@ -457,6 +565,7 @@ function handle(request, response) {
   const url = new URL(request.url ?? "/", "http://mock.local");
   if (request.method === "POST" && url.pathname === "/api/auth/refresh") return json(response, 200, { accessToken: TOKEN, user: USER });
   if (request.method === "POST" && url.pathname === "/api/auth/logout") return json(response, 204);
+  if (request.method === "GET" && url.pathname === "/api/health") return json(response, 200, { status: "ok" });
   if (request.method === "GET" && url.pathname === "/api/me") {
     if (!signedIn(request)) return json(response, 401, { error: { code: "UNAUTHENTICATED", message: "Silakan masuk terlebih dahulu." } });
     return json(response, 200, { user: USER });
@@ -474,7 +583,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   publish();
   if (TICK_MS > 0) setInterval(tick, TICK_MS);
   createServer(handle).listen(PORT, HOST, () => {
-    console.log(`control room mock on http://${HOST}:${PORT} (plan: ${PLAN_MODE}, ${trucks.length} trucks inside)`);
+    console.log(`control room mock on http://${HOST}:${PORT} (plan: ${PLAN_MODE}${plan.image ? ", with picture" : ""}, ${trucks.length} trucks inside)`);
   });
 } else {
   setUpDay();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
 
 async function setup() {
   const context = await phase3App();
@@ -13,7 +13,7 @@ async function setup() {
       doDate: "2026-11-20",
       ...(options.product ? { partnerId: companies.customer2, productId: options.product } : { contractId: sale }),
       qty,
-      destinationId: place,
+      ...DESTINATION,
       deliveryFrom: "2026-11-20",
       deliveryUntil: options.deliveryUntil ?? "2026-11-30",
       transporterId: transporter,

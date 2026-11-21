@@ -5,6 +5,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { type Account, can } from "../auth/guard.js";
 import type { ModuleCode } from "../auth/permissions.js";
 import type { Orm } from "../db/client.js";
+import { productsByIds, tankTakes } from "../plant-masters/tank-products.js";
 import {
   deliveryOrders,
   drivers,
@@ -201,10 +202,13 @@ export async function loadFormParameters(orm: Orm, flowCode: string, stepCode: s
   });
 }
 
-/** Active tanks of the site that may take one of these products (a tank without a product takes any). */
+/**
+ * Active tanks of the site that may take one of these products: a tank of one of them, a tank whose Odoo label
+ * names one of them, and a tank without product and label (it takes any).
+ */
 export async function tankChoices(orm: Orm, siteId: number, productIds: number[]) {
-  return orm
-    .select({ id: storageTanks.id, code: storageTanks.code, name: storageTanks.name })
+  const rows = await orm
+    .select({ id: storageTanks.id, code: storageTanks.code, name: storageTanks.name, productId: storageTanks.productId, productLabel: storageTanks.productLabel })
     .from(storageTanks)
     .where(
       and(
@@ -214,6 +218,8 @@ export async function tankChoices(orm: Orm, siteId: number, productIds: number[]
       ),
     )
     .orderBy(asc(storageTanks.code));
+  const truckProducts = await productsByIds(orm, productIds);
+  return rows.filter((tank) => tankTakes(tank, truckProducts)).map(({ id, code, name }) => ({ id, code, name }));
 }
 
 /** Applied seals of the trip that are still on the truck. */

@@ -178,6 +178,16 @@ export function cardStatusInfo(status: string): StatusInfo {
   return lookup(CARD_STATUSES, status);
 }
 
+const SEAL_STATUSES: Record<string, StatusInfo> = {
+  available: { label: "Tersedia", tone: "success" },
+  used: { label: "Terpakai", tone: "neutral" },
+  void: { label: "Batal", tone: "destructive" },
+};
+
+export function sealStatusInfo(status: string): StatusInfo {
+  return lookup(SEAL_STATUSES, status);
+}
+
 /**
  * Findings of a registration and checks at the post share their codes. Each
  * known code gets a plain sentence; for an unknown one the server's text is

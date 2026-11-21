@@ -40,7 +40,6 @@ describe("navigationFor", () => {
       "/kontrak",
       "/supir",
       "/kendaraan",
-      "/tujuan",
       "/kartu",
       "/pengguna",
     ]);
@@ -71,6 +70,12 @@ describe("navigationFor", () => {
     // the station list needs the edit level
     expect(navigationFor(staff({ weighbridge: "VIEW" }))).toEqual(["/"]);
     expect(navigationFor(partner({ approvals: "EDIT", reports: "VIEW" }))).toEqual(["/"]);
+  });
+
+  it("adds the tank and seal pages for staff with plant_masters", () => {
+    expect(navigationFor(staff({ plant_masters: "VIEW" }))).toEqual(["/", "/tangki", "/segel"]);
+    expect(navigationFor(staff({ rfid_cards: "VIEW", plant_masters: "EDIT", reports: "VIEW" }))).toEqual(["/", "/kartu", "/tangki", "/segel", "/laporan"]);
+    expect(navigationFor(partner({ plant_masters: "EDIT" }))).toEqual(["/"]);
   });
 
   it("gives an account without access only the start page", () => {

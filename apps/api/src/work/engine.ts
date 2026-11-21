@@ -28,6 +28,7 @@ import { readSetting, siteById } from "../settings.js";
 import { INSIDE_STATUSES } from "../trips/view.js";
 import { loadSteps, readyStep } from "../weighing/steps.js";
 import { loadWeighTrip } from "../weighing/view.js";
+import { productsByIds, tankTakes } from "../plant-masters/tank-products.js";
 import { tripProducts } from "./view.js";
 
 /** A form step with what the rules need about its trip. */
@@ -313,13 +314,16 @@ export async function issueDocumentNo(orm: Orm, document: FieldDocument, siteId:
   return nextFieldDocumentNo(orm, document, typeof format === "string" ? format : null, site.code, now);
 }
 
-/** An active tank of the trip's site that may take the trip's product (a tank without a product takes any). */
+/**
+ * An active tank of the trip's site that may take the trip's product: its own product, an Odoo label naming the
+ * product, or neither (a tank without product and label takes any).
+ */
 export async function tankFor(orm: Orm, step: FormStep, tankId: number, field: string): Promise<typeof storageTanks.$inferSelect> {
   const [tank] = await orm.select().from(storageTanks).where(and(eq(storageTanks.id, tankId), eq(storageTanks.siteId, step.trip.siteId), eq(storageTanks.isActive, true)));
   if (!tank) throw invalid(field, "Tangki tidak ditemukan atau tidak aktif.");
-  if (tank.productId !== null) {
+  if (tank.productId !== null || tank.productLabel !== null) {
     const productIds = (await tripProducts(orm, [step.trip.id])).get(step.trip.id)?.map((item) => item.id) ?? [];
-    if (!productIds.includes(tank.productId)) throw invalid(field, "Tangki ini bukan untuk produk truk ini.");
+    if (!tankTakes(tank, await productsByIds(orm, productIds))) throw invalid(field, "Tangki ini bukan untuk produk truk ini.");
   }
   return tank;
 }

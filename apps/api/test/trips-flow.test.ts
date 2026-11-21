@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
 
 // the test clock starts at 2026-11-20T03:00Z, 10:00 at the plant
 const TODAY = "2026-11-20";
@@ -36,7 +36,7 @@ async function setup() {
   };
 
   const outgoing = async (plannedDate = TODAY) => {
-    const order = (await call("POST", "/api/delivery-orders", "logistics", { doDate: TODAY, contractId: sale, qty: 30_000, destinationId: place, deliveryFrom: TODAY, transporterId: companies.transporter1 })).json().deliveryOrder;
+    const order = (await call("POST", "/api/delivery-orders", "logistics", { doDate: TODAY, contractId: sale, qty: 30_000, ...DESTINATION, deliveryFrom: TODAY, transporterId: companies.transporter1 })).json().deliveryOrder;
     await call("POST", `/api/delivery-orders/${order.id}/send`, "logistics", {});
     await call("POST", `/api/delivery-orders/${order.id}/accept`, "angkut1", {});
     const response = await call("POST", "/api/registrations", "angkut1", {

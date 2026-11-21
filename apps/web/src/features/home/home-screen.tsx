@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
 import { CircleAlert, Database, RefreshCw, Server, UserRound } from "lucide-react";
 
@@ -10,7 +10,9 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
-import { TruckFlow } from "@/features/home/truck-flow";
+import { useLiveControlRoom } from "@/features/control-room/use-control-room";
+import { HomePlant } from "@/features/home/home-plant";
+import { StageList } from "@/features/home/stage-list";
 import { useApiQuery, type ApiQuery } from "@/hooks/use-api-query";
 import { isApiError } from "@/lib/api-client";
 import { API_URL } from "@/lib/config";
@@ -35,7 +37,11 @@ function initials(fullName: string): string {
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "?";
 }
 
-// --- today: the truck flow and the key figures, from GET /api/trips/flow ------------
+// --- today: the plant map or the trucks per stage, and the key figures ---------------
+//
+// Holders of the dashboard module see the live plant map of the control room, and the figures come from its state.
+// Other staff who see the trip list get the trucks per stage from GET /api/trips/flow. Partner accounts get neither
+// (both routes are staff only); they see counts of their own registrations and delivery orders.
 
 /** A key figure in the line under the title: the number, then what it counts. */
 function Figure({ value, label, loading }: { value: number | undefined; label: string; loading: boolean }) {
@@ -53,13 +59,19 @@ function Figure({ value, label, loading }: { value: number | undefined; label: s
   );
 }
 
-function Today({ user }: { user: User }) {
-  // GET /api/trips/flow: staff, with gate or registrations at view level (the same as the trip list).
-  const seesTrips = isStaff(user) && (canView(user, "gate") || canView(user, "registrations"));
-  const seesRegistrations = canView(user, "registrations");
-  const atPost = isStaff(user) && canView(user, "gate");
+/** Trucks expected, inside and finished today, from whichever answer the page has. */
+function TripFigures({ figures, loading }: { figures: { upcoming: number; inside: number; finished: number } | null; loading: boolean }) {
+  return (
+    <>
+      <Figure value={figures?.upcoming} label="akan datang" loading={loading} />
+      <Figure value={figures?.inside} label="di dalam pabrik" loading={loading} />
+      <Figure value={figures?.finished} label="selesai hari ini" loading={loading} />
+    </>
+  );
+}
 
-  const flow = useApiQuery(seesTrips ? "trip-flow" : null, (signal) => api.request<FlowAnswer>("/api/trips/flow", { signal }));
+function TodayHeader({ user, tripFigures }: { user: User; tripFigures: ReactNode }) {
+  const seesRegistrations = canView(user, "registrations");
   const waiting = useApiQuery(seesRegistrations ? "home-waiting" : null, (signal) =>
     api.request<Page<unknown>>("/api/registrations", { query: { status: "SUBMITTED", limit: 1 }, signal }),
   );
@@ -73,48 +85,82 @@ function Today({ user }: { user: User }) {
     api.request<Page<unknown>>("/api/delivery-orders", { query: { limit: 1 }, signal }),
   );
 
-  const counts = useMemo(() => (flow.data ? countFlow(flow.data) : null), [flow.data]);
-  const answer = flow.data;
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      <div className="min-w-0">
+        <p className="kicker mb-2 text-primary-ink">Hari ini</p>
+        <h1 className="text-[1.875rem] leading-tight font-semibold sm:text-[2.25rem]">Beranda</h1>
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[0.9375rem] text-muted-foreground">
+          {tripFigures}
+          {partnerView && seesRegistrations ? (
+            <Link href="/registrasi" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+              <Figure value={ownRegistrations.data?.total} label="registrasi" loading={ownRegistrations.isLoading} />
+            </Link>
+          ) : null}
+          {partnerView && canView(user, "delivery_orders") ? (
+            <Link href="/delivery-order" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+              <Figure value={ownOrders.data?.total} label="delivery order" loading={ownOrders.isLoading} />
+            </Link>
+          ) : null}
+          {seesRegistrations ? (
+            <Link href="/registrasi?status=SUBMITTED" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+              <Figure value={waiting.data?.total} label="menunggu tinjauan" loading={waiting.isLoading} />
+            </Link>
+          ) : null}
+        </div>
+      </div>
+      <p className="text-sm text-muted-foreground">{todayLabel()}</p>
+    </div>
+  );
+}
+
+/**
+ * Holders of the dashboard module: the live plant map. On wide screens the account and server panels (`aside`) stand
+ * beside it, so the map keeps a moderate height.
+ */
+function PlantToday({ user, aside }: { user: User; aside: ReactNode }) {
+  const live = useLiveControlRoom();
+  const kpi = live.state?.kpi;
   return (
     <>
-      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <div className="min-w-0">
-          <p className="kicker mb-2 text-primary-ink">Hari ini</p>
-          <h1 className="text-[1.875rem] leading-tight font-semibold sm:text-[2.25rem]">Beranda</h1>
-          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[0.9375rem] text-muted-foreground">
-            {seesTrips ? (
-              <>
-                <Figure value={answer ? answer.upcoming.in + answer.upcoming.out : undefined} label="akan datang" loading={flow.isLoading} />
-                <Figure value={answer ? insideTotal(answer) : undefined} label="di dalam pabrik" loading={flow.isLoading} />
-                <Figure
-                  value={answer ? answer.finishedToday.in + answer.finishedToday.out : undefined}
-                  label="selesai hari ini"
-                  loading={flow.isLoading}
-                />
-              </>
-            ) : null}
-            {partnerView && seesRegistrations ? (
-              <Link href="/registrasi" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
-                <Figure value={ownRegistrations.data?.total} label="registrasi" loading={ownRegistrations.isLoading} />
-              </Link>
-            ) : null}
-            {partnerView && canView(user, "delivery_orders") ? (
-              <Link href="/delivery-order" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
-                <Figure value={ownOrders.data?.total} label="delivery order" loading={ownOrders.isLoading} />
-              </Link>
-            ) : null}
-            {seesRegistrations ? (
-              <Link href="/registrasi?status=SUBMITTED" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
-                <Figure value={waiting.data?.total} label="menunggu tinjauan" loading={waiting.isLoading} />
-              </Link>
-            ) : null}
-          </div>
-        </div>
-        <p className="text-sm text-muted-foreground">{todayLabel()}</p>
+      <TodayHeader
+        user={user}
+        tripFigures={
+          <TripFigures figures={kpi ? { upcoming: kpi.upcoming, inside: kpi.inside, finished: kpi.finishedToday } : null} loading={!live.state && !live.error} />
+        }
+      />
+      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_24rem]">
+        <HomePlant live={live} />
+        <div className="grid items-start gap-5 lg:grid-cols-2 xl:grid-cols-1">{aside}</div>
       </div>
+    </>
+  );
+}
 
+/** Staff who see the trip list but not the control room, and partner accounts. */
+function FlowToday({ user }: { user: User }) {
+  // GET /api/trips/flow: staff, with gate or registrations at view level (the same as the trip list).
+  const seesTrips = isStaff(user) && (canView(user, "gate") || canView(user, "registrations"));
+  const atPost = isStaff(user) && canView(user, "gate");
+  const flow = useApiQuery(seesTrips ? "trip-flow" : null, (signal) => api.request<FlowAnswer>("/api/trips/flow", { signal }));
+  const counts = useMemo(() => (flow.data ? countFlow(flow.data) : null), [flow.data]);
+  const answer = flow.data;
+
+  return (
+    <>
+      <TodayHeader
+        user={user}
+        tripFigures={
+          seesTrips ? (
+            <TripFigures
+              figures={answer ? { upcoming: answer.upcoming.in + answer.upcoming.out, inside: insideTotal(answer), finished: answer.finishedToday.in + answer.finishedToday.out } : null}
+              loading={flow.isLoading}
+            />
+          ) : null
+        }
+      />
       {seesTrips ? (
-        <TruckFlow
+        <StageList
           counts={counts}
           loading={flow.isLoading && !flow.data}
           error={flow.hasError ? errorMessage(flow.error) : null}
@@ -304,9 +350,28 @@ export function HomeScreen() {
   if (state.status !== "authenticated") return null;
   const { user } = state;
 
+  if (isStaff(user) && canView(user, "dashboard")) {
+    return (
+      <div className="flex flex-col gap-6">
+        <PlantToday
+          user={user}
+          aside={
+            <>
+              <AccountPanel user={user} />
+              <div className="flex flex-col gap-5">
+                <HealthPanel />
+                {canSeeSyncRuns(user) ? <SyncPanels /> : null}
+              </div>
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-6">
-      <Today user={user} />
+      <FlowToday user={user} />
 
       <div className="grid items-start gap-5 lg:grid-cols-[3fr_2fr]">
         <AccountPanel user={user} />

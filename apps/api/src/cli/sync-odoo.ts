@@ -14,9 +14,14 @@ export async function runSyncOdoo(
     const config = loadConfig(env);
     if (!config.odoo) throw new Error("Odoo is not configured: set ODOO_URL, ODOO_DB, ODOO_UID and ODOO_PASSWORD.");
     database = await open(config.databaseUrl);
-    const result = await syncOdoo(database, new OdooClient(config.odoo), () => new Date());
+    const result = await syncOdoo(database, new OdooClient(config.odoo), () => new Date(), { tankParentLocationId: config.odooTankParentLocationId });
     print(
       `Odoo sync finished in ${result.durationMs} ms: ${result.contracts} contracts, ${result.partners} partners, ${result.products} products written; ${result.skipped} lines skipped.`,
+    );
+    print(
+      result.tanks.status === "OK"
+        ? `Tanks: ${result.tanks.written} written, ${result.tanks.deactivated} made inactive, ${result.tanks.skipped} skipped.`
+        : "Tanks skipped: ODOO_TANK_PARENT_LOCATION_ID is not set.",
     );
     return 0;
   } catch (error) {

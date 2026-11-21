@@ -1,4 +1,5 @@
-// Delivery orders (DO): written by the logistics admin, sent to one transporter, accepted by it, closed.
+// Delivery orders (DO): written by the logistics admin, sent to one transporter, accepted by it, closed. The
+// destination is typed on the DO (dest_* columns): name and regency for a draft, all five parts before it is sent.
 import { and, count, desc, eq, ilike, inArray, ne, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { alias } from "drizzle-orm/pg-core";
@@ -6,8 +7,9 @@ import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { type Account, accountOf, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
+import { deliveryOrderFilesOf } from "../attachments/view.js";
 import type { Orm } from "../db/client.js";
-import { deliveryOrders, destinations, erpContracts, partners, products, registrationAllocations, spjDocuments, tripAllocations, trips } from "../db/schema.js";
+import { deliveryOrders, erpContracts, partners, products, registrationAllocations, spjDocuments, tripAllocations, trips } from "../db/schema.js";
 import { AppError, duplicate, invalid, invalidState, notFound } from "../errors.js";
 import { dateText, idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
 import { nextDoNumber } from "../numbering.js";
@@ -31,7 +33,11 @@ const fields = {
   qty: z.number(QTY_MESSAGE).positive(QTY_MESSAGE).max(1_000_000_000_000, QTY_MESSAGE),
   uom: z.string("Satuan harus berupa teks.").trim().min(1, "Satuan tidak boleh kosong.").max(20, "Satuan terlalu panjang.").optional(),
   tolerancePct: z.number("Toleransi harus angka.").min(0, "Toleransi tidak boleh negatif.").max(100, "Toleransi paling besar 100.").optional(),
-  destinationId: idNumber,
+  destName: optionalText("Nama tujuan", 200),
+  destAddress: optionalText("Alamat tujuan", 500),
+  destDistrict: optionalText("Kecamatan tujuan", 100),
+  destRegency: optionalText("Kabupaten atau kota tujuan", 100),
+  destProvince: optionalText("Provinsi tujuan", 100),
   deliveryFrom: dateText("Tanggal mulai kirim"),
   deliveryUntil: dateText("Tanggal akhir kirim").nullable().optional(),
   transportTerms: optionalText("Syarat angkut", 50),
@@ -40,7 +46,18 @@ const fields = {
   remark: optionalText("Keterangan", 1000),
 };
 const createBody = z.object(fields);
-const patchBody = z.object({ ...fields, doDate: fields.doDate.optional(), qty: fields.qty.optional(), destinationId: fields.destinationId.optional(), deliveryFrom: fields.deliveryFrom.optional() });
+const patchBody = z.object({ ...fields, doDate: fields.doDate.optional(), qty: fields.qty.optional(), deliveryFrom: fields.deliveryFrom.optional() });
+
+/** The typed parts of the destination, with the label each one has in a message. */
+const DEST_PARTS = [
+  ["destName", "Nama tujuan", true],
+  ["destAddress", "Alamat tujuan", false],
+  ["destDistrict", "Kecamatan tujuan", false],
+  ["destRegency", "Kabupaten atau kota tujuan", true],
+  ["destProvince", "Provinsi tujuan", false],
+] as const;
+/** Empty text counts as absent. */
+const typed = (value: string | null | undefined) => (value && value.trim() !== "" ? value : null);
 /** What may still change once a DO has been sent. */
 const LATE_FIELDS = new Set(["deliveryUntil", "truckCount", "remark"]);
 const listQuery = z.object({ status: z.enum(STATUSES, "Status DO tidak dikenal.").optional(), q: searchParam, limit: limitParam });
@@ -67,7 +84,6 @@ export async function listDeliveryOrders(orm: Orm, where: SQL | undefined, limit
       partnerName: partners.name,
       productName: products.name,
       productCategory: products.category,
-      destination: { id: destinations.id, name: destinations.name, address: destinations.address, district: destinations.district, regency: destinations.regency, province: destinations.province },
       transporterName: transporterOf.name,
       qtyPlanned: plannedSql,
       tripCount: tripCountSql,
@@ -75,7 +91,6 @@ export async function listDeliveryOrders(orm: Orm, where: SQL | undefined, limit
     .from(deliveryOrders)
     .innerJoin(partners, eq(partners.id, deliveryOrders.partnerId))
     .innerJoin(products, eq(products.id, deliveryOrders.productId))
-    .innerJoin(destinations, eq(destinations.id, deliveryOrders.destinationId))
     .leftJoin(transporterOf, eq(transporterOf.id, deliveryOrders.transporterId))
     .where(where)
     .orderBy(desc(deliveryOrders.createdAt), desc(deliveryOrders.id))
@@ -92,7 +107,14 @@ export async function listDeliveryOrders(orm: Orm, where: SQL | undefined, limit
     qty: order.qty,
     uom: order.uom,
     tolerancePct: order.tolerancePct,
-    destination: row.destination,
+    destination: {
+      id: order.destinationId,
+      name: order.destName,
+      address: order.destAddress,
+      district: order.destDistrict,
+      regency: order.destRegency,
+      province: order.destProvince,
+    },
     deliveryFrom: order.deliveryFrom,
     deliveryUntil: order.deliveryUntil,
     transportTerms: order.transportTerms,
@@ -148,9 +170,8 @@ async function resolve(orm: Orm, input: Values) {
     if (!product) errors.push({ field: "productId", message: "Produk tidak ditemukan." });
     else uom ??= product.uom;
   }
-  const [destination] = await orm.select({ partnerId: destinations.partnerId, isActive: destinations.isActive }).from(destinations).where(eq(destinations.id, input.destinationId));
-  if (!destination?.isActive || (destination.partnerId !== null && destination.partnerId !== partnerId)) {
-    errors.push({ field: "destinationId", message: "Tujuan tidak ditemukan atau bukan tujuan partner ini." });
+  for (const [field, label, required] of DEST_PARTS) {
+    if (required && typed(input[field]) === null) errors.push({ field, message: `${label} wajib diisi.` });
   }
   if (input.transporterId !== undefined && input.transporterId !== null && !(await isTransporter(orm, input.transporterId))) {
     errors.push({ field: "transporterId", message: "Transporter harus partner transporter." });
@@ -167,7 +188,11 @@ async function resolve(orm: Orm, input: Values) {
     qty: input.qty,
     uom: uom ?? "kg",
     tolerancePct: tolerancePct ?? 0,
-    destinationId: input.destinationId,
+    destName: typed(input.destName),
+    destAddress: typed(input.destAddress),
+    destDistrict: typed(input.destDistrict),
+    destRegency: typed(input.destRegency),
+    destProvince: typed(input.destProvince),
     deliveryFrom: input.deliveryFrom,
     deliveryUntil: input.deliveryUntil ?? null,
     transportTerms: input.transportTerms ?? null,
@@ -250,7 +275,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
       .innerJoin(registrationAllocations, eq(registrationAllocations.id, tripAllocations.registrationAllocationId))
       .where(eq(registrationAllocations.deliveryOrderId, id))
       .orderBy(trips.registrationId, trips.seq);
-    return { deliveryOrder, trips: await loadTrips(orm, tripIds.map((row) => row.id)) };
+    return { deliveryOrder, trips: await loadTrips(orm, tripIds.map((row) => row.id)), files: await deliveryOrderFilesOf(orm, id) };
   });
 
   app.post("/api/delivery-orders", creators, async (request, reply) => {
@@ -307,7 +332,11 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
           qty: current.qty,
           uom: current.contractId === (changes.contractId ?? current.contractId) ? current.uom : undefined,
           tolerancePct: current.contractId === (changes.contractId ?? current.contractId) ? current.tolerancePct : undefined,
-          destinationId: current.destinationId,
+          destName: current.destName,
+          destAddress: current.destAddress,
+          destDistrict: current.destDistrict,
+          destRegency: current.destRegency,
+          destProvince: current.destProvince,
           deliveryFrom: current.deliveryFrom,
           deliveryUntil: current.deliveryUntil,
           transportTerms: current.transportTerms,
@@ -350,6 +379,11 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
       if (current.status !== "DRAFT") throw invalidState("Hanya DO berstatus DRAFT yang bisa dikirim.");
       const transporterId = body.transporterId ?? current.transporterId;
       if (transporterId === null) throw invalid("transporterId", "Pilih transporter sebelum DO dikirim.");
+      const missing = DEST_PARTS.filter(([field]) => typed(current[field]) === null).map(([field, label]) => ({
+        field,
+        message: `${label} wajib diisi sebelum DO dikirim.`,
+      }));
+      if (missing.length > 0) throw new AppError(400, "VALIDATION", "Data yang dikirim tidak valid.", missing);
       if (!(await isTransporter(tx, transporterId))) throw invalid("transporterId", "Transporter harus partner transporter.");
       await tx.update(deliveryOrders).set({ status: "SENT", transporterId, sentAt: now, updatedAt: now }).where(eq(deliveryOrders.id, id));
       await audit(tx, request, now, id, "DO_SENT", { status: current.status }, { status: "SENT", transporterId });

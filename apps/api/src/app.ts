@@ -16,6 +16,7 @@ import { registerDestinationRoutes } from "./destinations/routes.js";
 import { registerDriverRoutes } from "./drivers/routes.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { registerExceptionRoutes } from "./exceptions/routes.js";
+import { registerAttachmentRoutes } from "./attachments/routes.js";
 import { registerFileRoutes } from "./files/routes.js";
 import { registerGateRoutes } from "./gate/routes.js";
 import { registerLookupRoutes } from "./lookup/routes.js";
@@ -89,7 +90,13 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   app.setNotFoundHandler(notFoundHandler);
   await app.register(helmet);
   // content-disposition: the web page reads the file name of a CSV download
-  await app.register(cors, { origin: [context.config.webOrigin], credentials: true, exposedHeaders: ["content-disposition"] });
+  // without `methods` the plugin allows only GET, HEAD and POST across origins
+  await app.register(cors, {
+    origin: [context.config.webOrigin],
+    credentials: true,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+    exposedHeaders: ["content-disposition"],
+  });
   await app.register(cookie);
   app.decorateRequest("account", null);
   app.decorateRequest("station", null);
@@ -129,6 +136,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerReportRoutes(app, context, guards);
   registerPlantMasterRoutes(app, context, guards);
   await registerFileRoutes(app, context, guards);
+  registerAttachmentRoutes(app, context, guards);
   registerWorkRoutes(app, context, guards);
   registerFormRoutes(app, context, guards);
   registerControlRoomRoutes(app, context, guards);

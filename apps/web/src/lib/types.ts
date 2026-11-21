@@ -97,7 +97,65 @@ export interface SyncResult {
   partners: number;
   products: number;
   skipped: number;
+  /** The tank step of the same run (apps/api src/odoo/sync.ts); absent from older API versions. */
+  tanks?: TankSyncResult;
   durationMs: number;
+}
+
+export type TankSyncResult =
+  | { status: "OK"; written: number; deactivated: number; skipped: number }
+  | { status: "SKIPPED"; reason: string };
+
+/** GET /api/tanks (apps/api src/plant-masters/routes.ts). */
+export interface StorageTank {
+  id: string | number;
+  code: string;
+  name: string | null;
+  product: { id: string | number; name: string | null } | null;
+  /** The product name Odoo keeps on the tank, shown when no synced product matched it. */
+  productLabel: string | null;
+  capacityKg: number | null;
+  isActive: boolean;
+  /** ODOO: maintained in Odoo, only isActive changes here. */
+  source: "ODOO" | "LOCAL";
+}
+
+/** GET /api/seals. */
+export interface Seal {
+  id: string | number;
+  sealNo: string;
+  kind: string;
+  status: string;
+  batchRef: string | null;
+  createdAt: string;
+  trip: { id: string | number; tripNo: string | null; plateNo: string | null } | null;
+}
+
+/** POST /api/seals/batch. */
+export interface SealBatchResult {
+  created: number;
+  skipped: number;
+  first: string;
+  last: string;
+}
+
+/** A file linked to a DO or a truck (apps/api src/attachments/routes.ts). */
+export interface AttachedFile {
+  id: string | number;
+  label: string | null;
+  originalName: string | null;
+  mimeType: string;
+  sizeBytes: number;
+  addedAt: string | null;
+  addedBy: { id: string | number; fullName: string } | null;
+}
+
+/** POST /api/files. */
+export interface UploadedFile {
+  id: string | number;
+  originalName: string | null;
+  mimeType: string;
+  sizeBytes: number;
 }
 
 export interface SyncRun {
@@ -230,8 +288,9 @@ export interface RfidCard {
   trip: { id: string | number; tripNo: string | null; plateNo: string | null } | null;
 }
 
+/** Typed on the DO since API migration 0008; `id` is the old master row of earlier DOs, else null. */
 export interface DeliveryOrderDestination {
-  id: string | number;
+  id: string | number | null;
   name: string;
   address: string | null;
   district: string | null;
@@ -270,6 +329,8 @@ export interface DeliveryOrder {
 export interface DeliveryOrderDetail {
   deliveryOrder: DeliveryOrder;
   trips: Trip[];
+  /** The DO letter and other files logistics attached. */
+  files?: AttachedFile[];
 }
 
 /** One finding of a registration check. `tripSeq` and `allocationSeq` point at what it is about. */
@@ -327,6 +388,8 @@ export interface Trip {
   card: { uid: string; label: string | null } | null;
   checkedInAt: string | null;
   cancelReason: string | null;
+  /** Weighbridge slips of the supplier's scale (incoming only). */
+  slips?: AttachedFile[];
 }
 
 export interface RegistrationAllocation {

@@ -283,7 +283,13 @@ export const deliveryOrders = pgTable("delivery_orders", {
   qty: numeric("qty", { precision: 16, scale: 3, mode: "number" }).notNull(),
   uom: text("uom").notNull().default("kg"),
   tolerancePct: numeric("tolerance_pct", { precision: 7, scale: 4, mode: "number" }).notNull().default(0),
-  destinationId: bigint("destination_id", { mode: "number" }).notNull(),
+  /** The master row of DOs made before migration 0008; new DOs carry the typed dest_* columns only. */
+  destinationId: bigint("destination_id", { mode: "number" }),
+  destName: text("dest_name"),
+  destAddress: text("dest_address"),
+  destDistrict: text("dest_district"),
+  destRegency: text("dest_regency"),
+  destProvince: text("dest_province"),
   deliveryFrom: date("delivery_from").notNull(),
   deliveryUntil: date("delivery_until"),
   transportTerms: text("transport_terms"),
@@ -613,6 +619,8 @@ export const storageTanks = pgTable("storage_tanks", {
   capacityKg: bigint("capacity_kg", { mode: "number" }),
   erpRef: text("erp_ref"),
   isActive: boolean("is_active").notNull().default(true),
+  productLabel: text("product_label"),
+  erpRemovedAt: timestamptz("erp_removed_at"),
 });
 
 export const SEAL_KINDS = ["LOCIS", "CUSTOMS"] as const;
@@ -647,6 +655,16 @@ export const tripFiles = pgTable("trip_files", {
   weighingId: bigint("weighing_id", { mode: "number" }),
   stepCode: text("step_code"),
   label: text("label"),
+  addedBy: bigint("added_by", { mode: "number" }),
+  addedAt: timestamptz("added_at"),
+});
+
+export const deliveryOrderFiles = pgTable("delivery_order_files", {
+  deliveryOrderId: bigint("delivery_order_id", { mode: "number" }).notNull(),
+  fileId: bigint("file_id", { mode: "number" }).notNull(),
+  label: text("label"),
+  addedBy: bigint("added_by", { mode: "number" }).notNull(),
+  addedAt: timestamptz("added_at").notNull().defaultNow(),
 });
 
 export const qualityChecks = pgTable("quality_checks", {

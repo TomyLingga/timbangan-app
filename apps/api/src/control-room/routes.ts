@@ -3,16 +3,18 @@
 //   GET /api/control-room/stream     the same state as server-sent events, sent again when it changes
 //   GET /api/control-room/trips/:id  one trip's timeline
 //   GET /api/control-room/plan.svg   the plan drawing (the made-up demo plan until one is imported)
+//   GET /api/control-room/plan-image the picture of the plan, when one was imported (404 otherwise)
 // The web app reads the stream with fetch and the bearer header; EventSource cannot send that header.
+import { readFile } from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
 import { covers } from "../auth/permissions.js";
-import { forbidden } from "../errors.js";
+import { forbidden, notFound } from "../errors.js";
 import { idParams } from "../http.js";
 import { DEMO_PLAN_SVG } from "./demo-plan.js";
-import { readPlanSvg } from "./plan.js";
+import { PLAN_IMAGE_TYPE, planImagePath, readPlanImageInfo, readPlanSvg } from "./plan.js";
 import { computeState } from "./state.js";
 import { tripTimeline } from "./timeline.js";
 import { StateWatcher } from "./watcher.js";
@@ -87,6 +89,20 @@ export function registerControlRoomRoutes(app: FastifyInstance, context: Context
       .header("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'")
       .header("cache-control", "private, no-cache")
       .send(svg);
+  });
+
+  app.get("/api/control-room/plan-image", viewers, async (request, reply) => {
+    const code = await siteCode();
+    const info = code ? await readPlanImageInfo(context.config.files.dir, code) : null;
+    if (!code || !info) throw notFound("Gambar denah");
+    const etag = `"${info.version}"`;
+    reply
+      .header("x-content-type-options", "nosniff")
+      .header("cache-control", "private, max-age=300")
+      .header("etag", etag);
+    if (request.headers["if-none-match"] === etag) return reply.code(304).send();
+    const bytes = await readFile(planImagePath(context.config.files.dir, code, info.format));
+    return reply.header("content-type", PLAN_IMAGE_TYPE[info.format]).send(bytes);
   });
 
   return { watcher };

@@ -38,6 +38,7 @@ describe("Drizzle definitions against the migrated database", () => {
       "audit_log",
       "auth_sessions",
       "card_assignments",
+      "delivery_order_files",
       "delivery_orders",
       "destinations",
       "document_counters",

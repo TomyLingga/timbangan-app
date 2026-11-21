@@ -12,18 +12,25 @@ import {
   HELD_LABELS,
   isLongWait,
   markerCapacity,
+  markerFits,
   minutesSince,
   placeMarkers,
   type Point,
   shapeBox,
   shortZoneName,
 } from "@/lib/control-room";
+import type { PlanDrawing } from "@/features/control-room/use-control-room";
 import { MOTION_EASE } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
-// The plant map: the plan drawing as the base layer, the zones as translucent fills in their seeded colours, and a
-// marker per truck inside the plant. Markers sit on a grid inside their zone's box; when a truck's zone changes its
-// marker glides to the new place. A truck that arrives fades in at the registration post and then moves to its zone.
+// The plant map: the plan as the base layer (the owner's layout picture when the site has one, else the line
+// drawing), the zones as translucent fills in their seeded colours, and a marker per truck inside the plant. Markers
+// sit on a grid inside their zone's box; when a truck's zone changes its marker glides to the new place. A truck that
+// arrives fades in at the registration post and then moves to its zone.
+//
+// One SVG holds the picture and the zones and does not change while trucks move; the markers are HTML on top of it
+// and only animate when their place changes. The picture is a light CAD print: in the dark theme it is inverted
+// (light lines on a dark ground, hues kept) with its contrast lowered, a static filter that is drawn once.
 
 /** Pill markers above this map width; dots below it. */
 const COMPACT_BELOW_PX = 640;
@@ -47,11 +54,17 @@ const SIZES: Record<MarkerKind, MarkerSize> = {
 
 export interface PlantMapProps {
   state: ControlRoomState;
-  plan: { markup: string | null; aspect: { width: number; height: number } | null };
+  plan: Pick<PlanDrawing, "markup" | "imageUrl" | "backdrop">;
   now: Date;
   tv?: boolean;
+  /** Opens a truck's timeline; without it markers still show their tooltip on hover and focus. */
   onSelect?: (tripId: number) => void;
 }
+
+/** Fill strength of the zones: stronger over the picture, which has its own colours and lines. */
+const ZONE_FILL = { image: 0.42, svg: 0.26 };
+/** The dark-theme treatment of the picture (see the note at the top). */
+const DARK_PICTURE = "dark:[filter:invert(1)_hue-rotate(180deg)_brightness(0.92)_contrast(0.82)]";
 
 interface Placed {
   truck: ControlRoomTruck;
@@ -75,7 +88,8 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
   const reduceMotion = useReducedMotion() ?? false;
   const frame = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const aspect = plan.aspect ?? { width: 1000, height: 560 };
+  const aspect = plan.backdrop;
+  const picture = plan.backdrop.kind === "image" && plan.imageUrl ? plan.imageUrl : null;
 
   useLayoutEffect(() => {
     const element = frame.current;
@@ -135,9 +149,10 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
       // held trucks first, then the longest waiting
       const ordered = [...trucks].sort((a, b) => Number(!!b.held) - Number(!!a.held) || a.since.localeCompare(b.since) || a.tripId - b.tripId);
       const pixels = toPx(box);
-      // a zone that holds a few plates keeps them and counts the rest on the chip; one that holds fewer switches to dots
+      // a zone that holds a few plates keeps them and counts the rest on the chip; one that holds fewer, or that is
+      // too small for one plate, switches to dots
       const capacity = markerCapacity(pixels, SIZES[large]);
-      const kind = ordered.length > capacity && capacity < MIN_PLATES_BEFORE_DOTS ? small : large;
+      const kind = !markerFits(pixels, SIZES[large]) || (ordered.length > capacity && capacity < MIN_PLATES_BEFORE_DOTS) ? small : large;
       const layout = placeMarkers(pixels, ordered.length, SIZES[kind]);
       layout.slots.forEach((slot, index) => {
         const truck = ordered[index];
@@ -159,8 +174,8 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
       style={{ aspectRatio: `${aspect.width} / ${aspect.height}` }}
       data-testid="plant-map"
     >
-      {/* the plan drawing: lines only, coloured by the theme */}
-      {plan.markup ? (
+      {/* the line drawing (when there is no picture): lines only, coloured by the theme */}
+      {!picture && plan.markup ? (
         <div
           aria-hidden="true"
           className="absolute inset-0 text-faint [&_*]:[vector-effect:non-scaling-stroke] [&>svg]:size-full"
@@ -168,8 +183,20 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
         />
       ) : null}
 
-      {/* zones */}
+      {/* the picture and the zones */}
       <svg aria-hidden="true" className="absolute inset-0 size-full" viewBox={`0 0 ${aspect.width} ${aspect.height}`} preserveAspectRatio="none">
+        {picture ? (
+          <image
+            href={picture}
+            x={0}
+            y={0}
+            width={aspect.width}
+            height={aspect.height}
+            preserveAspectRatio="none"
+            data-testid="plan-image"
+            className={DARK_PICTURE}
+          />
+        ) : null}
         {state.zones.map((zone) => {
           if (!zone.shape || zone.shape.length < 3) return null;
           const points = zone.shape.map(([x = 0, y = 0]) => `${x * aspect.width},${y * aspect.height}`).join(" ");
@@ -179,7 +206,7 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
               key={zone.code}
               points={points}
               fill={color}
-              fillOpacity={0.26}
+              fillOpacity={picture ? ZONE_FILL.image : ZONE_FILL.svg}
               stroke={color}
               strokeOpacity={0.95}
               strokeWidth={1}
@@ -189,8 +216,8 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
         })}
       </svg>
 
-      {/* zone names */}
-      {size.width > 0
+      {/* zone names; a narrow map leaves them to the list beside or under it, where they do not cover the markers */}
+      {size.width > 0 && !compact
         ? state.zones.map((zone) => {
             const box = shapeBox(zone.shape);
             if (!box) return null;
@@ -200,7 +227,7 @@ export function PlantMap({ state, plan, now, tv = false, onSelect }: PlantMapPro
                 aria-hidden="true"
                 className={cn(
                   "pointer-events-none absolute z-20 -translate-y-full truncate pb-0.5 font-medium leading-none text-foreground/80 [text-shadow:0_0_3px_var(--background),0_0_6px_var(--background)]",
-                  tv ? "text-sm" : compact ? "text-[0.5625rem]" : "text-[0.6875rem]",
+                  tv ? "text-sm" : "text-[0.6875rem]",
                 )}
                 style={{ left: `${box.x * 100}%`, top: `${box.y * 100}%`, maxWidth: `${Math.max(box.width * 100, 9)}%` }}
               >
@@ -276,7 +303,7 @@ function TruckMarker({ truck, zone, now, kind, interactive, onSelect, onHover }:
   const heldMinutes = truck.held ? minutesSince(truck.held.since, now) : null;
   const label = describeTruck(truck, zone, now);
   const common = {
-    "aria-label": interactive ? `${label}. Buka garis waktu.` : label,
+    "aria-label": interactive && onSelect ? `${label}. Buka garis waktu.` : label,
     "data-trip": truck.tripId,
     "data-zone": truck.zone,
     "data-held": truck.held ? "true" : undefined,

@@ -18,6 +18,7 @@ describe("loadConfig", () => {
       accessTokenTtlS: 900,
       refreshTokenTtlDays: 30,
       odoo: null,
+      odooTankParentLocationId: null,
       portal: null,
       vcf: null,
       bootstrapAdminEmails: [],
@@ -59,6 +60,9 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, ...odoo }).odoo).toEqual({ url: "http://127.0.0.1:8069", db: "db", uid: 7, password: "secret" });
     expect(loadConfig({ ...base, ...odoo, ODOO_PASSWORD: "" }).odoo).toBeNull();
     expect(loadConfig({ ...base, ODOO_URL: odoo.ODOO_URL }).odoo).toBeNull();
+    expect(loadConfig({ ...base, ...odoo, ODOO_TANK_PARENT_LOCATION_ID: "40" }).odooTankParentLocationId).toBe(40);
+    expect(loadConfig({ ...base, ...odoo, ODOO_TANK_PARENT_LOCATION_ID: "" }).odooTankParentLocationId).toBeNull();
+    expect(() => loadConfig({ ...base, ODOO_TANK_PARENT_LOCATION_ID: "gudang" })).toThrow(/ODOO_TANK_PARENT_LOCATION_ID/);
   });
 
   it("gives the portal group only when all three keys are set", () => {

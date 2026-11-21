@@ -46,10 +46,11 @@ import {
 } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { deliveryOrderStatusInfo } from "@/lib/status";
-import type { DeliveryOrder, Destination, Page, PartnerRef, Product, User } from "@/lib/types";
+import type { DeliveryOrder, Page, PartnerRef, Product, User } from "@/lib/types";
 import { wholeKg } from "@/lib/quantity";
 import {
   deliveryOrderPayload,
+  destinationGaps,
   EMPTY_DELIVERY_ORDER,
   validateDeliveryOrder,
   type DeliveryOrderValues,
@@ -137,6 +138,7 @@ function columnsFor(admin: boolean): ReadonlyArray<Column<DeliveryOrder>> {
       cell: (order) => (
         <>
           <span className="block">{order.destination?.name ?? "-"}</span>
+          {order.destination?.regency ? <span className="block text-xs text-muted-foreground">{order.destination.regency}</span> : null}
           <span className="block text-xs text-muted-foreground">{deliveryWindow(order)}</span>
         </>
       ),
@@ -179,7 +181,11 @@ function toValues(order: DeliveryOrder): DeliveryOrderValues {
     qty: text(order.qty),
     uom: order.uom ?? "Kg",
     tolerancePct: text(order.tolerancePct),
-    destinationId: order.destination ? String(order.destination.id) : "",
+    destName: order.destination?.name ?? "",
+    destAddress: order.destination?.address ?? "",
+    destDistrict: order.destination?.district ?? "",
+    destRegency: order.destination?.regency ?? "",
+    destProvince: order.destination?.province ?? "",
     deliveryFrom: order.deliveryFrom ?? "",
     deliveryUntil: order.deliveryUntil ?? "",
     transportTerms: order.transportTerms ?? "",
@@ -207,10 +213,6 @@ function DeliveryOrderFormSheet({
   const [formError, setFormError] = useState<string | null>(null);
   const save = useAction();
 
-  const customerId = customer ? String(customer.id) : "";
-  const destinations = useApiQuery(customerId && !limited ? `destinations|${customerId}` : null, (signal) =>
-    api.request<Page<Destination>>("/api/destinations", { query: { partnerId: customerId, limit: 50 }, signal }),
-  );
   const products = useApiQuery(!contract && !limited ? "products" : null, (signal) =>
     api.request<Page<Product>>("/api/products", { query: { limit: 50 }, signal }),
   );
@@ -289,7 +291,6 @@ function DeliveryOrderFormSheet({
               form.set("customerPoNo", chosen.customerPoNo ?? "");
               form.set("uom", chosen.uom ?? "Kg");
               form.set("tolerancePct", chosen.tolerancePct === null ? "" : String(Number(chosen.tolerancePct)));
-              form.set("destinationId", "");
             }}
             onClear={() => {
               setContract(null);
@@ -312,7 +313,6 @@ function DeliveryOrderFormSheet({
                 onChange={(partner) => {
                   setCustomer(partner);
                   form.set("partnerId", partner ? String(partner.id) : "");
-                  form.set("destinationId", "");
                 }}
                 error={form.errors.partnerId}
               />
@@ -362,20 +362,45 @@ function DeliveryOrderFormSheet({
             onChange={(value) => form.set("tolerancePct", value)}
             error={form.errors.tolerancePct}
           />
-          <SelectField
-            label="Tujuan"
-            name="destinationId"
-            value={form.values.destinationId}
-            onChange={(value) => form.set("destinationId", value)}
-            error={form.errors.destinationId}
-            disabled={!customer}
-            emptyLabel={!customer ? "Pilih customer atau kontrak dulu" : destinations.data ? "Pilih tujuan" : "Memuat daftar tujuan"}
-            hint={customer && destinations.data?.items.length === 0 ? "Customer ini belum punya tujuan. Tambahkan di halaman Tujuan." : undefined}
-            options={(destinations.data?.items ?? []).map((destination) => ({
-              value: String(destination.id),
-              label: destination.isActive ? destination.name : `${destination.name} (nonaktif)`,
-            }))}
-          />
+          <fieldset className="flex flex-col gap-4 rounded-md border p-3">
+            <legend className="px-1 text-sm font-medium">Tujuan</legend>
+            <p className="text-xs text-muted-foreground">Nama dan kabupaten cukup untuk draf. Kelima isian wajib lengkap sebelum DO dikirim.</p>
+            <TextField label="Nama tujuan" name="destName" value={form.values.destName} onChange={(value) => form.set("destName", value)} error={form.errors.destName} />
+            <TextAreaField
+              label="Alamat"
+              name="destAddress"
+              optional
+              rows={2}
+              value={form.values.destAddress}
+              onChange={(value) => form.set("destAddress", value)}
+              error={form.errors.destAddress}
+            />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <TextField
+                label="Kecamatan"
+                name="destDistrict"
+                optional
+                value={form.values.destDistrict}
+                onChange={(value) => form.set("destDistrict", value)}
+                error={form.errors.destDistrict}
+              />
+              <TextField
+                label="Kabupaten atau kota"
+                name="destRegency"
+                value={form.values.destRegency}
+                onChange={(value) => form.set("destRegency", value)}
+                error={form.errors.destRegency}
+              />
+            </div>
+            <TextField
+              label="Provinsi"
+              name="destProvince"
+              optional
+              value={form.values.destProvince}
+              onChange={(value) => form.set("destProvince", value)}
+              error={form.errors.destProvince}
+            />
+          </fieldset>
           <TextField
             label="Mulai kirim"
             name="deliveryFrom"
@@ -684,6 +709,8 @@ function DeliveryOrdersPage({ user }: { user: User }) {
           onClose={() => setPending(null)}
           onConfirm={async () => {
             if (!pending.order.transporter) return "Pilih transporter dulu lewat Ubah.";
+            const gaps = destinationGaps(pending.order.destination);
+            if (gaps.length > 0) return `Lengkapi tujuan DO lewat Ubah sebelum dikirim: ${gaps.join(", ")}.`;
             const failure = await transition(pending.order, "send");
             if (!failure) done(`DO ${pending.order.doNo} dikirim ke ${pending.order.transporter.name}.`);
             return failure;
