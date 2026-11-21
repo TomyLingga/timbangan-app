@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+coverage/
+*.tsbuildinfo
+
+# local settings, keys and logs are kept in the Electron user-data folder, never here;
+# these cover a settings file copied in by hand during development
+settings.local.json
+.env
+.env.*
