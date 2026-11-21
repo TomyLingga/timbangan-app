@@ -24,7 +24,12 @@ Kartu bisa "ditempel" dengan mengetik UID dengan cepat lalu Enter, seperti pemba
 
 Tombol simulator (hanya saat pengembangan): F6 menaikkan truk (41.500 kg), F7 menggeser berat 20 kg, F8 mengosongkan timbangan.
 
-`npm run demo` menjalankan skenario otomatis terhadap API tiruan (timbang tersimpan, timbang yang menunggu keputusan, kartu tidak dikenal) lalu menutup diri. Bila `DESKTOP_CAPTURE_DIR` diisi, gambar jendela tiap keadaan layar disimpan ke folder itu.
+`npm run demo` menjalankan skenario otomatis terhadap API tiruan (timbang tersimpan, timbang yang menunggu keputusan, kartu tidak dikenal) lalu menutup diri. API tiruan juga menyajikan dua gambar uji sebagai CCTV (`dev/cctv-sample-*.jpg`, gambar buatan). Variabel untuk demo:
+
+- `DESKTOP_CAPTURE_DIR`: folder tempat gambar jendela tiap keadaan layar disimpan;
+- `DESKTOP_WINDOW`: ukuran halaman, misalnya `1366x768` atau `1920x1080`. Halaman yang lebih besar dari layar komputer ini diperkecil dengan zoom, jadi tata letaknya tetap dihitung pada ukuran itu;
+- `DESKTOP_THEME`: `dark` atau `light`;
+- `DESKTOP_DEMO_CCTV_OUT`: nomor gambar CCTV keluar; nomor yang tidak ada (misalnya `9`) menampilkan keadaan kamera tidak menjawab.
 
 Bila variabel lingkungan `ELECTRON_RUN_AS_NODE` terisi di terminal, Electron berjalan sebagai Node dan jendela tidak muncul. Kosongkan dulu.
 
@@ -43,14 +48,27 @@ npm start            # menjalankan hasil build
 2. Atur PIN stasiun di halaman yang sama. PIN membuka Pengaturan dan mode ketik plat; API yang memeriksanya (`POST /api/weighbridge/manual-plate`), dan API mengunci PIN 5 menit setelah 5 kali salah.
 3. Di program, buka Pengaturan (F2), isi alamat server, tempel kunci stasiun, isi alamat pembaca plat, lalu pilih sambungan timbangan.
 
+## Isi layar
+
+- Bilah atas: judul "Timbangan" dan nama stasiun, status Mesin (standby, tersambung, terputus), Kamera plat (berapa dari empat kamera yang menjawab), Server, tanggal dan jam, tombol tema terang/gelap, sakelar Exception, tombol kembali ke awal, dan Pengaturan.
+- Kolom kiri: berat, kartu petunjuk untuk keadaan sekarang beserta kalimat yang sedang diucapkan, dan Data truk (plat terdaftar, UID kartu, supir, transporter, pemasok atau pembeli).
+- Kolom tengah: CCTV masuk dan CCTV keluar. Tanda LIVE hanya tampil selama gambar terus datang.
+- Kolom kanan: Selisih (angka surat dan angka timbang untuk bruto, tarra, netto, beserta selisih kg dan persen), Verifikasi plat, Pembacaan kamera (keempat kamera pembaca plat; kamera untuk tahap truk ini ditandai), dan Alur penimbangan.
+- Baris bawah: pesan Perhatian dari pengaturan. Teks hanya bergulir bila tidak muat, dan tidak bergulir bila Windows diatur untuk mengurangi animasi.
+
+Sakelar Exception meminta PIN stasiun; setelah itu plat boleh diketik (F3 atau tombol di panel Verifikasi plat). Tombol kembali ke awal membatalkan timbang yang sedang berjalan (permintaan keputusan yang menunggu dibatalkan dengan alasan `OPERATOR`) dan menunggu kartu lagi.
+
 ## Arti pengaturan
 
 | Isian | Arti |
 |---|---|
 | Alamat server | Alamat API, misalnya `https://api.contoh.test`. Program memanggil rute `/api/weighbridge/...` dengan kepala `X-Station-Key`. |
 | Kunci stasiun | Kunci mesin dari halaman Stasiun. Disimpan terenkripsi dengan `safeStorage` Electron (DPAPI di Windows). Bila sistem tidak menyediakan enkripsi, disimpan sebagai berkas biasa dan Pengaturan menyebutkannya. Kunci tidak pernah dikirim ke jendela dan tidak ditulis ke log. |
-| Alamat pembaca plat | Layanan pembaca plat. Program memanggil `GET {alamat}/plate/{kamera}` tiap detik selama ada truk; nomor kamera datang dari jawaban kartu (pengaturan stasiun di API). Kosong: plat dikirim kosong dan API memperlakukannya sebagai plat tidak terbaca. |
-| Gambar CCTV 1 dan 2 | Alamat gambar JPEG, diambil proses utama tiap detik. Boleh kosong. |
+| Alamat pembaca plat | Layanan pembaca plat. Program memanggil `GET {alamat}/plate/1` sampai `/plate/4` tiap detik. Plat yang dikirim bersama berat diambil dari kamera tahap truk ini; nomornya datang dari jawaban kartu (pengaturan stasiun di API). Kosong: plat dikirim kosong dan API memperlakukannya sebagai plat tidak terbaca. |
+| CCTV masuk, CCTV keluar | Alamat gambar JPEG, diambil proses utama tiap detik. Boleh kosong; layar lalu menulis bahwa alamat belum diatur. |
+| Nama stasiun | Tampil di samping judul. Boleh kosong. |
+| Pesan perhatian | Teks baris Perhatian di bawah layar. Kosong berarti kalimat bawaan. |
+| Tema | Diubah dengan tombol di bilah atas, tanpa PIN, dan diingat. |
 | Sambungan | Jaringan (TCP), Serial (RS-232), atau Simulator. |
 | Alamat indikator, Port | Untuk TCP. Program lama memakai port 3002. |
 | Port serial, Baud rate, Data bit, Parity, Stop bit | Untuk RS-232. Bawaan sama dengan program lama: 2400 baud, 7 data bit, tanpa parity, 1 stop bit. |

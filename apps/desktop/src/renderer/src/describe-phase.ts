@@ -21,7 +21,7 @@ export function describePhase(state: ScreenState): PhaseText {
   const text = (title: string, tone: Tone, detail: string | null = null): PhaseText => ({ title, detail, tone });
   switch (state.phase) {
     case "idle":
-      return text("Tempel kartu", "idle");
+      return text("Tempelkan kartu RFID", "idle", "Pastikan truk sudah naik penuh ke timbangan.");
     case "lookup":
       return text("Membaca kartu", "active");
     case "truck":

@@ -2,8 +2,8 @@
 // The window gets a narrow bridge (see preload) and loads nothing from the network.
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { app, BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, ipcMain, safeStorage, session } from "electron";
-import type { SaveResult, Settings, SettingsForm, SettingsInput, StationView, UnlockPurpose, UnlockResult } from "../shared/bridge";
+import { app, BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent, ipcMain, safeStorage, screen, session } from "electron";
+import type { DisplaySettings, SaveResult, ScreenView, Settings, SettingsForm, SettingsInput, StationView, UnlockPurpose, UnlockResult } from "../shared/bridge";
 import { type ApiClient, createApiClient } from "./api-client";
 import { createCctvPoller } from "./cctv";
 import { createDailyLog } from "./daily-log";
@@ -13,13 +13,15 @@ import type { ScaleReader } from "./scale/reader";
 import { createSerialScale, loadSerialPort } from "./scale/serial";
 import { createSimulatorScale, type SimulatorScale } from "./scale/simulator";
 import { createTcpScale } from "./scale/tcp";
-import { createSettingsStore, parseSettings, type SecretCodec } from "./settings";
+import { createSettingsStore, parseSettings, type SecretCodec, toggleTheme } from "./settings";
 import { createStation, type Station } from "./station";
 
 const DEMO = !app.isPackaged && process.argv.includes("--demo");
 /** The key of dev/fake-api-server.mts; used only by the demo run. */
 const DEMO_STATION_KEY = "st1.development-only-key-for-the-fake-api-000000000";
 const DEMO_API = `http://localhost:${process.env.FAKE_API_PORT ?? 4010}`;
+/** Demo only: "1366x768" sizes the page, and with a capture folder the window renders off screen at that size. */
+const DEMO_SIZE = /^(\d{3,4})x(\d{3,4})$/.exec(process.env.DESKTOP_WINDOW ?? "");
 const UNLOCK_MS = 5 * 60_000;
 const TICK_MS = 100;
 
@@ -39,7 +41,7 @@ let settings: Settings;
 let stationKey: string | null = null;
 let keyProtected = false;
 let typing = false;
-const unlockedUntil: Record<UnlockPurpose, number> = { settings: 0, manualPlate: 0 };
+let settingsUnlockedUntil = 0;
 
 const log = createDailyLog(join(app.getPath("userData"), "logs"), () => Date.now());
 const store = createSettingsStore(app.getPath("userData"), codec);
@@ -55,7 +57,20 @@ function send(channel: string, value: unknown): void {
   if (window && !window.isDestroyed()) window.webContents.send(channel, value);
 }
 
-let onViewExtra: ((view: StationView) => void) | null = null;
+const display = (): DisplaySettings => ({
+  stationName: settings.stationName,
+  notice: settings.notice,
+  theme: settings.theme,
+  cctvConfigured: [Boolean(settings.cctvUrls[0]), Boolean(settings.cctvUrls[1])],
+});
+const screenView = (view: StationView): ScreenView => ({ ...view, display: display() });
+
+let onViewExtra: ((view: ScreenView) => void) | null = null;
+const publish = (view: StationView) => {
+  const full = screenView(view);
+  send("station:view", full);
+  onViewExtra?.(full);
+};
 
 async function startStation(): Promise<void> {
   if (ticker) clearInterval(ticker);
@@ -75,10 +90,7 @@ async function startStation(): Promise<void> {
     now: () => Date.now(),
     newRequestId: () => randomUUID(),
     log,
-    onView: (view) => {
-      send("station:view", view);
-      onViewExtra?.(view);
-    },
+    onView: publish,
     onSpeak: (segments) => send("station:speak", segments),
   });
   station.start();
@@ -88,14 +100,26 @@ async function startStation(): Promise<void> {
   log.write("start", { apiBaseUrl: settings.apiBaseUrl, plateReaderUrl: settings.plateReaderUrl, scale: settings.scale, keyProtected, hasKey: stationKey !== null, version: app.getVersion() });
 }
 
+/** Saves settings that need no restart of the station (theme), or everything, and tells the window. */
+async function saveSettings(next: Settings, key: string | null | undefined): Promise<void> {
+  if (!DEMO) {
+    await store.save(next, key);
+    const loaded = await store.load();
+    settings = loaded.settings;
+    stationKey = loaded.stationKey;
+    keyProtected = loaded.keyProtected;
+  } else {
+    settings = next;
+  }
+}
+
 /** Only the program's own window may call the bridge. */
 const fromWindow = (event: IpcMainInvokeEvent | IpcMainEvent) => window !== null && event.sender === window.webContents;
-const unlocked = (purpose: UnlockPurpose) => Date.now() < unlockedUntil[purpose];
 /** First setup: without a station key the API cannot check a PIN, so settings open without one. */
-const settingsOpen = () => stationKey === null || unlocked("settings");
+const settingsOpen = () => stationKey === null || Date.now() < settingsUnlockedUntil;
 
 function registerIpc(): void {
-  ipcMain.handle("station:ready", (event) => (fromWindow(event) && station ? station.view() : null));
+  ipcMain.handle("station:ready", (event) => (fromWindow(event) && station ? screenView(station.view()) : null));
 
   ipcMain.handle("speech:audio", async (event, text: unknown) => {
     if (!fromWindow(event) || typeof text !== "string" || !text.trim() || text.length > 300 || !api) return null;
@@ -108,10 +132,11 @@ function registerIpc(): void {
     if (!fromWindow(event) || (purpose !== "settings" && purpose !== "manualPlate")) return { ok: false, message: "Permintaan tidak dikenal." };
     if (typeof pin !== "string" || !/^[0-9]{4,8}$/.test(pin)) return { ok: false, message: "PIN harus 4 sampai 8 angka." };
     // the API's manual-plate route is the PIN check it offers; it also opens settings
-    if (!api) return { ok: false, message: "Program belum siap." };
+    if (!api || !station) return { ok: false, message: "Program belum siap." };
     const result = await api.checkPin(pin);
     if (result.ok) {
-      unlockedUntil[purpose] = Date.now() + UNLOCK_MS;
+      if (purpose === "settings") settingsUnlockedUntil = Date.now() + UNLOCK_MS;
+      else station.setExceptionMode(true);
       log.write("unlock", { purpose });
       return { ok: true };
     }
@@ -128,27 +153,39 @@ function registerIpc(): void {
     if (!fromWindow(event) || !settingsOpen()) return { ok: false, message: "Buka pengaturan dengan PIN dulu.", errors: [] };
     const phase = station?.view().screen.phase;
     if (phase === "sending" || phase === "waiting") return { ok: false, message: "Tunggu sampai timbang selesai.", errors: [] };
-    const parsed = parseSettings(input);
+    const parsed = parseSettings({ ...input, theme: settings.theme });
     const newKey = typeof input?.stationKey === "string" && input.stationKey.trim() ? input.stationKey.trim() : undefined;
     if (newKey !== undefined && !/^st[1-9][0-9]{0,8}\.[A-Za-z0-9_-]{43}$/.test(newKey)) parsed.errors.push({ field: "stationKey", message: "Kunci stasiun tidak sesuai bentuknya." });
     if (parsed.errors.length) return { ok: false, message: "Periksa isian yang ditandai.", errors: parsed.errors };
     if (DEMO) return { ok: false, message: "Mode demo tidak menyimpan pengaturan.", errors: [] };
-    await store.save(parsed.settings, newKey);
-    const loaded = await store.load();
-    settings = loaded.settings;
-    stationKey = loaded.stationKey;
-    keyProtected = loaded.keyProtected;
-    unlockedUntil.settings = 0;
+    await saveSettings(parsed.settings, newKey);
+    settingsUnlockedUntil = 0;
     log.write("settingsSaved", { apiBaseUrl: settings.apiBaseUrl, plateReaderUrl: settings.plateReaderUrl, scale: settings.scale, keyChanged: newKey !== undefined, keyProtected });
     await startStation();
     return { ok: true };
   });
 
+  // the theme is a matter of daylight, not of security: no PIN
+  ipcMain.handle("theme:toggle", async (event) => {
+    if (!fromWindow(event) || !station) return;
+    await saveSettings({ ...settings, theme: toggleTheme(settings.theme) }, undefined);
+    log.write("theme", { theme: settings.theme });
+    publish(station.view());
+  });
+
   ipcMain.handle("plate:manual", (event, plate: unknown) => {
-    if (!fromWindow(event) || !unlocked("manualPlate") || !station) return false;
+    if (!fromWindow(event) || !station?.view().exceptionMode) return false;
     const text = typeof plate === "string" ? plate.trim().slice(0, 20) : null;
     station.manualPlate(text || null);
     return true;
+  });
+
+  ipcMain.handle("exception:end", (event) => {
+    if (fromWindow(event)) station?.setExceptionMode(false);
+  });
+
+  ipcMain.handle("station:reset", (event) => {
+    if (fromWindow(event)) station?.reset();
   });
 
   ipcMain.on("input:typing", (event, active: unknown) => {
@@ -157,12 +194,20 @@ function registerIpc(): void {
 }
 
 function createWindow(): BrowserWindow {
+  const offscreen = DEMO && Boolean(DEMO_SIZE) && Boolean(process.env.DESKTOP_CAPTURE_DIR);
+  const pageWidth = DEMO_SIZE ? Number(DEMO_SIZE[1]) : 1600;
+  const pageHeight = DEMO_SIZE ? Number(DEMO_SIZE[2]) : 900;
+  // Windows keeps a window inside the display; a page larger than this display is shown zoomed out, so the page
+  // still lays out at exactly the asked size
+  const area = screen.getPrimaryDisplay().workAreaSize;
+  const zoom = DEMO_SIZE ? Math.min(1, (area.width - 16) / pageWidth, (area.height - 16) / pageHeight) : 1;
   const win = new BrowserWindow({
-    width: 1600,
-    height: 900,
+    width: Math.floor(pageWidth * zoom),
+    height: Math.floor(pageHeight * zoom),
+    useContentSize: true,
     fullscreen: app.isPackaged,
     autoHideMenuBar: true,
-    backgroundColor: "#0b0f14",
+    backgroundColor: settings.theme === "light" ? "#f4f7f6" : "#0b100f",
     show: false,
     title: "Timbangan",
     webPreferences: {
@@ -174,10 +219,13 @@ function createWindow(): BrowserWindow {
       spellcheck: false,
       devTools: !app.isPackaged,
       autoplayPolicy: "no-user-gesture-required",
+      // demo screenshots at an exact page size, whatever the size of this computer's display
+      offscreen,
+      zoomFactor: zoom,
     },
   });
   win.removeMenu();
-  win.once("ready-to-show", () => win.show());
+  if (!offscreen) win.once("ready-to-show", () => win.show());
 
   // stay on the program's own page; open nothing else
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -209,13 +257,23 @@ app.whenReady().then(async () => {
   stationKey = loaded.stationKey;
   keyProtected = loaded.keyProtected;
   if (DEMO) {
-    settings = { ...settings, apiBaseUrl: DEMO_API, plateReaderUrl: DEMO_API, cctvUrls: [], scale: { ...settings.scale, driver: "simulator" } };
+    const theme = process.env.DESKTOP_THEME === "light" ? "light" : process.env.DESKTOP_THEME === "dark" ? "dark" : settings.theme;
+    const exitCamera = process.env.DESKTOP_DEMO_CCTV_OUT ?? "2";
+    settings = {
+      ...settings,
+      apiBaseUrl: DEMO_API,
+      plateReaderUrl: DEMO_API,
+      cctvUrls: [`${DEMO_API}/__dev/cctv/1.jpg`, `${DEMO_API}/__dev/cctv/${exitCamera}.jpg`],
+      stationName: "Jalur 1",
+      theme,
+      scale: { ...settings.scale, driver: "simulator" },
+    };
     stationKey = DEMO_STATION_KEY;
   }
 
   // say in the log whether the native serial module loads in this Electron, whatever driver is set
-  void loadSerialPort().then((loaded) => {
-    const entry = "error" in loaded ? { available: false, error: loaded.error } : { available: true };
+  void loadSerialPort().then((serial) => {
+    const entry = "error" in serial ? { available: false, error: serial.error } : { available: true };
     log.write("serialModule", entry);
     if (!app.isPackaged) console.log("serial module:", JSON.stringify(entry));
   });
@@ -227,11 +285,12 @@ app.whenReady().then(async () => {
   if (DEMO) {
     const captureDir = process.env.DESKTOP_CAPTURE_DIR;
     if (captureDir) {
-      const capture = createCapture(window, captureDir);
+      const capture = createCapture(window, captureDir, { prefix: DEMO_SIZE ? `${DEMO_SIZE[1]}x${DEMO_SIZE[2]}-` : "", suffix: `-${settings.theme}` });
       onViewExtra = (view) => capture.onView(view);
     }
-    const current = window;
-    current.webContents.once("did-finish-load", () => {
+    window.webContents.once("did-finish-load", () => {
+      const contents = window?.webContents;
+      setTimeout(() => void contents?.executeJavaScript("[innerWidth, innerHeight]").then((size) => console.log("page size:", JSON.stringify(size))), 1_000);
       void runDemo({
         station: () => station as Station,
         scale: scale as SimulatorScale,

@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSettingsStore, DEFAULT_SETTINGS, parseSettings, type SecretCodec } from "../src/main/settings";
+import { createSettingsStore, DEFAULT_NOTICE, DEFAULT_SETTINGS, parseSettings, type SecretCodec, toggleTheme } from "../src/main/settings";
 
 /** A reversible stand-in for safeStorage: the bytes on disk are not the key. */
 const codec = (available = true): SecretCodec => ({
@@ -31,7 +31,7 @@ describe("parseSettings", () => {
       scale: { driver: "tcp", host: "scale.example.test", port: 3002 },
     });
     expect(errors).toEqual([]);
-    expect(settings).toMatchObject({ apiBaseUrl: "https://api.example.test", plateReaderUrl: "http://plates.example.test:5000", cctvUrls: ["http://cams.example.test/1.jpg"], scale: { driver: "tcp", host: "scale.example.test", port: 3002 } });
+    expect(settings).toMatchObject({ apiBaseUrl: "https://api.example.test", plateReaderUrl: "http://plates.example.test:5000", cctvUrls: ["http://cams.example.test/1.jpg", ""], scale: { driver: "tcp", host: "scale.example.test", port: 3002 } });
   });
 
   it("names each wrong field in plain Indonesian", () => {
@@ -42,6 +42,33 @@ describe("parseSettings", () => {
       { field: "scale.host", message: "Alamat timbangan wajib diisi." },
       { field: "scale.port", message: "Port 1 sampai 65535." },
     ]);
+  });
+});
+
+describe("display settings", () => {
+  it("defaults to the dark theme, no station name, and a neutral notice for the driver", () => {
+    expect(DEFAULT_SETTINGS).toMatchObject({ theme: "dark", stationName: "", notice: DEFAULT_NOTICE, cctvUrls: ["", ""] });
+    expect(DEFAULT_NOTICE).toMatch(/kendaraan/);
+  });
+
+  it("keeps the two CCTV addresses in their places: the first is the entry camera, the second the exit camera", () => {
+    expect(parseSettings({ cctvUrls: ["", "http://cams.example.test/out.jpg"] }).settings.cctvUrls).toEqual(["", "http://cams.example.test/out.jpg"]);
+  });
+
+  it("accepts light and dark, falls back to dark, and trims the name and the notice", () => {
+    expect(parseSettings({ theme: "light", stationName: "  Timbangan 2 ", notice: " Matikan mesin. " }).settings).toMatchObject({ theme: "light", stationName: "Timbangan 2", notice: "Matikan mesin." });
+    expect(parseSettings({ theme: "blue" }).settings.theme).toBe("dark");
+    expect(parseSettings({ notice: "   " }).settings.notice).toBe(DEFAULT_NOTICE);
+  });
+
+  it("limits the name and the notice", () => {
+    expect(parseSettings({ stationName: "x".repeat(61) }).errors).toEqual([{ field: "stationName", message: "Nama stasiun paling banyak 60 huruf." }]);
+    expect(parseSettings({ notice: "x".repeat(301) }).errors).toEqual([{ field: "notice", message: "Pesan perhatian paling banyak 300 huruf." }]);
+  });
+
+  it("toggles the theme", () => {
+    expect(toggleTheme("dark")).toBe("light");
+    expect(toggleTheme("light")).toBe("dark");
   });
 });
 

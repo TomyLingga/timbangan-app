@@ -248,6 +248,46 @@ describe("answers to a weighing", () => {
   });
 });
 
+describe("reset", () => {
+  it("drops a truck on screen and goes back to waiting for a card, stopping the plate reader", () => {
+    const m = truckOn();
+    const effects = m.send({ type: "reset", now: 500 });
+    expect(m.state.phase).toBe("idle");
+    expect(m.state.card).toBeNull();
+    expect(effects).toEqual([{ type: "log", event: "reset", data: { phase: "truck", cardUid: "04A1B2C3D4" } }, { type: "watchPlate", camera: null }]);
+  });
+
+  it("cancels a waiting request by the operator before going back to waiting", () => {
+    const m = waiting();
+    const effects = m.send({ type: "reset", now: 6_000 });
+    expect(m.state.phase).toBe("idle");
+    expect(effects).toContainEqual({ type: "cancel", exceptionId: 5, reason: "OPERATOR" });
+    // the late answer of the cancel changes nothing
+    m.send({ type: "cancelAnswer", exceptionId: 5, answer: { status: "CANCELLED", message: "Permintaan dibatalkan.", speech: [] }, now: 6_100 });
+    expect(m.state.phase).toBe("idle");
+  });
+
+  it("ignores the answer of a weighing that was on its way", () => {
+    const m = sent();
+    m.send({ type: "reset", now: 4_300 });
+    m.send({ type: "weighAnswer", requestId: "req-0001", answer: savedAnswer(41_500), now: 4_400 });
+    expect(m.state.phase).toBe("idle");
+  });
+});
+
+describe("plate attempts", () => {
+  it("counts each attempt sent for the card, and starts again for the next card", () => {
+    const m = sent();
+    expect(m.state.plateTry).toBe(1);
+    m.send({ type: "weighAnswer", requestId: "req-0001", answer: plateRetryAnswer(2), now: 5_000 });
+    m.ticks(5_000 + SCREEN.plateRetryPauseMs, 5_000 + SCREEN.plateRetryPauseMs + 4_500);
+    expect(m.state.plateTry).toBe(2);
+    m.send({ type: "weighAnswer", requestId: "req-0002", answer: savedAnswer(41_500), now: 19_000 });
+    m.send({ type: "card", uid: "1111111111", now: 20_000 });
+    expect(m.state.plateTry).toBe(0);
+  });
+});
+
 describe("waiting for a decision", () => {
   it("speaks why, then sends the current weight every 2 seconds, one call at a time", () => {
     const m = sent();

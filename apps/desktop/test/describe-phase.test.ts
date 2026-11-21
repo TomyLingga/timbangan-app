@@ -7,7 +7,7 @@ const at = (patch: Partial<ScreenState>): ScreenState => ({ ...initialScreen(0),
 
 describe("describePhase", () => {
   it.each([
-    [at({ phase: "idle" }), { title: "Tempel kartu", tone: "idle" }],
+    [at({ phase: "idle" }), { title: "Tempelkan kartu RFID", detail: "Pastikan truk sudah naik penuh ke timbangan.", tone: "idle" }],
     [at({ phase: "truck" }), { title: "Naikkan truk ke timbangan", tone: "active" }],
     [at({ phase: "settling" }), { title: "Menunggu berat stabil", tone: "active" }],
     [at({ phase: "countdown", countdownLeft: 2 }), { title: "Berat stabil", tone: "active" }],

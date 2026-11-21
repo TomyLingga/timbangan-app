@@ -8,7 +8,8 @@ export function createCctvPoller(options: { urls: string[]; everyMs?: number; on
 
   const poll = () => {
     options.urls.forEach((url, index) => {
-      if (busy.has(index)) return;
+      // an empty address keeps its place: index 0 is the entry camera, 1 the exit camera
+      if (!url || busy.has(index)) return;
       busy.add(index);
       fetcher(url, { signal: AbortSignal.timeout(2_000) })
         .then(async (response) => {
@@ -22,7 +23,7 @@ export function createCctvPoller(options: { urls: string[]; everyMs?: number; on
 
   return {
     start() {
-      if (options.urls.length === 0) return;
+      if (!options.urls.some(Boolean)) return;
       poll();
       timer = setInterval(poll, options.everyMs ?? 1_000);
     },

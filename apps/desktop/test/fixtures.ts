@@ -23,7 +23,7 @@ export const cardAnswer = (patch: Partial<CardAnswer> = {}): CardAnswer => ({
   stage: 1,
   kind: "GROSS",
   camera: 3,
-  expected: { plateNo: "XX1234AB", plateDisplay: "XX 1234 AB", docGrossKg: 41_000, docNetKg: 31_000, vehicleTareKg: null },
+  expected: { plateNo: "XX1234AB", plateDisplay: "XX 1234 AB", docGrossKg: 41_000, docTareKg: 10_000, docNetKg: 31_000, vehicleTareKg: null },
   message: "Plat XX 1234 AB. Timbang pertama, bruto. Tunggu berat stabil.",
   speech: ["Plat X X satu dua tiga empat A B.", "Timbang pertama, bruto.", "Tunggu berat stabil."],
   ...patch,

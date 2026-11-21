@@ -1,5 +1,6 @@
 // Runs the fake weighbridge API and plate reader on this computer, for developing the program without the real
 // API: `npm run fake-api`. The key and PIN below exist only for this fake.
+import { readFileSync } from "node:fs";
 import { startFakeApi } from "./fake-api.ts";
 
 export const DEV_STATION_KEY = "st1.development-only-key-for-the-fake-api-000000000";
@@ -16,6 +17,8 @@ const api = await startFakeApi({
   // the supervisor "decides" after three heartbeats, so the waiting screen can be seen without the approvals app
   autoDecide: { afterHeartbeats: Number(process.env.FAKE_DECIDE_AFTER ?? 3), decision: "APPROVE" },
   devControl: true,
+  // drawn test pictures standing in for the two CCTV snapshots
+  cctvImages: { 1: readFileSync(new URL("./cctv-sample-1.jpg", import.meta.url)), 2: readFileSync(new URL("./cctv-sample-2.jpg", import.meta.url)) },
   plates: { 3: "XX1234AB", 4: "XX1234AB" },
   trucks: [
     { cardUid: "0A1B2C3D4E", tripId: 1, tripNo: "IN-0001", direction: "IN", plateNo: "XX1234AB", plateDisplay: "XX 1234 AB", driverName: "Supir Satu", partnerName: "Pemasok Contoh", stage: 1 },

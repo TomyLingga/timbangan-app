@@ -4,9 +4,14 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ScaleSettings, Settings, SettingsError } from "../shared/bridge";
+import type { ScaleSettings, Settings, SettingsError, Theme } from "../shared/bridge";
 
-export type { ScaleSettings, Settings, SettingsError };
+export type { ScaleSettings, Settings, SettingsError, Theme };
+
+/** The "Perhatian" line until someone writes another. */
+export const DEFAULT_NOTICE = "Supir tetap di dalam kendaraan dan mesin dimatikan sampai data timbang tersimpan.";
+
+export const toggleTheme = (theme: Theme): Theme => (theme === "dark" ? "light" : "dark");
 
 /** Encryption of the station key; Electron's safeStorage in the program, a stand-in in tests. */
 export interface SecretCodec {
@@ -18,7 +23,10 @@ export interface SecretCodec {
 export const DEFAULT_SETTINGS: Settings = {
   apiBaseUrl: "",
   plateReaderUrl: "",
-  cctvUrls: [],
+  cctvUrls: ["", ""],
+  stationName: "",
+  notice: DEFAULT_NOTICE,
+  theme: "dark",
   // the old program: TCP port 3002, or RS-232 at 2400 baud with 7 data bits
   scale: { driver: "simulator", host: "", port: 3002, serialPath: "COM1", baudRate: 2400, dataBits: 7, parity: "none", stopBits: 1 },
 };
@@ -43,9 +51,14 @@ export function parseSettings(raw: unknown): { settings: Settings; errors: Setti
 
   const apiBaseUrl = address("apiBaseUrl", input.apiBaseUrl);
   const plateReaderUrl = address("plateReaderUrl", input.plateReaderUrl);
-  const cctvList = Array.isArray(input.cctvUrls) ? input.cctvUrls.map(text).filter(Boolean) : [];
-  if (cctvList.length > 2) errors.push({ field: "cctvUrls", message: "Paling banyak dua alamat gambar CCTV." });
-  else if (cctvList.some((url) => !isHttp(url))) errors.push({ field: "cctvUrls", message: URL_ERROR });
+  const cctvList = Array.isArray(input.cctvUrls) ? input.cctvUrls.map(text) : [];
+  if (cctvList.filter(Boolean).length > 2 || cctvList.length > 2) errors.push({ field: "cctvUrls", message: "Paling banyak dua alamat gambar CCTV." });
+  else if (cctvList.some((url) => url && !isHttp(url))) errors.push({ field: "cctvUrls", message: URL_ERROR });
+  const stationName = text(input.stationName);
+  if (stationName.length > 60) errors.push({ field: "stationName", message: "Nama stasiun paling banyak 60 huruf." });
+  const notice = text(input.notice) || DEFAULT_NOTICE;
+  if (notice.length > 300) errors.push({ field: "notice", message: "Pesan perhatian paling banyak 300 huruf." });
+  const theme: Theme = input.theme === "light" ? "light" : "dark";
 
   const driver = scaleIn.driver === "tcp" || scaleIn.driver === "serial" || scaleIn.driver === "simulator" ? scaleIn.driver : scaleIn.driver === undefined ? base.driver : null;
   if (driver === null) errors.push({ field: "scale.driver", message: "Jenis sambungan harus tcp, serial, atau simulator." });
@@ -63,7 +76,8 @@ export function parseSettings(raw: unknown): { settings: Settings; errors: Setti
   if (scale.port < 1 || scale.port > 65_535) errors.push({ field: "scale.port", message: "Port 1 sampai 65535." });
   if (scale.baudRate < 300 || scale.baudRate > 115_200) errors.push({ field: "scale.baudRate", message: "Baud rate 300 sampai 115200." });
 
-  return { settings: { apiBaseUrl, plateReaderUrl, cctvUrls: cctvList.slice(0, 2), scale }, errors };
+  const cctvUrls = [cctvList[0] ?? "", cctvList[1] ?? ""];
+  return { settings: { apiBaseUrl, plateReaderUrl, cctvUrls, scale, stationName: stationName.slice(0, 60), notice: notice.slice(0, 300), theme }, errors };
 }
 
 export interface LoadedSettings {

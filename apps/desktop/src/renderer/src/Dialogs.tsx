@@ -3,7 +3,7 @@
 import { type FormEvent, type InputHTMLAttributes, type ReactNode, useEffect, useState } from "react";
 import type { SettingsError, SettingsForm, SettingsInput, UnlockPurpose } from "../../shared/bridge";
 
-export type Dialog = null | { kind: "pin"; purpose: UnlockPurpose } | { kind: "settings" } | { kind: "manualPlate" };
+export type Dialog = null | { kind: "pin"; purpose: UnlockPurpose } | { kind: "settings" } | { kind: "manualPlate" } | { kind: "reset" };
 
 interface Props {
   dialog: Dialog;
@@ -51,7 +51,7 @@ function PinDialog({ purpose, setDialog }: { purpose: UnlockPurpose; setDialog(d
   };
 
   return (
-    <Frame title={purpose === "settings" ? "Pengaturan" : "Ketik plat"} onClose={() => setDialog(null)}>
+    <Frame title={purpose === "settings" ? "Pengaturan" : "Exception: ketik plat"} onClose={() => setDialog(null)}>
       <form onSubmit={submit}>
         <label className="form-field">
           <span>PIN stasiun</span>
@@ -123,7 +123,7 @@ function SettingsDialog({ setDialog }: { setDialog(dialog: Dialog): void }) {
 
   const save = async (event: FormEvent) => {
     event.preventDefault();
-    const input: SettingsInput = { apiBaseUrl: form.apiBaseUrl, plateReaderUrl: form.plateReaderUrl, cctvUrls: form.cctvUrls, scale: form.scale, stationKey };
+    const input: SettingsInput = { apiBaseUrl: form.apiBaseUrl, plateReaderUrl: form.plateReaderUrl, cctvUrls: form.cctvUrls, scale: form.scale, stationName: form.stationName, notice: form.notice, theme: form.theme, stationKey };
     const result = await window.desktop.saveSettings(input);
     if (result.ok) setDialog(null);
     else {
@@ -144,6 +144,11 @@ function SettingsDialog({ setDialog }: { setDialog(dialog: Dialog): void }) {
     <Frame title="Pengaturan" onClose={() => setDialog(null)}>
       <form onSubmit={save} className="settings">
         <fieldset>
+          <legend>Layar</legend>
+          {field("Nama stasiun", "stationName", form.stationName, (value) => set({ stationName: value }), { placeholder: "Tampil di samping judul, boleh kosong", maxLength: 60 })}
+          {field("Pesan perhatian", "notice", form.notice, (value) => set({ notice: value }), { maxLength: 300 })}
+        </fieldset>
+        <fieldset>
           <legend>Server</legend>
           {field("Alamat server", "apiBaseUrl", form.apiBaseUrl, (value) => set({ apiBaseUrl: value }), { placeholder: "https://…" })}
           {field("Kunci stasiun", "stationKey", stationKey, setStationKey, {
@@ -156,8 +161,8 @@ function SettingsDialog({ setDialog }: { setDialog(dialog: Dialog): void }) {
         <fieldset>
           <legend>Kamera</legend>
           {field("Alamat pembaca plat", "plateReaderUrl", form.plateReaderUrl, (value) => set({ plateReaderUrl: value }), { placeholder: "http://…" })}
-          {field("Gambar CCTV 1", "cctvUrls", form.cctvUrls[0] ?? "", (value) => set({ cctvUrls: [value, form.cctvUrls[1] ?? ""] }), { placeholder: "Alamat gambar JPEG, boleh kosong" })}
-          {field("Gambar CCTV 2", "cctvUrls.2", form.cctvUrls[1] ?? "", (value) => set({ cctvUrls: [form.cctvUrls[0] ?? "", value] }), { placeholder: "Boleh kosong" })}
+          {field("CCTV masuk", "cctvUrls", form.cctvUrls[0] ?? "", (value) => set({ cctvUrls: [value, form.cctvUrls[1] ?? ""] }), { placeholder: "Alamat gambar JPEG, boleh kosong" })}
+          {field("CCTV keluar", "cctvUrls.2", form.cctvUrls[1] ?? "", (value) => set({ cctvUrls: [form.cctvUrls[0] ?? "", value] }), { placeholder: "Alamat gambar JPEG, boleh kosong" })}
         </fieldset>
         <fieldset>
           <legend>Timbangan</legend>
@@ -218,8 +223,32 @@ function SettingsDialog({ setDialog }: { setDialog(dialog: Dialog): void }) {
   );
 }
 
+function ResetDialog({ setDialog }: { setDialog(dialog: Dialog): void }) {
+  return (
+    <Frame title="Kembali ke awal" onClose={() => setDialog(null)}>
+      <p className="form-text">Timbang yang sedang berjalan dibatalkan dan tidak disimpan. Permintaan keputusan yang menunggu ikut dibatalkan. Layar kembali menunggu kartu.</p>
+      <div className="form-actions">
+        <button type="button" autoFocus onClick={() => setDialog(null)}>
+          Batal
+        </button>
+        <button
+          type="button"
+          className="primary"
+          onClick={() => {
+            void window.desktop.reset();
+            setDialog(null);
+          }}
+        >
+          Kembali ke awal
+        </button>
+      </div>
+    </Frame>
+  );
+}
+
 export function Dialogs({ dialog, setDialog, manualPlate }: Props) {
   if (!dialog) return null;
+  if (dialog.kind === "reset") return <ResetDialog setDialog={setDialog} />;
   if (dialog.kind === "pin") return <PinDialog key={dialog.purpose} purpose={dialog.purpose} setDialog={setDialog} />;
   if (dialog.kind === "settings") return <SettingsDialog setDialog={setDialog} />;
   return <ManualPlateDialog setDialog={setDialog} current={manualPlate} />;

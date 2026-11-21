@@ -51,6 +51,8 @@ export interface ScreenState {
   stability: StabilityState;
   countdownLeft: number | null;
   attempt: Attempt | null;
+  /** Weighing attempts sent for the current card (a plate retry is a new attempt). */
+  plateTry: number;
   plateAttemptsLeft: number | null;
   plateRetryUntil: number | null;
   exception: { id: number; type: ExceptionType } | null;
@@ -78,13 +80,15 @@ export type ScreenEvent =
   | { type: "heartbeatAnswer"; exceptionId: number; answer: HeartbeatAnswer; now: number }
   | { type: "heartbeatFailed"; exceptionId: number; failure: ApiFailure; now: number }
   | { type: "cancelAnswer"; exceptionId: number; answer: CancelAnswer; now: number }
-  | { type: "cancelFailed"; exceptionId: number; failure: ApiFailure; now: number };
+  | { type: "cancelFailed"; exceptionId: number; failure: ApiFailure; now: number }
+  /** The operator's reset: cancel the current weighing and wait for a card again. */
+  | { type: "reset"; now: number };
 
 export type Effect =
   | { type: "lookupCard"; uid: string }
   | { type: "weigh"; cardUid: string; weightKg: number; plateRead: string | null; requestId: string }
   | { type: "heartbeat"; exceptionId: number; weightKg: number }
-  | { type: "cancel"; exceptionId: number; reason: "TRUCK_LEFT" }
+  | { type: "cancel"; exceptionId: number; reason: "TRUCK_LEFT" | "OPERATOR" }
   | { type: "speak"; segments: string[] }
   | { type: "watchPlate"; camera: number | null }
   | { type: "log"; event: string; data: Record<string, unknown> };
@@ -119,6 +123,7 @@ export function initialScreen(now: number): ScreenState {
     stability: initialStability(),
     countdownLeft: null,
     attempt: null,
+    plateTry: 0,
     plateAttemptsLeft: null,
     plateRetryUntil: null,
     exception: null,
@@ -180,7 +185,7 @@ function startAttempt(state: ScreenState, weightKg: number, now: number, env: Sc
   const cardUid = state.cardUid ?? "";
   const plateRead = state.manualPlate ?? state.cameraPlate;
   const attempt: Attempt = { requestId: env.newRequestId(), weightKg, plateRead, sends: 1, retryAt: null };
-  const next = enter(state, "sending", now, { attempt, countdownLeft: null, message: TEXT.sending, notice: null });
+  const next = enter(state, "sending", now, { attempt, plateTry: state.plateTry + 1, countdownLeft: null, message: TEXT.sending, notice: null });
   return {
     state: next,
     effects: [
@@ -356,8 +361,19 @@ function onTick(state: ScreenState, now: number, env: ScreenEnv): Step {
   }
 }
 
+function onReset(state: ScreenState, now: number): Step {
+  if (state.phase === "idle") return { state, effects: [] };
+  const effects: Effect[] = [{ type: "log", event: "reset", data: { phase: state.phase, cardUid: state.cardUid } }];
+  // a waiting request is cancelled by the operator; its answer arrives after the screen moved on and is ignored
+  if (state.phase === "waiting" && state.exception && !state.cancelling) effects.push({ type: "cancel", exceptionId: state.exception.id, reason: "OPERATOR" });
+  effects.push({ type: "watchPlate", camera: null });
+  return { state: toIdle(state, now), effects };
+}
+
 export function reduceScreen(state: ScreenState, event: ScreenEvent, env: ScreenEnv): Step {
   switch (event.type) {
+    case "reset":
+      return onReset(state, event.now);
     case "card":
       return onCard(state, event.uid, event.now);
     case "cardAnswer":

@@ -90,7 +90,10 @@ describe("station, end to end without a window", () => {
     expect(fake.calls.filter((call) => call.path === "/api/weighbridge/weigh")).toHaveLength(1);
     expect(spoken.at(-1)).toEqual(["Timbang pertama berhasil.", "Bruto 41.500 kilogram.", "Berikutnya: kiu si."]);
     expect(logged.some((entry) => entry.event === "stable" && entry.data.weightKg === 41_500)).toBe(true);
-    expect(view.links).toMatchObject({ scale: "connected", api: "ok", plate: "online" });
+    expect(view.links).toMatchObject({ scale: "connected", api: "ok", platesOnline: 1 });
+    // all four cameras are polled; the fake reader knows only camera 3
+    expect([1, 2, 3, 4].every((camera) => fake.calls.some((call) => call.path === `/plate/${camera}`))).toBe(true);
+    expect(view.cameras.map((reading) => reading.status)).toEqual(["unreachable", "unreachable", "online", "unreachable"]);
     await advance(10_000);
     expect(station.view().screen.phase).toBe("idle");
   });

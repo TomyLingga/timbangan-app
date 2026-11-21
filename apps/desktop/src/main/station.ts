@@ -1,6 +1,7 @@
 // The weighbridge station in the main process: runs the screen state machine and carries out its effects with the
 // scale reader, the API client and the plate reader. Has no Electron dependency, so it runs in tests with a
 // simulated scale, a fake API and a clock the test moves. The caller drives `tick` (every 100 ms in the program).
+import { CAMERA_COUNT, initialCameras, onlineCount, recordCamera } from "../shared/cameras";
 import { feedCardKey, initialCardInput, normaliseCardUid } from "../shared/card-input";
 import { type Effect, initialScreen, reduceScreen, type ScreenEvent } from "../shared/screen";
 import type { ApiClient, ApiResult } from "./api-client";
@@ -33,6 +34,9 @@ export interface Station {
   /** A card read some other way (development keys). */
   card(uid: string): void;
   manualPlate(text: string | null): void;
+  /** The operator's reset: cancel the current weighing, wait for a card. */
+  reset(): void;
+  setExceptionMode(on: boolean): void;
   view(): StationView;
   /** Resolves when no API or plate call is in flight (for tests). */
   settle(): Promise<void>;
@@ -43,15 +47,18 @@ export function createStation(deps: StationDeps): Station {
   const healthEveryMs = deps.healthEveryMs ?? 30_000;
   let screen = initialScreen(deps.now());
   let cardInput = initialCardInput();
-  const links: StationLinks = { scale: "connecting", scaleDetail: null, api: "unknown", plate: deps.plateReader ? "unknown" : "off" };
+  const links: StationLinks = { scale: "connecting", scaleDetail: null, api: "unknown", platesOnline: deps.plateReader ? 0 : null };
   const inFlight = new Set<Promise<unknown>>();
+  let cameras = initialCameras();
+  let exceptionMode = false;
+  /** The camera of the truck's stage, whose text is sent with the weighing. */
   let plateCamera: number | null = null;
-  let plateBusy = false;
+  const cameraBusy = new Set<number>();
   let nextPlateAt = 0;
   let nextHealthAt = 0;
   let stopped = false;
 
-  const view = (): StationView => ({ screen, links: { ...links } });
+  const view = (): StationView => ({ screen, links: { ...links }, cameras, exceptionMode });
   const publish = () => deps.onView(view());
 
   const track = <T>(promise: Promise<T>) => {
@@ -113,31 +120,38 @@ export function createStation(deps: StationDeps): Station {
         deps.log.write("speak", { text: effect.segments.join(" ") });
         deps.onSpeak(effect.segments);
         return;
-      case "watchPlate":
+      case "watchPlate": {
         plateCamera = effect.camera;
-        nextPlateAt = 0;
+        // the newest reading of that camera counts at once
+        const current = cameras.find((reading) => reading.camera === effect.camera);
+        if (current?.plate) queueMicrotask(() => plateCamera === effect.camera && dispatch({ type: "plate", text: current.plate }));
         return;
+      }
       case "log":
         deps.log.write(effect.event, effect.data);
         return;
     }
   }
 
-  function pollPlate(now: number): void {
+  /** All four cameras once a second, each with at most one call out. */
+  function pollPlates(now: number): void {
     const reader = deps.plateReader;
-    if (!reader || plateCamera === null || plateBusy || now < nextPlateAt) return;
-    const camera = plateCamera;
-    plateBusy = true;
+    if (!reader || now < nextPlateAt) return;
     nextPlateAt = now + plateEveryMs;
-    track(
-      reader.read(camera).then((read) => {
-        plateBusy = false;
-        links.plate = read ? read.status : "down";
-        // the camera may have changed or stopped while the call was out
-        if (plateCamera === camera) dispatch({ type: "plate", text: read && read.plate ? read.plate : null });
-        else publish();
-      }),
-    );
+    for (let camera = 1; camera <= CAMERA_COUNT; camera++) {
+      if (cameraBusy.has(camera)) continue;
+      cameraBusy.add(camera);
+      track(
+        reader.read(camera).then((read) => {
+          cameraBusy.delete(camera);
+          cameras = recordCamera(cameras, camera, read, deps.now());
+          links.platesOnline = onlineCount(cameras);
+          // the stage camera may have changed or stopped while the call was out
+          if (plateCamera === camera) dispatch({ type: "plate", text: read && read.plate ? read.plate : null });
+          else publish();
+        }),
+      );
+    }
   }
 
   function checkHealth(now: number): void {
@@ -175,7 +189,7 @@ export function createStation(deps: StationDeps): Station {
     tick() {
       const now = deps.now();
       checkHealth(now);
-      pollPlate(now);
+      pollPlates(now);
       dispatch({ type: "tick", now });
     },
     key(key: string) {
@@ -193,6 +207,15 @@ export function createStation(deps: StationDeps): Station {
     manualPlate(text: string | null) {
       deps.log.write("manualPlate", { plate: text });
       dispatch({ type: "manualPlate", text });
+    },
+    reset() {
+      dispatch({ type: "reset", now: deps.now() });
+    },
+    setExceptionMode(on: boolean) {
+      exceptionMode = on;
+      deps.log.write("exceptionMode", { on });
+      if (!on) dispatch({ type: "manualPlate", text: null });
+      else publish();
     },
     view,
     async settle() {

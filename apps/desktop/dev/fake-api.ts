@@ -45,6 +45,8 @@ export interface FakeApiOptions {
   port?: number;
   /** POST /__dev/plate/:camera { plate } changes the plate reader's text; for the demo run only. */
   devControl?: boolean;
+  /** JPEG pictures served at GET /__dev/cctv/:n.jpg, standing in for CCTV snapshots in the demo. */
+  cctvImages?: Record<number, Buffer>;
 }
 
 interface FakeWeighing {
@@ -347,7 +349,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
     return value;
   };
 
-  async function route(method: string, path: string, query: URLSearchParams, body: unknown, key: string | null): Promise<{ status: number; body?: unknown; wav?: Buffer }> {
+  async function route(method: string, path: string, query: URLSearchParams, body: unknown, key: string | null): Promise<{ status: number; body?: unknown; wav?: Buffer; jpeg?: Buffer }> {
     if (method === "GET" && path === "/api/health") return { status: 200, body: { status: "ok", database: "up", version: "fake" } };
     const plate = /^\/plate\/(\d+)$/.exec(path);
     if (method === "GET" && plate) {
@@ -360,6 +362,9 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       plates.set(Number(control[1]), String((body as { plate?: unknown } | null)?.plate ?? ""));
       return { status: 204 };
     }
+    const cctv = /^\/__dev\/cctv\/(\d+)\.jpg$/.exec(path);
+    const picture = cctv ? options.cctvImages?.[Number(cctv[1])] : undefined;
+    if (method === "GET" && picture) return { status: 200, jpeg: picture };
     if (!path.startsWith("/api/weighbridge/")) return { status: 404, body: { error: { code: "NOT_FOUND", message: "Alamat tidak ditemukan." } } };
     if (key !== options.stationKey) throw new HttpError(401, { error: { code: "STATION_UNAUTHENTICATED", message: "Kunci stasiun tidak valid.", speech: ["Kunci stasiun tidak valid."] } });
     expire();
@@ -375,7 +380,7 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
           stage: truck.stage,
           kind,
           camera: (truck.stage === 1 ? options.cameraWeigh1 : options.cameraWeigh2) ?? null,
-          expected: { plateNo: truck.plateNo, plateDisplay: truck.plateDisplay, docGrossKg: 41_000, docNetKg: 31_000, vehicleTareKg: null },
+          expected: { plateNo: truck.plateNo, plateDisplay: truck.plateDisplay, docGrossKg: 41_000, docTareKg: 10_000, docNetKg: 31_000, vehicleTareKg: null },
           ...text.card(truck.plateDisplay, truck.stage, kind),
         },
       };
@@ -499,7 +504,10 @@ export async function startFakeApi(options: FakeApiOptions): Promise<FakeApi> {
       if (body === Symbol.for("invalid-json")) throw new HttpError(400, { error: { code: "BAD_REQUEST", message: "Permintaan tidak dapat dibaca." } });
       const answer = await route(method, url.pathname, url.searchParams, body, key);
       status = answer.status;
-      if (answer.wav) {
+      if (answer.jpeg) {
+        response.writeHead(status, { "content-type": "image/jpeg", "content-length": answer.jpeg.length, "cache-control": "no-store" });
+        response.end(answer.jpeg);
+      } else if (answer.wav) {
         response.writeHead(status, { "content-type": "audio/wav", "content-length": answer.wav.length });
         response.end(answer.wav);
       } else if (answer.body === undefined) {

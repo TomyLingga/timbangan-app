@@ -37,6 +37,8 @@ export interface CardAnswer extends Spoken {
     plateNo: string;
     plateDisplay: string;
     docGrossKg: number | null;
+    /** Tare on the letters; added to the API with the "Selisih" panel. */
+    docTareKg: number | null;
     docNetKg: number | null;
     vehicleTareKg: number | null;
   };

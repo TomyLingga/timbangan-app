@@ -3,23 +3,34 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { BrowserWindow } from "electron";
-import type { StationView } from "../shared/bridge";
+import type { ScreenView } from "../shared/bridge";
 import type { SimulatorScale } from "./scale/simulator";
 import type { Station } from "./station";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Saves a PNG of the window the first time each screen state shows, a moment after it appears. */
-export function createCapture(window: BrowserWindow, dir: string, delayMs = 900) {
+export function createCapture(window: BrowserWindow, dir: string, names: { prefix: string; suffix: string }, delayMs = 900) {
   const seen = new Set<string>();
   let count = 0;
-  return {
-    onView(view: StationView) {
+  let ready = false;
+  let latest: ScreenView | null = null;
+  // the first state shows before the page has loaded; take it once the page is there
+  window.webContents.once("did-finish-load", () =>
+    setTimeout(() => {
+      ready = true;
+      if (latest) capture.onView(latest);
+    }, 1_200),
+  );
+  const capture = {
+    onView(view: ScreenView) {
+      latest = view;
+      if (!ready) return;
       const screen = view.screen;
       const name = screen.phase === "decided" && screen.outcome?.kind === "SAVED" ? "decided-saved" : screen.phase;
       if (seen.has(name)) return;
       seen.add(name);
-      const file = `${String(++count).padStart(2, "0")}-${name}.png`;
+      const file = `${names.prefix}${String(++count).padStart(2, "0")}-${name}${names.suffix}.png`;
       setTimeout(() => {
         if (window.isDestroyed()) return;
         void window.webContents
@@ -32,6 +43,7 @@ export function createCapture(window: BrowserWindow, dir: string, delayMs = 900)
       }, delayMs);
     },
   };
+  return capture;
 }
 
 /** The demo: a first weighing saved, one that waits for a decision and is approved, and an unknown card. */
