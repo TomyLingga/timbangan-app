@@ -14,8 +14,9 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useUrlFilter } from "@/hooks/use-url-filter";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
-import { formatQuantity } from "@/lib/format";
+import { formatNumber, formatQuantity } from "@/lib/format";
 import { EMPTY_VEHICLE, tareChanged, validateVehicle, vehiclePayload, type VehicleValues } from "@/lib/forms";
 import { saveErrorMessage } from "@/lib/messages";
 import { canAddVehicle, canEditVehicle, canView } from "@/lib/permissions";
@@ -235,7 +236,7 @@ export function VehiclesScreen() {
   const mayEdit = canEditVehicle(user);
 
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
   const [reloadToken, setReloadToken] = useState(0);
   const [saved, setSaved] = useState<string | null>(null);
   // undefined: sheet closed, null: new vehicle, otherwise the vehicle being edited
@@ -256,6 +257,7 @@ export function VehiclesScreen() {
   const columns = useMemo<ReadonlyArray<Column<Vehicle>>>(() => {
     const typeNames = new Map((typeItems ?? []).map((type) => [type.code, type.name]));
     const isExpired = (vehicle: Vehicle, code: string) => vehicle.expired.includes(code);
+    // Secondary facts sit on a second line of the row, so the table fits a desktop screen without scrolling.
     return [
       {
         id: "plate",
@@ -266,8 +268,13 @@ export function VehiclesScreen() {
           return (
             <>
               <span className="flex flex-wrap items-center gap-2">
-                <span className="font-medium whitespace-nowrap">{vehicle.plateDisplay}</span>
+                <span className="plate text-[0.8125rem]">{vehicle.plateDisplay}</span>
                 {vehicle.isActive ? null : <StatusBadge info={{ label: "Nonaktif", tone: "neutral" }} />}
+              </span>
+              <span className="mt-1 block text-xs text-muted-foreground">
+                {[vehicle.vehicleTypeCode ? (typeNames.get(vehicle.vehicleTypeCode) ?? vehicle.vehicleTypeCode) : null, vehicle.productionYear ? `tahun ${vehicle.productionYear}` : null]
+                  .filter(Boolean)
+                  .join(", ") || "-"}
               </span>
               {summary ? <span className="block text-xs font-medium text-destructive">{summary}</span> : null}
             </>
@@ -275,50 +282,45 @@ export function VehiclesScreen() {
         },
       },
       {
-        id: "type",
-        header: "Jenis",
-        cell: (vehicle) =>
-          vehicle.vehicleTypeCode ? (typeNames.get(vehicle.vehicleTypeCode) ?? vehicle.vehicleTypeCode) : "-",
-      },
-      {
         id: "owner",
         header: "Pemilik",
-        cellClassName: "max-w-48",
+        cellClassName: "max-w-56",
         cell: (vehicle) => (
           <>
             <span className="block truncate" title={vehicle.owner?.name}>
               {vehicle.owner?.name ?? "-"}
             </span>
             {vehicle.ownership ? (
-              <span className="block text-xs text-muted-foreground">
-                {OWNERSHIP_LABELS[vehicle.ownership] ?? vehicle.ownership}
-              </span>
+              <span className="block text-xs text-muted-foreground">{OWNERSHIP_LABELS[vehicle.ownership] ?? vehicle.ownership}</span>
             ) : null}
           </>
         ),
       },
       {
         id: "capacity",
-        header: "Daya angkut",
+        header: "Daya angkut dan tarra",
         align: "right",
-        cell: (vehicle) => formatQuantity(vehicle.capacityKg, "Kg"),
-      },
-      { id: "year", header: "Tahun", cell: (vehicle) => vehicle.productionYear ?? "-" },
-      { id: "tare", header: "Tarra", align: "right", cell: (vehicle) => formatQuantity(vehicle.tareKg, "Kg") },
-      {
-        id: "stnk",
-        header: "STNK",
-        cell: (vehicle) => <ExpiryDate value={vehicle.stnkValidUntil} expired={isExpired(vehicle, "STNK")} />,
+        cell: (vehicle) => (
+          <>
+            <span className="block font-mono">{formatQuantity(vehicle.capacityKg, "Kg")}</span>
+            <span className="block font-mono text-xs text-muted-foreground">tarra {formatQuantity(vehicle.tareKg, "Kg")}</span>
+          </>
+        ),
       },
       {
-        id: "tax",
-        header: "Pajak",
-        cell: (vehicle) => <ExpiryDate value={vehicle.taxValidUntil} expired={isExpired(vehicle, "TAX")} />,
-      },
-      {
-        id: "kir",
-        header: "KIR",
-        cell: (vehicle) => <ExpiryDate value={vehicle.kirValidUntil} expired={isExpired(vehicle, "KIR")} />,
+        id: "documents",
+        header: "STNK, pajak, KIR",
+        wide: true,
+        cell: (vehicle) => (
+          <span className="grid grid-cols-[3rem_auto] gap-x-2 text-sm">
+            <span className="text-xs leading-5 text-muted-foreground">STNK</span>
+            <ExpiryDate value={vehicle.stnkValidUntil} expired={isExpired(vehicle, "STNK")} />
+            <span className="text-xs leading-5 text-muted-foreground">Pajak</span>
+            <ExpiryDate value={vehicle.taxValidUntil} expired={isExpired(vehicle, "TAX")} />
+            <span className="text-xs leading-5 text-muted-foreground">KIR</span>
+            <ExpiryDate value={vehicle.kirValidUntil} expired={isExpired(vehicle, "KIR")} />
+          </span>
+        ),
       },
     ];
   }, [typeItems]);
@@ -328,7 +330,25 @@ export function VehiclesScreen() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Kendaraan" description="Data truk beserta masa berlaku STNK, pajak, dan KIR.">
+      <PageHeader
+        title="Kendaraan"
+        figures={
+          list.data ? (
+            <>
+              <span>
+                <span className="font-semibold text-foreground tabular-nums">{formatNumber(list.data.total)}</span> kendaraan
+              </span>
+              {list.data.items.some((vehicle) => vehicle.expired.length > 0) ? (
+                <span>
+                  <span className="font-semibold text-foreground tabular-nums">{formatNumber(list.data.items.filter((vehicle) => vehicle.expired.length > 0).length)}</span> dengan surat lewat
+                  {list.data.total > list.data.items.length ? " di halaman ini" : ""}
+                </span>
+              ) : null}
+            </>
+          ) : null
+        }
+        description="Data truk beserta masa berlaku STNK, pajak, dan KIR."
+      >
         {mayAdd ? (
           <Button onClick={() => setEditing(null)}>
             <Plus aria-hidden="true" />

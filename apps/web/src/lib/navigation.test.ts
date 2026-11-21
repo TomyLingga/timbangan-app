@@ -65,6 +65,13 @@ describe("navigationFor", () => {
     expect(navigationFor(partner({ drivers: "EDIT", gate: "EDIT" }))).toEqual(["/"]);
   });
 
+  it("adds the weighing pages for the modules of phase 4", () => {
+    expect(navigationFor(staff({ approvals: "VIEW", reports: "VIEW", weighbridge: "EDIT" }))).toEqual(["/", "/keputusan", "/laporan", "/stasiun"]);
+    // the station list needs the edit level
+    expect(navigationFor(staff({ weighbridge: "VIEW" }))).toEqual(["/"]);
+    expect(navigationFor(partner({ approvals: "EDIT", reports: "VIEW" }))).toEqual(["/"]);
+  });
+
   it("gives an account without access only the start page", () => {
     expect(navigationFor(staff({}))).toEqual(["/"]);
   });

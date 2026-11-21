@@ -22,6 +22,8 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { FilterChips } from "@/components/filter-chips";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { driverPayload, EMPTY_DRIVER, LICENCE_CLASSES, validateDriver, type DriverValues } from "@/lib/forms";
@@ -141,55 +143,6 @@ async function countPerValue(
   return Object.fromEntries(values.map((value, index) => [value, pages[index].total]));
 }
 
-function FilterChips<T extends string>({
-  label,
-  caption,
-  filters,
-  selected,
-  counts,
-  onSelect,
-}: {
-  label: string;
-  caption: string;
-  filters: ReadonlyArray<{ value: T; label: string }>;
-  selected: T;
-  counts: Record<string, number> | undefined;
-  onSelect: (value: T) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span aria-hidden="true" className="text-xs font-medium text-muted-foreground">
-        {caption}
-      </span>
-      <div role="group" aria-label={label} className="flex flex-wrap gap-2">
-        {filters.map((filter) => {
-          const pressed = selected === filter.value;
-          const count = counts?.[filter.value];
-          return (
-            <button
-              key={filter.value || "all"}
-              type="button"
-              aria-pressed={pressed}
-              onClick={() => onSelect(filter.value)}
-              className={cn(
-                "inline-flex h-10 items-center gap-2 rounded-md border px-3 text-sm transition-colors duration-150 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-                pressed
-                  ? "border-transparent bg-secondary font-medium text-secondary-foreground"
-                  : "bg-card text-foreground hover:bg-muted",
-              )}
-            >
-              {filter.label}
-              <span className={cn("tabular-nums", pressed ? "text-secondary-foreground/80" : "text-muted-foreground")}>
-                {count === undefined ? "…" : formatNumber(count)}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function DriverFormSheet({ onClose, onSaved }: { onClose: () => void; onSaved: (driver: Driver) => void }) {
   const form = useFormValues<DriverValues>(EMPTY_DRIVER);
   const save = useAction();
@@ -278,9 +231,12 @@ type SyncState =
 
 function DriversPage({ user }: { user: User }) {
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
-  const [status, setStatus] = useState<RegistryStatus | "">("");
-  const [push, setPush] = useState<RegistryPush | "">("");
+  // the filters live in the address bar, so a filtered list can be linked to
+  const [searchText, setSearchText] = useUrlFilter("q");
+  const [statusText, setStatus] = useUrlFilter("status");
+  const [pushText, setPush] = useUrlFilter("kirim");
+  const status = (STATUS_FILTERS.some((filter) => filter.value === statusText) ? statusText : "") as RegistryStatus | "";
+  const push = (PUSH_FILTERS.some((filter) => filter.value === pushText) ? pushText : "") as RegistryPush | "";
   const [reloadToken, setReloadToken] = useState(0);
   const [formOpen, setFormOpen] = useState(false);
   const [saved, setSaved] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -340,6 +296,20 @@ function DriversPage({ user }: { user: User }) {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Supir"
+        figures={
+          list.data ? (
+            <>
+              <span>
+                <span className="font-semibold text-foreground tabular-nums">{formatNumber(statusCounts.data?.[""] ?? list.data.total)}</span> supir
+              </span>
+              {pushCounts.data?.FAILED ? (
+                <span>
+                  <span className="font-semibold text-foreground tabular-nums">{formatNumber(pushCounts.data.FAILED)}</span> gagal dikirim ke VCF
+                </span>
+              ) : null}
+            </>
+          ) : null
+        }
         description={
           <>
             Data supir dan statusnya di VCF.{" "}

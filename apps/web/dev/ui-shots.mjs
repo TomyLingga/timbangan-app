@@ -60,7 +60,8 @@ async function shootAll(browser, name, url, prepare) {
       await browser.viewport(size.width, size.height, size.mobile);
       await browser.goto(url);
       if (prepare) await prepare(size);
-      await shoot(browser, `${name}-${theme}-${size.tag}`, { fullPage: size.mobile });
+      // an open sheet sits over the viewport, so those phone shots keep to the viewport
+      await shoot(browser, `${name}-${theme}-${size.tag}`, { fullPage: size.mobile && !name.endsWith("rincian") });
     }
   }
   await browser.viewport(1440, 900);
@@ -81,7 +82,8 @@ async function scanFirstClear(browser) {
 }
 
 async function staff(browser) {
-  await browser.goto(`${API}/api/auth/sso/start?as=admin.contoh`);
+  // every module, so every page and the bell show
+  await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
 }
 
@@ -93,8 +95,40 @@ async function samplePass(browser) {
   await shootAll(browser, "beranda", `${WEB}/`, () => browser.waitFor(`document.querySelector('[aria-label="Truk per tahap"]')?.getAttribute('aria-busy') === 'false'`));
   await shootAll(browser, "kontrak", `${WEB}/kontrak`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "pos", `${WEB}/pos`, () => scanFirstClear(browser));
+  await shootAll(browser, "keputusan", `${WEB}/keputusan`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "keputusan-rincian", `${WEB}/keputusan`, async (size) => {
+    await browser.waitFor(listReady(size));
+    await browser.evaluate(`[...document.querySelectorAll('button[aria-label^="Rincian Selisih bruto"]')].find((b) => b.offsetParent !== null).click(); true`);
+    await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`);
+  });
+  await shootAll(browser, "stasiun", `${WEB}/stasiun`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "laporan", `${WEB}/laporan`, async (size) => {
+    await browser.waitFor(listReady(size));
+  });
+  await shootAll(browser, "laporan-truk", `${WEB}/laporan`, async (size) => {
+    await browser.waitFor(listReady(size));
+    await browser.click("Per truk");
+    await browser.waitFor(`Boolean(document.querySelector('[data-testid="report-trips"]'))`);
+  });
+  await shootAll(browser, "pos-rincian", `${WEB}/pos`, async () => {
+    await browser.waitFor(`Boolean(document.querySelector('button[aria-label^="Rincian "]'))`);
+    await browser.click('button[aria-label^="Rincian ZZ 0004"]');
+    await browser.waitFor(`Boolean(document.querySelector('[data-testid="trip-work"]'))`);
+  });
   await shootAll(browser, "kendaraan", `${WEB}/kendaraan`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "registrasi", `${WEB}/registrasi`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "supir", `${WEB}/supir`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "tujuan", `${WEB}/tujuan`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "pengguna", `${WEB}/pengguna`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "kartu", `${WEB}/kartu`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "delivery-order", `${WEB}/delivery-order`, (size) => browser.waitFor(listReady(size)));
+  await browser.goto(`${WEB}/registrasi`);
+  await browser.waitFor(listReady({ mobile: false }));
+  const detail = await browser.evaluate(`[...document.querySelectorAll('tbody tr')].find((row) => row.innerText.includes('0124/CONTOH') && row.innerText.includes('0125/CONTOH'))?.querySelector('a')?.getAttribute('href') ?? ''`);
+  await shootAll(browser, "registrasi-rincian", `${WEB}${detail}`, async () => {
+    await browser.click('button[aria-label="Langkah dan timbang truk 1"]');
+    await browser.waitFor(`Boolean(document.querySelector('[data-testid="trip-work"] dl'))`);
+  });
 
   // Extra states: a refused scan, the command palette, the phone drawer, the widened sidebar.
   await browser.colorScheme("dark");
@@ -104,6 +138,26 @@ async function samplePass(browser) {
   await browser.pressEnter();
   await browser.hasText("Kode SPJ ini tidak dikenal.");
   await shoot(browser, "pos-refused-dark-1440");
+  await browser.click("Kembalikan kartu");
+  await browser.waitFor("document.activeElement?.id === 'gate-checkout'");
+  await browser.typeFocused("04A1B2C305");
+  await browser.pressEnter();
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="gate-checkout-done"]'))`);
+  await shoot(browser, "pos-kembali-dark-1440");
+  await browser.goto(`${WEB}/stasiun`);
+  await browser.waitFor(listReady({ mobile: false }));
+  await browser.click('button[aria-label="Buat kunci mesin WB-2"]');
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="station-key-dialog"]'))`);
+  await browser.click("Buat kunci mesin");
+  await browser.waitFor(`(document.querySelector('[data-testid="station-key"]')?.value ?? '').length > 20`);
+  await shoot(browser, "stasiun-kunci-dark-1440");
+  await browser.pressEscape();
+  await browser.goto(`${WEB}/`);
+  await browser.waitFor(`document.querySelector('[aria-label="Truk per tahap"]')?.getAttribute('aria-busy') === 'false'`);
+  await browser.click('[data-testid="approvals-bell"]');
+  await browser.waitFor(`Boolean(document.querySelector('[role="menu"]'))`);
+  await shoot(browser, "lonceng-dark-1440");
+  await browser.pressEscape();
   await browser.goto(`${WEB}/kontrak`);
   await browser.waitFor("document.querySelectorAll('tbody tr').length > 0");
   await browser.click('button[aria-label="Cari halaman"]');

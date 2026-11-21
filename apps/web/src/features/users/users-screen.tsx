@@ -22,6 +22,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useAction } from "@/hooks/use-form";
 import { formatDateTime } from "@/lib/format";
@@ -119,7 +121,7 @@ function PermissionsSheet({
 function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; onOwnAccountChanged: () => void }) {
   const ids = useId();
   const mayEdit = canEdit(currentUser, "users");
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
   const [reloadToken, setReloadToken] = useState(0);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
@@ -216,6 +218,7 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Pengguna"
+        figures={list.data ? <TotalFigure value={list.data.total} noun="akun" /> : null}
         description="Karyawan yang baru masuk lewat portal belum punya hak akses. Atur modul yang boleh dibukanya di sini."
       />
 

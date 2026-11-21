@@ -30,6 +30,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
@@ -509,8 +511,8 @@ function DeliveryOrdersPage({ user }: { user: User }) {
   const mayAccept = canAcceptDeliveryOrder(user);
   const mayFillTrucks = canCreateOutgoing(user);
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
-  const [status, setStatus] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
+  const [status, setStatus] = useUrlFilter("status");
   const [reloadToken, setReloadToken] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<Pending | null>(null);
@@ -592,6 +594,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
     <div className="flex flex-col gap-5">
       <PageHeader
         title="Delivery Order"
+        figures={list.data ? <TotalFigure value={list.data.total} noun="delivery order" /> : null}
         description={
           admin
             ? "Susun DO, kirim ke transporter, lalu pantau sisanya sampai ditutup."

@@ -19,6 +19,15 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   gate: "Pos registrasi",
   rfid_cards: "Kartu RFID",
   users: "Pengguna dan hak akses",
+  weighbridge: "Timbangan",
+  approvals: "Keputusan selisih dan plat",
+  qc: "QC",
+  qc_approvals: "Keputusan QC",
+  security_check: "Pemeriksaan security",
+  unloading: "Bongkar",
+  loading: "Muat",
+  sealing: "Segel",
+  reports: "Laporan",
 };
 
 export const LEVEL_LABELS: Readonly<Record<PermissionLevel, string>> = {
@@ -108,6 +117,24 @@ export function canEditDraft(user: MaybeUser, registration: { status: string; di
   if (registration.status.toUpperCase() !== "DRAFT") return false;
   return registration.direction === "IN" ? canCreateIncoming(user) : canCreateOutgoing(user);
 }
+
+// --- phase 4 ----------------------------------------------------------------------
+
+/** GET, POST and PATCH /api/stations and the machine key: weighbridge EDIT, staff only. */
+export const canManageStations = (user: MaybeUser) => isStaff(user) && canEdit(user, "weighbridge");
+/** GET /api/exceptions: approvals VIEW, staff only. */
+export const canSeeApprovals = (user: MaybeUser) => isStaff(user) && canView(user, "approvals");
+/** POST /api/exceptions/:id/decide: approvals EDIT (the API also checks the module of each request). */
+export const canDecide = (user: MaybeUser) => isStaff(user) && canEdit(user, "approvals");
+/** GET /api/reports/*: reports VIEW, staff only. */
+export const canSeeReports = (user: MaybeUser) => isStaff(user) && canView(user, "reports");
+/** GET /api/trips/:id/steps: any staff account. */
+export const canSeeTripWork = (user: MaybeUser) => isStaff(user);
+/** POST /api/trips/:id/steps/:code/complete: the module of the step at level create. */
+export const canCompleteStep = (user: MaybeUser, performerModule: string | null) =>
+  isStaff(user) && performerModule !== null && canCreate(user, performerModule as ModuleCode);
+/** POST /api/gate/check-out: gate CREATE. */
+export const canCheckOut = (user: MaybeUser) => canCreate(user, "gate");
 
 /** POST /api/trips/:id/spj/reissue: gate EDIT. */
 export const canReissueSpj = (user: MaybeUser) => canEdit(user, "gate");

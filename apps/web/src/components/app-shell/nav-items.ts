@@ -1,5 +1,8 @@
 import {
+  BarChart3,
   ClipboardList,
+  Gavel,
+  Scale,
   CreditCard,
   FileText,
   House,
@@ -27,11 +30,14 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
   "/registrasi": { label: "Registrasi", icon: ClipboardList },
   "/delivery-order": { label: "Delivery Order", icon: PackageCheck },
   "/pos": { label: "Pos registrasi", icon: ScanLine },
+  "/keputusan": { label: "Keputusan", icon: Gavel },
   "/kontrak": { label: "Kontrak", icon: FileText },
   "/supir": { label: "Supir", icon: IdCard },
   "/kendaraan": { label: "Kendaraan", icon: Truck },
   "/tujuan": { label: "Tujuan", icon: MapPin },
   "/kartu": { label: "Kartu RFID", icon: CreditCard },
+  "/laporan": { label: "Laporan", icon: BarChart3 },
+  "/stasiun": { label: "Stasiun", icon: Scale },
   "/pengguna": { label: "Pengguna", icon: UsersRound },
 };
 
@@ -41,9 +47,10 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
  */
 export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly NavHref[] }> = [
   { label: null, hrefs: ["/"] },
-  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos"] },
+  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/keputusan"] },
   { label: "Data induk", hrefs: ["/kontrak", "/supir", "/kendaraan", "/tujuan", "/kartu"] },
-  { label: "Sistem", hrefs: ["/pengguna"] },
+  { label: "Laporan", hrefs: ["/laporan"] },
+  { label: "Sistem", hrefs: ["/stasiun", "/pengguna"] },
 ];
 
 // Modules that come in later phases. Listed so people know they are planned,

@@ -124,7 +124,7 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
         </div>
       ) : null}
 
-      <section className="rounded-lg border bg-card p-4 sm:p-5">
+      <section className="rounded-2xl border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold">Data DO</h2>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
           <Fact label="Tanggal DO">{formatDate(order.doDate)}</Fact>

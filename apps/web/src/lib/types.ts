@@ -18,7 +18,17 @@ export type ModuleCode =
   | "registrations"
   | "gate"
   | "rfid_cards"
-  | "users";
+  | "users"
+  // phase 4: weighing, decisions, field steps, reports
+  | "weighbridge"
+  | "approvals"
+  | "qc"
+  | "qc_approvals"
+  | "security_check"
+  | "unloading"
+  | "loading"
+  | "sealing"
+  | "reports";
 
 /** EDIT covers CREATE, CREATE covers VIEW. */
 export type PermissionLevel = "VIEW" | "CREATE" | "EDIT";
@@ -435,4 +445,179 @@ export interface LookupVehicle {
   verified: boolean;
   owner: PartnerRef | null;
   isActive: boolean;
+}
+
+// --- phase 4: stations, weighing, decisions, field steps, reports --------------------
+
+export type StationKind = "REGISTRATION" | "GATE" | "WEIGHBRIDGE" | "QC" | "STAGING" | "UNLOADING_BAY" | "LOADING_BAY" | "DOCK" | "SEALING";
+
+/** The config of a weighbridge station (apps/api stations/routes.ts, weighbridgeConfig). */
+export interface WeighbridgeConfig {
+  directions: Direction[];
+  cameraWeigh1: number | null;
+  cameraWeigh2: number | null;
+  plateAttempts: number;
+}
+
+/** GET /api/stations, one station. */
+export interface Station {
+  id: string | number;
+  code: string;
+  name: string;
+  kind: StationKind;
+  zoneId: number | null;
+  config: Record<string, unknown>;
+  isActive: boolean;
+  hasKey: boolean;
+  keyCreatedAt: string | null;
+  hasPin: boolean;
+}
+
+export type ExceptionType = "PLATE" | "GROSS_IN" | "TARE_OUT" | "NET_IN" | "NET_OUT" | "QC_HOLD";
+export type ExceptionStatus = "PENDING" | "APPROVED" | "REJECTED" | "RETRY" | "CANCELLED" | "EXPIRED";
+
+/** A request for a decision (apps/api exceptions/service.ts, loadExceptionViews). */
+export interface ExceptionView {
+  id: string | number;
+  type: ExceptionType;
+  status: ExceptionStatus;
+  decision: string | null;
+  trip: { id: string | number; tripNo: string | null; plateNo: string | null; plateDisplay: string | null };
+  station: { id: string | number; code: string; name: string } | null;
+  stage: number | null;
+  expectedValue: number | null;
+  actualValue: number | null;
+  diffValue: number | null;
+  diffPct: number | null;
+  tolerancePct: number | null;
+  liveWeightKg: number | null;
+  liveWeightAt: string | null;
+  plateRead: string | null;
+  plateNo: string | null;
+  approverModule: string;
+  raisedAt: string;
+  decidedAt: string | null;
+  decidedBy: { id: string | number; fullName: string | null } | null;
+  reason: string | null;
+  reportNo: string | null;
+  weighingId: string | number | null;
+  context: Record<string, unknown> | null;
+}
+
+export type StepStatus = "PENDING" | "READY" | "IN_PROGRESS" | "DONE" | "SKIPPED" | "FAILED";
+
+/** A step of a trip (apps/api trips/work-routes.ts, stepView). */
+export interface TripStep {
+  stepCode: string;
+  name: string;
+  seq: number;
+  attempt: number;
+  status: StepStatus;
+  result: string | null;
+  performerModule: string | null;
+  isOptional: boolean;
+  onReject: string;
+  readyAt: string | null;
+  finishedAt: string | null;
+  performedBy: string | number | null;
+  stationId: string | number | null;
+  note: string | null;
+}
+
+/** A weighing (apps/api weighing/view.ts, weighingView). */
+export interface Weighing {
+  id: string | number;
+  stage: number;
+  kind: "GROSS" | "TARE";
+  weightKg: number;
+  weighedAt: string;
+  mode: "AUTO" | "EXCEPTION";
+  plateRead: string | null;
+  plateCheck: "MATCH" | "CONFIRMED" | "BYPASSED";
+  stationId: string | number | null;
+  status: string;
+}
+
+/** One share of a truck's net (apps/api weighing/view.ts, AllocationView). */
+export interface AllocationShare {
+  seq: number;
+  contractNo: string;
+  doNo: string | null;
+  uom: string;
+  qtyPlanned: number | null;
+  originNetKg: number | null;
+  netKg: number | null;
+  qtyActual: number | null;
+  splitMethod: string | null;
+}
+
+/** A trip as the weighing pages show it (apps/api weighing/view.ts, WeighTrip). */
+export interface WeighTrip {
+  id: string | number;
+  tripNo: string | null;
+  status: string;
+  outcome: string | null;
+  direction: Direction;
+  flowCode: string;
+  currentStep: string | null;
+  plateNo: string | null;
+  plateDisplay: string | null;
+  driverName: string | null;
+  partner: { id: string | number; name: string };
+  transporter: { id: string | number; name: string } | null;
+  qtyPlanned: number | null;
+  docGrossKg: number | null;
+  docTareKg: number | null;
+  docNetKg: number | null;
+  grossKg: number | null;
+  tareKg: number | null;
+  netKg: number | null;
+  allocations: AllocationShare[];
+}
+
+/** GET /api/trips/:id/steps */
+export interface TripWork {
+  trip: WeighTrip;
+  steps: TripStep[];
+  weighings: Weighing[];
+}
+
+/** GET /api/reports/contracts, one row. */
+export interface ContractReportRow {
+  contractId: string | number;
+  contractNo: string;
+  direction: Direction;
+  partner: string;
+  product: string;
+  uom: string | null;
+  state: string;
+  qtyContract: number | null;
+  qtyOpening: number;
+  realised: number;
+  realisedTotal: number;
+  inProgress: number;
+  remaining: number | null;
+  tripCount: number;
+}
+
+/** GET /api/reports/trips, one row per truck allocation. */
+export interface TripReportRow {
+  tripId: string | number;
+  tripNo: string | null;
+  status: string;
+  outcome: string | null;
+  direction: Direction;
+  plateNo: string | null;
+  seq: number;
+  contractNo: string;
+  doNo: string | null;
+  uom: string;
+  grossKg: number | null;
+  tareKg: number | null;
+  truckNetKg: number | null;
+  shareNetKg: number | null;
+  qtyActual: number | null;
+  splitMethod: string | null;
+  weigh1At: string | null;
+  weigh2At: string | null;
 }

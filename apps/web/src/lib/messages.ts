@@ -179,3 +179,49 @@ export function syncErrorMessage(error: unknown): string {
   }
   return errorMessage(error);
 }
+
+// --- phase 4 ----------------------------------------------------------------
+
+const DECISION_REFUSALS: Record<string, string> = {
+  ALREADY_DECIDED: "Permintaan ini sudah diputuskan orang lain. Lihat keputusannya di rincian.",
+  EXCEPTION_CANCELLED: "Permintaan ini batal, misalnya karena truk sudah turun dari timbangan. Tidak ada yang perlu diputuskan.",
+  NOT_FOUND: "Permintaan ini tidak ditemukan lagi.",
+};
+
+/** Refusals of POST /api/exceptions/:id/decide. */
+export function decisionErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (DECISION_REFUSALS[error.code]) return DECISION_REFUSALS[error.code];
+    if (error.code === "VALIDATION" && error.fieldMessages) {
+      const first = Object.values(error.fieldMessages)[0];
+      if (first) return first;
+    }
+    const text = refusalText(error);
+    if (text) return text;
+  }
+  return errorMessage(error);
+}
+
+const CHECK_OUT_REFUSALS: Record<string, string> = {
+  CARD_UNKNOWN: "Kartu ini belum terdaftar. Periksa kartunya.",
+  CARD_NOT_IN_USE: "Kartu ini tidak sedang dipakai truk mana pun.",
+};
+
+/** Refusals of POST /api/gate/check-out. NOT_READY carries the step the truck is at, from the API. */
+export function checkOutErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (CHECK_OUT_REFUSALS[error.code]) return CHECK_OUT_REFUSALS[error.code];
+    const text = refusalText(error);
+    if (text) return text;
+  }
+  return errorMessage(error);
+}
+
+const STATION_REFUSALS: Record<string, string> = {
+  DUPLICATE: "Kode stasiun ini sudah dipakai. Pilih kode lain.",
+};
+
+export function stationErrorMessage(error: unknown): string {
+  if (isApiError(error) && STATION_REFUSALS[error.code]) return STATION_REFUSALS[error.code];
+  return errorMessage(error);
+}

@@ -292,7 +292,7 @@ function OutgoingFormBody({
         {errors.trucks ? <p className="text-sm text-destructive">{errors.trucks}</p> : null}
         <ol className="flex flex-col gap-3">
           {trucks.map((truck, index) => (
-            <li key={truck.key} className="rounded-lg border bg-card p-4 sm:p-5" data-truck={index + 1}>
+            <li key={truck.key} className="rounded-2xl border bg-card p-4 sm:p-5" data-truck={index + 1}>
               <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">
                   Truk {index + 1}

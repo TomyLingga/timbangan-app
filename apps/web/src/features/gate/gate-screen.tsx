@@ -8,16 +8,19 @@ import { ActionSheet } from "@/components/action-sheet";
 import { SelectField, TextField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
 import { AccessDenied, Notice, PageHeader } from "@/components/page-parts";
+import { Segmented } from "@/components/segmented";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
+import { TripWorkPanel } from "@/features/trips/trip-work";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { cardUidError, normalizeCardUid, normalizeSpjToken, spjTokenError } from "@/lib/gate-input";
-import { gateErrorMessage } from "@/lib/messages";
+import { checkOutErrorMessage, gateErrorMessage } from "@/lib/messages";
 import { MOTION_EASE, MOTION_SLOW, MOTION_SPRING } from "@/lib/motion";
 import { canCreate, canEdit, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
@@ -277,7 +280,7 @@ function TripRow({
   actions?: ReactNode;
 }) {
   return (
-    <li className="flex items-start justify-between gap-3 py-3 text-sm">
+    <li className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 py-3 text-sm">
       <div className="min-w-0">
         <p>
           <span className="plate text-[0.9375rem]">{trip.vehicle?.plateDisplay ?? "-"}</span>
@@ -292,7 +295,7 @@ function TripRow({
           </p>
         ) : null}
       </div>
-      {actions ? <div className="flex shrink-0 gap-1">{actions}</div> : null}
+      {actions ? <div className="flex shrink-0 flex-wrap gap-1">{actions}</div> : null}
     </li>
   );
 }
@@ -406,6 +409,111 @@ function ReplaceCardSheet({
   );
 }
 
+type CheckOutResult = { kind: "done"; trip: Trip } | { kind: "refused"; message: string } | null;
+
+/**
+ * The card comes back at the end of a visit (POST /api/gate/check-out). Same
+ * reader pattern as check-in: the box has focus, a reading ends with Enter,
+ * and the box is ready again for the next card.
+ */
+function CheckOutPanel({ onCheckedOut }: { onCheckedOut: () => void }) {
+  const reduceMotion = useReducedMotion();
+  const motionProps = reduceMotion
+    ? {}
+    : { initial: { opacity: 0, y: 10, scale: 0.99 }, animate: { opacity: 1, y: 0, scale: 1 }, transition: { duration: MOTION_SLOW, ease: MOTION_EASE } };
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<CheckOutResult>(null);
+
+  useEffect(() => {
+    if (!busy) inputRef.current?.focus();
+  }, [busy, result]);
+
+  async function returnCard() {
+    const cardUid = normalizeCardUid(text);
+    const problem = cardUidError(cardUid);
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const { trip } = await api.request<{ trip: Trip }>("/api/gate/check-out", { method: "POST", body: { cardUid } });
+      setResult({ kind: "done", trip });
+      onCheckedOut();
+    } catch (failure) {
+      setResult({ kind: "refused", message: checkOutErrorMessage(failure) });
+    }
+    setText("");
+    setBusy(false);
+  }
+
+  const done = result?.kind === "done" ? result.trip : null;
+  const rejected = done ? done.status.toUpperCase() === "REJECTED" : false;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <section className="site-grid flex flex-col gap-5 rounded-2xl border-2 border-signal bg-card p-4 shadow-panel sm:p-6">
+        <ReaderInput
+          id="gate-checkout"
+          name="checkoutCardUid"
+          label="Tempelkan kartu yang dikembalikan"
+          icon={CreditCard}
+          hint="Pembaca kartu mengetik UID lalu Enter. Kartu hanya bisa kembali bila truk sudah sampai langkah keluar."
+          inputRef={inputRef}
+          value={text}
+          onChange={(value) => {
+            setText(value);
+            setError(null);
+          }}
+          onEnter={() => void returnCard()}
+          busy={busy}
+          error={error}
+        />
+      </section>
+      <div aria-live="assertive" className="flex flex-col gap-4">
+        {done ? (
+          <motion.section
+            key={`out-${done.id}`}
+            {...motionProps}
+            className="rounded-2xl border-2 border-success bg-success-subtle p-5 sm:p-6"
+            data-testid="gate-checkout-done"
+          >
+            <div className="flex items-start gap-4">
+              <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-success text-background">
+                <CircleCheck className="size-8" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="display text-[clamp(1.5rem,1.1rem+1.6vw,2.25rem)] leading-tight font-semibold text-success">Kartu kembali</p>
+                <p className="mt-2 text-base text-success">
+                  <span className="plate mr-1 text-foreground">{done.vehicle?.plateDisplay ?? "-"}</span>
+                  {rejected ? " keluar sebagai truk yang ditolak." : " selesai dan boleh keluar."} Kartunya bisa dipakai truk lain.
+                </p>
+              </div>
+            </div>
+          </motion.section>
+        ) : null}
+        {result?.kind === "refused" ? (
+          <motion.section key={`out-refused-${result.message}`} {...motionProps} className="rounded-2xl border-2 border-destructive bg-destructive-subtle p-5 sm:p-6" data-testid="gate-checkout-refused">
+            <div className="flex items-start gap-4">
+              <span className="flex size-14 shrink-0 items-center justify-center rounded-full bg-destructive text-background">
+                <OctagonX className="size-8" aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <p className="display text-[clamp(1.5rem,1.1rem+1.6vw,2.25rem)] leading-tight font-semibold text-destructive">Belum bisa keluar</p>
+                <p className="mt-1.5 text-lg text-destructive">{result.message}</p>
+              </div>
+            </div>
+          </motion.section>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function GatePage({ user }: { user: User }) {
   const mayCheckIn = canCreate(user, "gate");
   const mayChange = canEdit(user, "gate");
@@ -419,6 +527,9 @@ function GatePage({ user }: { user: User }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [sheet, setSheet] = useState<{ kind: "replace" | "cancel" | "reissue"; trip: Trip } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // check-in at the start of a visit, the card coming back at the end of it
+  const [mode, setMode] = useState<"in" | "out">("in");
+  const [detailOf, setDetailOf] = useState<Trip | null>(null);
 
   const today = plantToday();
   // `date` matches the planned arrival or the day of check-in (apps/api trips/routes.ts); `status` takes several.
@@ -434,10 +545,10 @@ function GatePage({ user }: { user: User }) {
 
   // The operator works without the mouse: the box that expects the next reading has focus.
   useEffect(() => {
-    if (sheet) return;
+    if (sheet || mode !== "in") return;
     if (awaitingCard) cardRef.current?.focus();
     else if (phase.kind !== "scanning") scanRef.current?.focus();
-  }, [phase, awaitingCard, sheet]);
+  }, [phase, awaitingCard, sheet, mode]);
 
   async function scan(raw: string) {
     const token = normalizeSpjToken(raw);
@@ -540,6 +651,26 @@ function GatePage({ user }: { user: User }) {
 
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-4">
+          {mayCheckIn ? (
+            <Segmented<"in" | "out">
+              label="Tugas di pos"
+              value={mode}
+              onChange={(value) => {
+                setMode(value);
+                if (value === "in") focusSoon(scanRef);
+              }}
+              options={[
+                { value: "in", label: "Check-in" },
+                { value: "out", label: "Kembalikan kartu" },
+              ]}
+            />
+          ) : null}
+          {mode === "out" ? (
+            <CheckOutPanel
+              onCheckedOut={() => setReloadToken((token) => token + 1)}
+            />
+          ) : (
+          <>
           <section className="site-grid flex flex-col gap-5 rounded-2xl border bg-card p-4 shadow-panel sm:p-6">
             <StepRail step={step} />
             <ReaderInput
@@ -664,6 +795,8 @@ function GatePage({ user }: { user: User }) {
               </Button>
             ) : null}
           </div>
+          </>
+          )}
         </div>
 
         <div className="flex flex-col gap-4">
@@ -723,7 +856,17 @@ function GatePage({ user }: { user: User }) {
                     key={trip.id}
                     trip={trip}
                     actions={
-                      mayChange ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-10 md:h-8"
+                          onClick={() => setDetailOf(trip)}
+                          aria-label={`Rincian ${trip.vehicle?.plateDisplay ?? ""}`}
+                        >
+                          Rincian
+                        </Button>
+                      {mayChange ? (
                       <>
                         <Button
                           variant="ghost"
@@ -744,7 +887,8 @@ function GatePage({ user }: { user: User }) {
                           Batal
                         </Button>
                       </>
-                      ) : null
+                      ) : null}
+                      </>
                     }
                   />
                 ))}
@@ -754,6 +898,26 @@ function GatePage({ user }: { user: User }) {
         </div>
       </div>
 
+      {detailOf ? (
+        <Sheet open onOpenChange={(open) => (open ? undefined : setDetailOf(null))}>
+          <SheetContent
+            side="right"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              if (mode === "in") focusSoon(scanRef);
+            }}
+            className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-lg"
+          >
+            <SheetHeader className="border-b px-4 py-4 pr-14 sm:px-5">
+              <SheetTitle className="text-base font-semibold">Rincian {detailOf.vehicle?.plateDisplay ?? "truk"}</SheetTitle>
+              <SheetDescription>{[detailOf.tripNo, detailOf.partner?.name].filter(Boolean).join(", ") || "Langkah dan hasil timbang"}</SheetDescription>
+            </SheetHeader>
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
+              <TripWorkPanel tripId={detailOf.id} user={user} onChanged={() => setReloadToken((token) => token + 1)} />
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : null}
       {sheet?.kind === "replace" ? (
         <ReplaceCardSheet
           trip={sheet.trip}

@@ -90,6 +90,16 @@ const modules = [
   ["gate", "Pos registrasi", ["VIEW", "CREATE", "EDIT"], false],
   ["rfid_cards", "Kartu RFID", ["VIEW", "CREATE", "EDIT"], false],
   ["users", "Pengguna dan hak akses", ["VIEW", "EDIT"], false],
+  // phase 4, switched on by migration 0005 (the dashboard stays off)
+  ["weighbridge", "Timbangan", ["VIEW", "CREATE", "EDIT"], false],
+  ["approvals", "Keputusan selisih dan plat", ["VIEW", "EDIT"], false],
+  ["qc", "QC", ["VIEW", "CREATE", "EDIT"], false],
+  ["qc_approvals", "Keputusan QC", ["VIEW", "EDIT"], false],
+  ["security_check", "Pemeriksaan security", ["VIEW", "CREATE", "EDIT"], false],
+  ["unloading", "Bongkar", ["VIEW", "CREATE", "EDIT"], false],
+  ["loading", "Muat", ["VIEW", "CREATE", "EDIT"], false],
+  ["sealing", "Segel", ["VIEW", "CREATE", "EDIT"], false],
+  ["reports", "Laporan", ["VIEW"], false],
 ].map(([code, name, levels, partnerAllowed]) => ({ code, name, levels, partnerAllowed }));
 
 const everything = () => Object.fromEntries(modules.map((item) => [item.code, item.levels.at(-1)]));
@@ -569,9 +579,10 @@ const settings = {
 };
 
 const flowSteps = {
-  IN_CPO: ["CHECK_IN", "SEAL_CHECK", "WEIGH_1", "QC", "UNLOADING", "WEIGH_2", "CHECK_OUT"],
-  IN_GOODS: ["CHECK_IN", "WEIGH_1", "UNLOADING", "WEIGH_2", "CHECK_OUT"],
-  OUT_BULK: ["CHECK_IN", "WEIGH_1", "LOADING", "SEAL", "WEIGH_2", "CHECK_OUT"],
+  // apps/api migrations/0002_seed.sql, flow_steps
+  IN_CPO: ["CHECK_IN", "SEAL_CHECK", "WEIGH_1", "QC", "UNLOADING", "TANK_CHECK", "RESEAL", "WEIGH_2", "CHECK_OUT"],
+  IN_GOODS: ["CHECK_IN", "WEIGH_1", "QC", "UNLOADING", "WEIGH_2", "CHECK_OUT"],
+  OUT_BULK: ["CHECK_IN", "WEIGH_1", "CLEANLINESS", "QC_LOADING", "LOADING", "SEALING", "WEIGH_2", "CHECK_OUT"],
 };
 
 // GET /api/quality-parameters: the active parameters with their plausible range.
@@ -1274,10 +1285,11 @@ function seedFlowSample() {
   const insideDrivers = ["d-5", "d-6", "d-8", "d-9", "d-10"];
   const plan = [
     ["upcoming", "IN", 3], ["upcoming", "OUT", 2],
+    ["SEAL_CHECK", "IN", 1],
     ["WEIGH_1", "IN", 2], ["WEIGH_1", "OUT", 1],
-    ["QC", "IN", 4],
-    ["UNLOADING", "IN", 6], ["LOADING", "OUT", 2],
-    ["SEAL", "OUT", 1],
+    ["QC", "IN", 3], ["CLEANLINESS", "OUT", 1],
+    ["UNLOADING", "IN", 5], ["TANK_CHECK", "IN", 1], ["LOADING", "OUT", 2],
+    ["SEALING", "OUT", 1],
     ["WEIGH_2", "IN", 2], ["WEIGH_2", "OUT", 1],
     ["CHECK_OUT", "IN", 1],
     ["done", "IN", 3], ["done", "OUT", 1],
@@ -1314,6 +1326,696 @@ function seedFlowSample() {
       }
     }
   }
+}
+
+// --- phase 4: stations, weighing, decisions, field steps, card return, reports -------
+// Shapes follow apps/api: stations/routes.ts, exceptions/routes.ts and decide.ts,
+// trips/work-routes.ts, gate/routes.ts (check-out), reports/routes.ts, weighing/view.ts.
+
+// Name and performing module of each step (migrations 0002 flow_steps and 0004 role_module).
+const STEP_INFO = {
+  IN_CPO: {
+    CHECK_IN: ["Scan SPJ dan ambil kartu", "gate"],
+    SEAL_CHECK: ["Cek segel", "security_check"],
+    WEIGH_1: ["Timbang 1 (bruto)", null],
+    QC: ["QC pass", "qc"],
+    UNLOADING: ["Bongkar", "unloading"],
+    TANK_CHECK: ["Cek tangki kosong", "security_check"],
+    RESEAL: ["Segel kembali (reject)", "sealing"],
+    WEIGH_2: ["Timbang 2 (tarra)", null],
+    CHECK_OUT: ["Kembalikan kartu", "gate"],
+  },
+  IN_GOODS: {
+    CHECK_IN: ["Scan SPJ dan ambil kartu", "gate"],
+    WEIGH_1: ["Timbang 1 (bruto)", null],
+    QC: ["QC barang", "qc"],
+    UNLOADING: ["Bongkar di gudang", "unloading"],
+    WEIGH_2: ["Timbang 2 (tarra)", null],
+    CHECK_OUT: ["Kembalikan kartu", "gate"],
+  },
+  OUT_BULK: {
+    CHECK_IN: ["Scan SPJ dan ambil kartu", "gate"],
+    WEIGH_1: ["Timbang 1 (tarra)", null],
+    CLEANLINESS: ["Cek kebersihan dan najis", "qc"],
+    QC_LOADING: ["QC loading", "qc"],
+    LOADING: ["Muat", "loading"],
+    SEALING: ["Segel (locis)", "sealing"],
+    WEIGH_2: ["Timbang 2 (bruto)", null],
+    CHECK_OUT: ["Kembalikan kartu", "gate"],
+  },
+};
+// on_reject = 'RUN' in the seed: these still run after a rejection
+const RUN_ON_REJECT = new Set(["RESEAL", "WEIGH_2", "CHECK_OUT"]);
+const OPTIONAL_STEPS = new Set(["RESEAL"]);
+
+const minutesAgo = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+/** The steps of a trip that stands at `at`: earlier ones done, `at` ready, later ones waiting. */
+function stepsAt(flowCode, at, startedMinutesAgo = 90) {
+  const codes = flowSteps[flowCode] ?? ["CHECK_IN"];
+  const index = codes.indexOf(at);
+  return codes.map((code, step) => {
+    const finished = step < index ? minutesAgo(startedMinutesAgo - step * 9) : null;
+    return {
+      code,
+      status: step < index ? "DONE" : step === index ? "READY" : "PENDING",
+      result: step < index ? "PASS" : null,
+      readyAt: step <= index ? minutesAgo(startedMinutesAgo - Math.max(step - 1, 0) * 9) : null,
+      finishedAt: finished,
+      performedBy: step < index && STEP_INFO[flowCode]?.[code]?.[1] ? "u-2" : null,
+      note: null,
+    };
+  });
+}
+
+function stepView(trip) {
+  const flowCode = registrationOf(trip).flowCode;
+  return (trip.steps ?? []).map((step, index) => {
+    const [name, performerModule] = STEP_INFO[flowCode]?.[step.code] ?? [step.code, null];
+    return {
+      stepCode: step.code,
+      name,
+      seq: index + 1,
+      attempt: step.attempt ?? 1,
+      status: step.status,
+      result: step.result ?? null,
+      performerModule,
+      isOptional: OPTIONAL_STEPS.has(step.code),
+      onReject: RUN_ON_REJECT.has(step.code) ? "RUN" : "SKIP",
+      readyAt: step.readyAt ?? null,
+      finishedAt: step.finishedAt ?? null,
+      performedBy: step.performedBy ?? null,
+      stationId: step.stationId ?? null,
+      note: step.note ?? null,
+    };
+  });
+}
+
+/** Marks the ready step done and makes the next one ready (the weighing or a field step). */
+function advanceTrip(trip, result = "PASS", note = null, by = null) {
+  const steps = trip.steps ?? [];
+  const at = steps.findIndex((step) => step.status === "READY" || step.status === "IN_PROGRESS");
+  if (at === -1) return;
+  Object.assign(steps[at], { status: "DONE", result, finishedAt: nowIso(), note, performedBy: by });
+  const next = steps[at + 1];
+  if (next) Object.assign(next, { status: "READY", readyAt: nowIso() });
+  trip.currentStep = next ? next.code : null;
+  trip.status = "IN_PROCESS";
+}
+
+/** A field step rejected: the trip carries the outcome, steps that do not run on rejection are skipped. */
+function rejectTripAt(trip, step, note, by) {
+  Object.assign(step, { status: "FAILED", result: "FAIL", finishedAt: nowIso(), note, performedBy: by });
+  trip.outcome = { SEAL_CHECK: "REJECTED_SEAL", CLEANLINESS: "REJECTED_CLEANLINESS", QC: "REJECTED_QC", QC_LOADING: "REJECTED_QC" }[step.code] ?? "REJECTED";
+  const steps = trip.steps;
+  let readied = false;
+  for (const later of steps.slice(steps.indexOf(step) + 1)) {
+    if (!RUN_ON_REJECT.has(later.code)) later.status = "SKIPPED";
+    else if (!readied) {
+      Object.assign(later, { status: "READY", readyAt: nowIso() });
+      readied = true;
+      trip.currentStep = later.code;
+    }
+  }
+}
+
+function allocationShares(trip) {
+  const registration = registrationOf(trip);
+  return (registration.allocations ?? []).map((allocation) => {
+    const contract = contracts.find((item) => item.id === allocation.contractId) ?? null;
+    const order = deliveryOrders.find((item) => item.id === allocation.deliveryOrderId) ?? null;
+    const line = (trip.allocations ?? []).find((item) => item.seq === allocation.seq) ?? {};
+    const share = (trip.shares ?? []).find((item) => item.seq === allocation.seq) ?? {};
+    return {
+      seq: allocation.seq,
+      contractNo: contract?.contractNo ?? contracts.find((item) => item.id === order?.contractId)?.contractNo ?? "-",
+      doNo: order?.doNo ?? null,
+      uom: (order?.uom ?? contract?.uom ?? "kg").toLowerCase() === "kg" ? "kg" : (order?.uom ?? contract?.uom),
+      qtyPlanned: line.qtyPlanned ?? null,
+      originNetKg: line.originNetKg ?? null,
+      netKg: share.netKg ?? null,
+      qtyActual: share.qtyActual ?? null,
+      splitMethod: share.splitMethod ?? null,
+    };
+  });
+}
+
+function weighTrip(trip) {
+  const registration = registrationOf(trip);
+  const vehicleRow = vehicleOf(trip);
+  return {
+    id: trip.id,
+    tripNo: trip.tripNo,
+    status: trip.status,
+    outcome: trip.outcome ?? null,
+    direction: registration.direction,
+    flowCode: registration.flowCode,
+    currentStep: trip.currentStep,
+    plateNo: vehicleRow?.plateNo ?? null,
+    plateDisplay: vehicleRow?.plateDisplay ?? null,
+    driverName: driverOf(trip)?.fullName ?? null,
+    partner: ref(registration.partner),
+    transporter: ref(findPartner(registration.transporterId)),
+    qtyPlanned: trip.qtyPlanned,
+    docGrossKg: trip.docGrossKg ?? null,
+    docTareKg: trip.docTareKg ?? null,
+    docNetKg: trip.docNetKg ?? null,
+    grossKg: trip.grossKg ?? null,
+    tareKg: trip.tareKg ?? null,
+    netKg: trip.netKg ?? null,
+    allocations: allocationShares(trip),
+  };
+}
+
+let nextWeighingId = 1;
+/** Saves a weighing on the trip; the second one sets the net and splits it over the allocations. */
+function saveWeighing(trip, { stage, weightKg, mode = "AUTO", plateRead, plateCheck = "MATCH", stationId = "st-1", at = nowIso() }) {
+  const direction = registrationOf(trip).direction;
+  const kind = (direction === "IN") === (stage === 1) ? "GROSS" : "TARE";
+  const weighing = { id: `w-${nextWeighingId++}`, stage, kind, weightKg, weighedAt: at, mode, plateRead: plateRead ?? vehicleOf(trip)?.plateNo ?? null, plateCheck, stationId, status: "VALID" };
+  trip.weighings = [...(trip.weighings ?? []), weighing];
+  if (kind === "GROSS") trip.grossKg = weightKg;
+  else trip.tareKg = weightKg;
+  if (stage === 2 && trip.grossKg !== undefined && trip.tareKg !== undefined) {
+    trip.netKg = trip.grossKg - trip.tareKg;
+    const lines = registrationOf(trip).allocations;
+    if (lines.length === 1) trip.shares = [{ seq: lines[0].seq, netKg: trip.netKg, qtyActual: trip.netKg, splitMethod: "SINGLE" }];
+    else {
+      // proportional to the origin net of each letter, the rounding rest to the last
+      const origins = lines.map((line) => (trip.allocations ?? []).find((item) => item.seq === line.seq)?.originNetKg ?? 1);
+      const total = origins.reduce((sum, value) => sum + value, 0);
+      let given = 0;
+      trip.shares = lines.map((line, index) => {
+        const netKg = index === lines.length - 1 ? trip.netKg - given : Math.round((trip.netKg * origins[index]) / total);
+        given += netKg;
+        return { seq: line.seq, netKg, qtyActual: netKg, splitMethod: "PROPORTIONAL" };
+      });
+    }
+  }
+  return weighing;
+}
+
+// stations
+let nextStationId = 1;
+const stations = [];
+function addStation(fields) {
+  const station = { id: `st-${nextStationId++}`, zoneId: null, config: {}, isActive: true, hasKey: false, keyCreatedAt: null, hasPin: false, ...fields };
+  stations.push(station);
+  return station;
+}
+addStation({ code: "WB-1", name: "Timbangan 1", kind: "WEIGHBRIDGE", config: { directions: ["IN", "OUT"], cameraWeigh1: 1, cameraWeigh2: 2, plateAttempts: 3 }, hasKey: true, keyCreatedAt: daysAgoIso(3), hasPin: true });
+addStation({ code: "WB-2", name: "Timbangan 2", kind: "WEIGHBRIDGE", config: { directions: ["OUT"], cameraWeigh1: 3, cameraWeigh2: 4, plateAttempts: 3 } });
+addStation({ code: "POS-1", name: "Pos registrasi", kind: "GATE", config: {} });
+
+// exceptions
+let nextExceptionId = 1;
+const exceptions = [];
+function raiseException(trip, fields) {
+  const row = {
+    id: `x-${nextExceptionId++}`,
+    tripId: trip.id,
+    status: "PENDING",
+    decisionCode: null,
+    stationId: "st-1",
+    stage: 1,
+    expectedValue: null,
+    actualValue: null,
+    diffValue: null,
+    diffPct: null,
+    tolerancePct: null,
+    liveWeightKg: null,
+    liveWeightAt: nowIso(),
+    plateRead: vehicleOf(trip)?.plateNo ?? null,
+    approverModule: "approvals",
+    raisedAt: nowIso(),
+    decidedAt: null,
+    decidedBy: null,
+    reason: null,
+    reportNo: null,
+    weighingId: null,
+    context: {},
+    ...fields,
+  };
+  exceptions.push(row);
+  return row;
+}
+
+const EXCEPTION_DECISION = { APPROVED: (row) => (row.type === "NET_OUT" ? "OK" : "APPROVE"), REJECTED: () => "REJECT", RETRY: (row) => row.decisionCode };
+
+function exceptionView(row) {
+  const trip = trips.find((item) => item.id === row.tripId);
+  const vehicleRow = trip ? vehicleOf(trip) : null;
+  const station = stations.find((item) => item.id === row.stationId) ?? null;
+  const decider = users.find((item) => item.id === row.decidedBy) ?? null;
+  return {
+    id: row.id,
+    type: row.type,
+    status: row.status,
+    decision: EXCEPTION_DECISION[row.status]?.(row) ?? null,
+    trip: { id: row.tripId, tripNo: trip?.tripNo ?? null, plateNo: vehicleRow?.plateNo ?? null, plateDisplay: vehicleRow?.plateDisplay ?? null },
+    station: station ? { id: station.id, code: station.code, name: station.name } : null,
+    stage: row.stage,
+    expectedValue: row.expectedValue,
+    actualValue: row.actualValue,
+    diffValue: row.diffValue,
+    diffPct: row.diffPct,
+    tolerancePct: row.tolerancePct,
+    liveWeightKg: row.liveWeightKg,
+    liveWeightAt: row.liveWeightAt,
+    plateRead: row.plateRead,
+    plateNo: vehicleRow?.plateNo ?? null,
+    approverModule: row.approverModule,
+    raisedAt: row.raisedAt,
+    decidedAt: row.decidedAt,
+    decidedBy: decider ? { id: decider.id, fullName: decider.fullName } : null,
+    reason: row.reason,
+    reportNo: row.reportNo,
+    weighingId: row.weighingId,
+    context: row.context,
+  };
+}
+
+/** Trucks inside the plant at the steps of phase 4. Left out by MOCK_FLOW=empty. Invented like the rest. */
+function seedWeighingSample() {
+  const seed = (vehicleId, driverId, direction, at, extra = {}) => {
+    const before = registrations.length;
+    seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId, driverId, contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: plantDate().iso, issuedDaysAgo: 0 });
+    const registration = registrations[before];
+    if (direction === "OUT") Object.assign(registration, { direction: "OUT", flowCode: "OUT_BULK" });
+    const [trip] = tripsOf(registration);
+    const { year, month, day, iso } = plantDate();
+    Object.assign(trip, {
+      status: at === "WEIGH_1" ? "CHECKED_IN" : "IN_PROCESS",
+      checkedInAt: minutesAgo(95),
+      tripNo: `${year}${month}${day}-${String(nextNumber(`TRIP|${iso}`)).padStart(4, "0")}`,
+      currentStep: at,
+      steps: stepsAt(registration.flowCode, at),
+      weighings: [],
+      outcome: null,
+      ...extra,
+    });
+    return { trip, registration };
+  };
+
+  // GROSS_IN: the scale reads more than the letter allows
+  const first = seed("v-3", "d-8", "IN", "WEIGH_1");
+  raiseException(first.trip, {
+    type: "GROSS_IN",
+    expectedValue: first.trip.docGrossKg ?? 34000,
+    actualValue: 34650,
+    diffValue: 34650 - (first.trip.docGrossKg ?? 34000),
+    diffPct: Math.round(((34650 - (first.trip.docGrossKg ?? 34000)) / (first.trip.docGrossKg ?? 34000)) * 1e6) / 1e4,
+    tolerancePct: 0.25,
+    liveWeightKg: 34650,
+    raisedAt: minutesAgo(4),
+  });
+
+  // TARE_OUT: an outgoing truck's empty weight differs from its master tare
+  const second = seed("v-5", "d-9", "OUT", "WEIGH_1");
+  raiseException(second.trip, {
+    type: "TARE_OUT",
+    expectedValue: 9000,
+    actualValue: 9420,
+    diffValue: 420,
+    diffPct: 4.6667,
+    tolerancePct: 2,
+    liveWeightKg: 9420,
+    raisedAt: minutesAgo(1),
+    context: { masterTareKg: 9000, vehicleVerified: true },
+  });
+
+  // PLATE: the camera read another plate at the second weighing
+  const third = seed("v-2", "d-5", "OUT", "WEIGH_2");
+  saveWeighing(third.trip, { stage: 1, weightKg: 9100, at: minutesAgo(70) });
+  raiseException(third.trip, { type: "PLATE", stage: 2, plateRead: "ZZ0002CTN", liveWeightKg: 38960, raisedAt: minutesAgo(0.5) });
+
+  // waiting at the exit with two contracts, so the net is split; holds card 05
+  const fourth = seed("v-4", "d-10", "IN", "CHECK_OUT");
+  const extra = contracts.find((item) => item.contractNo === "0124/CONTOH/CPO/XI/2026");
+  fourth.registration.allocations.push({ seq: 2, contractId: extra.id, deliveryOrderId: null, qtyPlanned: null });
+  fourth.trip.allocations = [
+    { ...(fourth.trip.allocations?.[0] ?? {}), seq: 1, originNetKg: 15000 },
+    { ...(fourth.trip.allocations?.[0] ?? {}), seq: 2, originNetKg: 9000, spbNo: "SPB-CONTOH-02" },
+  ];
+  saveWeighing(fourth.trip, { stage: 1, weightKg: 33980, at: minutesAgo(60) });
+  saveWeighing(fourth.trip, { stage: 2, weightKg: 9960, at: minutesAgo(12) });
+  const exception = raiseException(fourth.trip, {
+    type: "NET_IN",
+    stage: 2,
+    status: "APPROVED",
+    expectedValue: 24000,
+    actualValue: 24020,
+    diffValue: 20,
+    diffPct: 0.0833,
+    tolerancePct: 0.05,
+    liveWeightKg: 9960,
+    raisedAt: minutesAgo(14),
+    decidedAt: minutesAgo(12),
+    decidedBy: "u-1",
+    reason: "Selisih kecil, sesuai surat (contoh)",
+    reportNo: `0001/BA-SELISIH-NETTO/${SITE.code}/${ROMAN[Number(plantDate().month) - 1]}/${plantDate().year}`,
+  });
+  exception.weighingId = fourth.trip.weighings[1].id;
+  bindCard(fourth.trip, rfidCards.find((card) => card.uid === "04A1B2C305"));
+
+  // a field step ready for the temporary buttons
+  seed("v-3", "d-6", "IN", "QC");
+}
+if (process.env.MOCK_FLOW !== "empty") seedWeighingSample();
+
+// station form checks of apps/api stations/routes.ts
+const STATION_KINDS = ["REGISTRATION", "GATE", "WEIGHBRIDGE", "QC", "STAGING", "UNLOADING_BAY", "LOADING_BAY", "DOCK", "SEALING"];
+function checkStation(body, current) {
+  const fields = {};
+  const next = {};
+  const has = (name) => !current || name in body;
+  if (has("code")) {
+    const code = String(body.code ?? "").trim().toUpperCase();
+    if (!code) fields.code = "Kode wajib diisi.";
+    else if (code.length > 30) fields.code = "Kode terlalu panjang.";
+    else next.code = code;
+  }
+  if (has("name")) {
+    const name = String(body.name ?? "").trim();
+    if (!name) fields.name = "Nama wajib diisi.";
+    else if (name.length > 100) fields.name = "Nama terlalu panjang.";
+    else next.name = name;
+  }
+  if (has("kind")) {
+    if (!STATION_KINDS.includes(body.kind)) fields.kind = `Jenis harus salah satu dari ${STATION_KINDS.join(", ")}.`;
+    else next.kind = body.kind;
+  }
+  if ("zoneId" in body) {
+    if (body.zoneId === null) next.zoneId = null;
+    else if (!Number.isInteger(body.zoneId) || body.zoneId <= 0) fields.zoneId = "Zona harus angka.";
+    else fields.zoneId = "Zona tidak ditemukan.";
+  }
+  if ("isActive" in body) {
+    if (typeof body.isActive !== "boolean") fields.isActive = "isActive harus true atau false.";
+    else next.isActive = body.isActive;
+  }
+  if ("pin" in body && !(current && body.pin === null)) {
+    if (!/^\d{4,8}$/.test(String(body.pin ?? ""))) fields.pin = "PIN harus 4 sampai 8 angka.";
+  }
+  const kind = next.kind ?? current?.kind;
+  if (kind === "WEIGHBRIDGE" && (body.config !== undefined || !current || next.kind)) {
+    const config = body.config ?? current?.config ?? {};
+    const directions = Array.isArray(config.directions) ? [...new Set(config.directions)] : null;
+    if (!directions || directions.length === 0) fields["config.directions"] = "Pilih minimal satu arah.";
+    else if (directions.some((item) => item !== "IN" && item !== "OUT")) fields["config.directions"] = "Arah harus IN atau OUT.";
+    const camera = (value, field) => {
+      if (value === null || value === undefined) return null;
+      if (!Number.isInteger(value) || value < 1 || value > 99) fields[`config.${field}`] = "Nomor kamera harus angka bulat.";
+      return value;
+    };
+    const attempts = config.plateAttempts ?? 3;
+    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 10) fields["config.plateAttempts"] = "Jumlah percobaan plat 1 sampai 10.";
+    next.config = { directions: directions ?? [], cameraWeigh1: camera(config.cameraWeigh1, "cameraWeigh1"), cameraWeigh2: camera(config.cameraWeigh2, "cameraWeigh2"), plateAttempts: attempts };
+  } else if (body.config !== undefined) {
+    next.config = body.config ?? {};
+  }
+  return { fields, next };
+}
+
+const DIFFERENCE_TYPES = ["GROSS_IN", "TARE_OUT", "NET_IN"];
+const REPORT_KIND = { GROSS_IN: "SELISIH-BRUTO", TARE_OUT: "SELISIH-TARRA", NET_IN: "SELISIH-NETTO" };
+
+const csvCell = (value) => (value === null || value === undefined ? "" : typeof value === "number" ? String(value) : `"${String(value).replaceAll('"', '""')}"`);
+function sendCsv(request, response, fileName, header, rows) {
+  const text = [header.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n");
+  response.writeHead(200, {
+    ...corsHeaders(request),
+    "content-type": "text/csv; charset=utf-8",
+    "content-disposition": `attachment; filename="${fileName}"`,
+    "access-control-expose-headers": "content-disposition",
+  });
+  response.end(`﻿${text}\r\n`);
+  return 200;
+}
+
+const inPeriod = (iso, from, to) => {
+  if (!iso) return false;
+  const day = plantDate(new Date(iso)).iso;
+  return (!from || day >= from) && (!to || day <= to);
+};
+
+function phaseFourRoutes() {
+  const stationEditors = (request, response) => guard(request, response, [["weighbridge", "EDIT"]], { staffOnly: true });
+  const findStation = (id) => stations.find((item) => item.id === id);
+
+  return {
+    // --- stations (weighbridge EDIT)
+    "GET /api/stations": (request, response) => {
+      if (!stationEditors(request, response)) return 0;
+      return send(request, response, 200, { items: [...stations].sort((a, b) => a.code.localeCompare(b.code)) });
+    },
+
+    "POST /api/stations": async (request, response) => {
+      if (!stationEditors(request, response)) return 0;
+      const body = await readJson(request);
+      const { fields, next } = checkStation(body, null);
+      if (Object.keys(fields).length > 0) return invalid(request, response, fields);
+      if (stations.some((item) => item.code === next.code)) return fail(request, response, 409, "DUPLICATE", "Kode stasiun sudah dipakai.");
+      const station = addStation({ ...next, config: next.config ?? {}, hasPin: Boolean(body.pin) });
+      return send(request, response, 201, { station });
+    },
+
+    "PATCH /api/stations/:id": async (request, response, url, id) => {
+      if (!stationEditors(request, response)) return 0;
+      const station = findStation(id);
+      if (!station) return fail(request, response, 404, "NOT_FOUND", "Stasiun tidak ditemukan.");
+      const body = await readJson(request);
+      const { fields, next } = checkStation(body, station);
+      if (Object.keys(fields).length > 0) return invalid(request, response, fields);
+      if (next.code && stations.some((item) => item.id !== id && item.code === next.code)) return fail(request, response, 409, "DUPLICATE", "Kode stasiun sudah dipakai.");
+      Object.assign(station, next);
+      if ("pin" in body) station.hasPin = body.pin !== null;
+      return send(request, response, 200, { station });
+    },
+
+    "POST /api/stations/:id/key": (request, response, url, id) => {
+      if (!stationEditors(request, response)) return 0;
+      const station = findStation(id);
+      if (!station) return fail(request, response, 404, "NOT_FOUND", "Stasiun tidak ditemukan.");
+      Object.assign(station, { hasKey: true, keyCreatedAt: nowIso() });
+      // a made-up key for the mock; the API keeps only a hash of the real one
+      const key = `mock_${station.id}_${Array.from({ length: 32 }, () => "0123456789abcdef"[randomInt(16)]).join("")}`;
+      return send(request, response, 200, { station, key });
+    },
+
+    // --- requests for a decision (approvals)
+    "GET /api/exceptions": (request, response, url) => {
+      if (!guard(request, response, [["approvals", "VIEW"]], { staffOnly: true })) return 0;
+      const list = (name) => (url.searchParams.get(name) ?? "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
+      const statuses = list("status");
+      const types = list("type");
+      const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 50);
+      const items = exceptions
+        .filter((row) => (!statuses.length || statuses.includes(row.status)) && (!types.length || types.includes(row.type)))
+        .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))
+        .slice(0, limit)
+        .map(exceptionView);
+      return send(request, response, 200, { items });
+    },
+
+    "GET /api/exceptions/:id": (request, response, url, id) => {
+      if (!guard(request, response, [["approvals", "VIEW"]], { staffOnly: true })) return 0;
+      const row = exceptions.find((item) => item.id === id);
+      if (!row) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
+      return send(request, response, 200, { exception: exceptionView(row) });
+    },
+
+    "POST /api/exceptions/:id/decide": async (request, response, url, id) => {
+      const user = guard(request, response, [["approvals", "EDIT"]], { staffOnly: true });
+      if (!user) return 0;
+      const row = exceptions.find((item) => item.id === id);
+      if (!row) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
+      const body = await readJson(request);
+      const fields = {};
+      const netOut = row.type === "NET_OUT";
+      const allowed = netOut ? ["OK", "ADD_LOAD", "REDUCE_LOAD"] : ["APPROVE", "REJECT"];
+      if (!allowed.includes(body.decision)) fields.decision = netOut ? "Keputusan harus OK, ADD_LOAD, atau REDUCE_LOAD." : "Keputusan harus APPROVE atau REJECT.";
+      const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+      if (DIFFERENCE_TYPES.includes(row.type) && reason.length < 3) fields.reason = "Alasan wajib diisi, minimal 3 huruf.";
+      if (body.updateMasterTare && !(row.type === "TARE_OUT" && body.decision === "APPROVE")) fields.updateMasterTare = "Tarra master hanya bisa diganti pada selisih tarra yang disetujui.";
+      if (Object.keys(fields).length > 0) return invalid(request, response, fields);
+      if (row.status === "CANCELLED" || row.status === "EXPIRED") return fail(request, response, 409, "EXCEPTION_CANCELLED", "Permintaan ini sudah dibatalkan.");
+      if (row.status !== "PENDING") return fail(request, response, 409, "ALREADY_DECIDED", "Permintaan ini sudah diputuskan.");
+      const trip = trips.find((item) => item.id === row.tripId);
+      Object.assign(row, { decidedBy: user.id, decidedAt: nowIso(), reason: reason || null });
+      let weighing = null;
+      if (body.decision === "REJECT") row.status = "REJECTED";
+      else if (body.decision === "ADD_LOAD" || body.decision === "REDUCE_LOAD") Object.assign(row, { status: "RETRY", decisionCode: body.decision });
+      else {
+        row.status = "APPROVED";
+        if (netOut) row.decisionCode = "OK";
+        const kind = REPORT_KIND[row.type];
+        if (kind) {
+          const { year, month } = plantDate();
+          row.reportNo = `${String(nextNumber(`BA|${kind}|${year}`)).padStart(4, "0")}/BA-${kind}/${SITE.code}/${ROMAN[Number(month) - 1]}/${year}`;
+        }
+        weighing = saveWeighing(trip, { stage: row.stage, weightKg: row.liveWeightKg, mode: "EXCEPTION", plateRead: row.plateRead, plateCheck: row.type === "PLATE" ? "CONFIRMED" : "MATCH", stationId: row.stationId });
+        row.weighingId = weighing.id;
+        advanceTrip(trip, "PASS", null, null);
+        if (body.updateMasterTare) {
+          const vehicleRow = vehicleOf(trip);
+          if (vehicleRow) vehicleRow.tareKg = row.liveWeightKg;
+          row.context = { ...row.context, masterTareUpdated: true };
+        }
+      }
+      return send(request, response, 200, { exception: exceptionView(row), weighing, next: null });
+    },
+
+    // --- the steps of a trip (staff), and the temporary completion of a field step
+    "GET /api/trips/:id/steps": (request, response, url, id) => {
+      if (!guard(request, response, [], { staffOnly: true })) return 0;
+      const trip = trips.find((item) => item.id === id);
+      if (!trip) return fail(request, response, 404, "NOT_FOUND", "Trip tidak ditemukan.");
+      return send(request, response, 200, { trip: weighTrip(trip), steps: stepView(trip), weighings: trip.weighings ?? [] });
+    },
+
+    "POST /api/trips/:id/steps/:stepCode/complete": async (request, response, url, id, stepCode) => {
+      const user = guard(request, response, [], { staffOnly: true });
+      if (!user) return 0;
+      const trip = trips.find((item) => item.id === id);
+      if (!trip) return fail(request, response, 404, "NOT_FOUND", "Trip tidak ditemukan.");
+      const code = String(stepCode ?? "").toUpperCase();
+      const step = (trip.steps ?? []).find((item) => item.code === code);
+      if (!step) return fail(request, response, 404, "NOT_FOUND", "Langkah tidak ditemukan.");
+      const body = await readJson(request);
+      if (!["PASS", "FAIL"].includes(body.result)) return invalid(request, response, { result: "Hasil harus PASS atau FAIL." });
+      if (code === "WEIGH_1" || code === "WEIGH_2") return fail(request, response, 409, "STEP_AT_WEIGHBRIDGE", "Langkah timbang dikerjakan di timbangan.");
+      if (code === "CHECK_OUT") return fail(request, response, 409, "USE_CHECK_OUT", "Kartu dikembalikan lewat pos registrasi.");
+      const performer = STEP_INFO[registrationOf(trip).flowCode]?.[code]?.[1] ?? null;
+      if (!performer || !can(user, performer, "CREATE")) return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+      if (step.status !== "READY" && step.status !== "IN_PROGRESS") return fail(request, response, 409, "NOT_READY", "Langkah ini belum siap atau sudah selesai.");
+      const note = typeof body.note === "string" && body.note.trim() ? body.note.trim() : null;
+      if (Array.isArray(body.qtyActual)) {
+        for (const line of body.qtyActual) {
+          const share = (trip.shares ??= []).find((item) => item.seq === line.seq);
+          if (share) share.qtyActual = line.qty;
+          else trip.shares.push({ seq: line.seq, netKg: null, qtyActual: line.qty, splitMethod: null });
+        }
+      }
+      if (body.result === "PASS") advanceTrip(trip, "PASS", note, user.id);
+      else rejectTripAt(trip, step, note, user.id);
+      return send(request, response, 200, { trip: weighTrip(trip), steps: stepView(trip) });
+    },
+
+    // --- the card comes back at the post once the exit step is ready
+    "POST /api/gate/check-out": async (request, response) => {
+      if (!guard(request, response, [["gate", "CREATE"]])) return 0;
+      const body = await readJson(request);
+      const uid = normalizeUid(body.cardUid);
+      if (!/^[0-9A-F]{8,20}$/.test(uid)) return invalid(request, response, { cardUid: "UID kartu harus 8 sampai 20 digit heksadesimal." });
+      const card = rfidCards.find((item) => item.uid === uid);
+      if (!card) return fail(request, response, 409, "CARD_UNKNOWN", GATE_MESSAGES.CARD_UNKNOWN);
+      const trip = card.tripId ? trips.find((item) => item.id === card.tripId) : null;
+      if (!trip) return fail(request, response, 409, "CARD_NOT_IN_USE", "Kartu ini tidak sedang dipakai truk.");
+      const ready = (trip.steps ?? []).find((step) => step.status === "READY" || step.status === "IN_PROGRESS");
+      if (!INSIDE.includes(trip.status) || ready?.code !== "CHECK_OUT") {
+        const name = ready ? (STEP_INFO[registrationOf(trip).flowCode]?.[ready.code]?.[0] ?? ready.code) : null;
+        return fail(request, response, 409, "NOT_READY", `Truk belum sampai langkah keluar.${name ? ` Langkah sekarang: ${name}.` : ""}`);
+      }
+      Object.assign(ready, { status: "DONE", result: "PASS", finishedAt: nowIso() });
+      releaseCard(trip, "CHECK_OUT");
+      const outcome = trip.outcome ?? "OK";
+      Object.assign(trip, { status: outcome === "OK" ? "COMPLETED" : "REJECTED", outcome, currentStep: null, exitedAt: nowIso() });
+      return send(request, response, 200, { trip: publicTrip(trip) });
+    },
+
+    // --- reports (reports VIEW)
+    "GET /api/reports/contracts": (request, response, url) => {
+      if (!guard(request, response, [["reports", "VIEW"]], { staffOnly: true })) return 0;
+      const from = url.searchParams.get("from") ?? "";
+      const to = url.searchParams.get("to") ?? "";
+      if (from && to && from > to) return invalid(request, response, { to: "Tanggal akhir tidak boleh sebelum tanggal awal." });
+      const direction = url.searchParams.get("direction") ?? "";
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const items = contracts
+        .filter((row) => (!direction || row.direction === direction) && (!q || includesText(row.contractNo, q) || includesText(row.partner.name, q)))
+        .map((row) => {
+          const own = trips.filter((trip) => ["COMPLETED", "CHECKED_IN", "IN_PROCESS"].includes(trip.status) && allocationShares(trip).some((line) => line.contractNo === row.contractNo));
+          const shareOf = (trip) => allocationShares(trip).find((line) => line.contractNo === row.contractNo);
+          const completed = own.filter((trip) => trip.status === "COMPLETED");
+          const realisedTotal = completed.reduce((sum, trip) => sum + Number(shareOf(trip)?.qtyActual ?? shareOf(trip)?.netKg ?? 0), 0);
+          const inside = completed.filter((trip) => !from && !to ? true : inPeriod(trip.exitedAt, from, to));
+          const qtyContract = row.qtyContract === null ? null : Number(row.qtyContract);
+          return {
+            contractId: row.id,
+            contractNo: row.contractNo,
+            direction: row.direction,
+            partner: row.partner.name,
+            product: row.product.name,
+            uom: row.uom,
+            state: row.state,
+            qtyContract,
+            qtyOpening: 0,
+            realised: inside.reduce((sum, trip) => sum + Number(shareOf(trip)?.qtyActual ?? shareOf(trip)?.netKg ?? 0), 0),
+            realisedTotal,
+            inProgress: own.filter((trip) => trip.status !== "COMPLETED").reduce((sum, trip) => sum + Number(shareOf(trip)?.qtyPlanned ?? 0), 0),
+            remaining: qtyContract === null ? null : qtyContract - realisedTotal,
+            tripCount: new Set(inside.map((trip) => trip.id)).size,
+          };
+        });
+      if (url.searchParams.get("format") === "csv") {
+        return sendCsv(
+          request,
+          response,
+          "realisasi-kontrak.csv",
+          ["Nomor kontrak", "Arah", "Partner", "Produk", "Satuan", "Kuantitas kontrak", "Pembukaan", "Realisasi periode", "Realisasi total", "Sedang berjalan", "Sisa", "Jumlah truk"],
+          items.map((row) => [row.contractNo, row.direction, row.partner, row.product, row.uom, row.qtyContract, row.qtyOpening, row.realised, row.realisedTotal, row.inProgress, row.remaining, row.tripCount]),
+        );
+      }
+      return send(request, response, 200, { items });
+    },
+
+    "GET /api/reports/trips": (request, response, url) => {
+      if (!guard(request, response, [["reports", "VIEW"]], { staffOnly: true })) return 0;
+      const from = url.searchParams.get("from") ?? "";
+      const to = url.searchParams.get("to") ?? "";
+      if (from && to && from > to) return invalid(request, response, { to: "Tanggal akhir tidak boleh sebelum tanggal awal." });
+      const direction = url.searchParams.get("direction") ?? "";
+      const items = trips
+        .filter((trip) => (trip.weighings ?? []).some((weighing) => weighing.stage === 1))
+        .filter((trip) => !direction || registrationOf(trip).direction === direction)
+        .filter((trip) => inPeriod(trip.weighings.find((weighing) => weighing.stage === 1).weighedAt, from, to))
+        .flatMap((trip) => {
+          const first = trip.weighings.find((weighing) => weighing.stage === 1);
+          const second = trip.weighings.find((weighing) => weighing.stage === 2) ?? null;
+          return allocationShares(trip).map((line) => ({
+            tripId: trip.id,
+            tripNo: trip.tripNo,
+            status: trip.status,
+            outcome: trip.outcome ?? null,
+            direction: registrationOf(trip).direction,
+            plateNo: vehicleOf(trip)?.plateNo ?? null,
+            seq: line.seq,
+            contractNo: line.contractNo,
+            doNo: line.doNo,
+            uom: line.uom,
+            grossKg: trip.grossKg ?? null,
+            tareKg: trip.tareKg ?? null,
+            truckNetKg: trip.netKg ?? null,
+            shareNetKg: line.netKg,
+            qtyActual: line.qtyActual,
+            splitMethod: line.splitMethod,
+            weigh1At: first.weighedAt,
+            weigh2At: second?.weighedAt ?? null,
+          }));
+        });
+      if (url.searchParams.get("format") === "csv") {
+        return sendCsv(
+          request,
+          response,
+          "timbang-per-truk.csv",
+          ["Nomor trip", "Status", "Hasil", "Arah", "Plat", "Urutan", "Nomor kontrak", "Nomor DO", "Satuan", "Bruto", "Tarra", "Netto truk", "Bagian netto", "Realisasi", "Cara bagi", "Timbang 1", "Timbang 2"],
+          items.map((row) => [row.tripNo, row.status, row.outcome, row.direction, row.plateNo, row.seq, row.contractNo, row.doNo, row.uom, row.grossKg, row.tareKg, row.truckNetKg, row.shareNetKg, row.qtyActual, row.splitMethod, row.weigh1At, row.weigh2At]),
+        );
+      }
+      return send(request, response, 200, { items });
+    },
+  };
 }
 
 const GATE_MESSAGES = {
@@ -2221,6 +2923,27 @@ const routes = {
 
   // --- trips and SPJ --------------------------------------------------------------
 
+  // staff only, like the list; counts by stage for the truck flow on Beranda
+  "GET /api/trips/flow": (request, response) => {
+    if (!guard(request, response, [["gate", "VIEW"], ["registrations", "VIEW"]], { staffOnly: true })) return 0;
+    const today = plantDate().iso;
+    const all = trips.map(refreshTrip);
+    const split = (list) => ({
+      in: list.filter((trip) => registrationOf(trip).direction === "IN").length,
+      out: list.filter((trip) => registrationOf(trip).direction === "OUT").length,
+    });
+    const expected = all.filter((trip) => ["ISSUED", "EXPIRED"].includes(trip.status) && (trip.plannedArrival ?? registrationOf(trip).plannedDate) === today);
+    const insideNow = all.filter((trip) => INSIDE.includes(trip.status));
+    const steps = [...new Set(insideNow.map((trip) => trip.currentStep ?? null))];
+    const finished = all.filter((trip) => trip.status === "COMPLETED" && trip.checkedInAt !== null && plantDate(new Date(trip.checkedInAt)).iso === today);
+    return send(request, response, 200, {
+      date: today,
+      upcoming: split(expected),
+      inside: steps.map((stepCode) => ({ stepCode, ...split(insideNow.filter((trip) => (trip.currentStep ?? null) === stepCode)) })),
+      finishedToday: split(finished),
+    });
+  },
+
   // staff only: the list is not limited to a company
   "GET /api/trips": (request, response, url) => {
     if (!guard(request, response, [["gate", "VIEW"], ["registrations", "VIEW"]], { staffOnly: true })) return 0;
@@ -2425,12 +3148,17 @@ const routes = {
   "GET /__mock/stats": (request, response) => send(request, response, 200, { requests: stats }),
 };
 
-/** Routes written with ":id" match one path segment in that place. */
+Object.assign(routes, phaseFourRoutes());
+
+/**
+ * Routes written with ":id" match one path segment in that place; a second
+ * parameter (":stepCode") reaches the handler as its fifth argument.
+ */
 const idRoutes = Object.entries(routes)
   .filter(([key]) => key.includes(":id"))
   .map(([key, handler]) => {
     const [method, path] = key.split(" ");
-    return { key, method, handler, pattern: new RegExp(`^${path.replace(":id", "([^/]+)")}$`) };
+    return { key, method, handler, pattern: new RegExp(`^${path.replace(/:[A-Za-z]+/g, "([^/]+)")}$`) };
   });
 
 const server = createServer(async (request, response) => {
@@ -2443,18 +3171,21 @@ const server = createServer(async (request, response) => {
   let key = `${request.method} ${url.pathname}`;
   let handler = routes[key];
   let id;
+  let second;
   if (!handler) {
     const match = idRoutes.find((route) => route.method === request.method && route.pattern.test(url.pathname));
     if (match) {
       key = match.key;
       handler = match.handler;
-      id = decodeURIComponent(match.pattern.exec(url.pathname)[1]);
+      const groups = match.pattern.exec(url.pathname);
+      id = decodeURIComponent(groups[1]);
+      second = groups[2] === undefined ? undefined : decodeURIComponent(groups[2]);
     }
   }
   let status;
   try {
     status = handler
-      ? await handler(request, response, url, id)
+      ? await handler(request, response, url, id, second)
       : fail(request, response, 404, "NOT_FOUND", "No such route in the mock");
   } catch (error) {
     console.error(error);

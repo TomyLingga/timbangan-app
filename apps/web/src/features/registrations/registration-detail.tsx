@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft, CircleCheck, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, CircleCheck, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
 import { FindingsList } from "@/components/findings-list";
@@ -12,10 +12,11 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { DIRECTION_LABELS } from "@/features/registrations/registrations-screen";
+import { TripWorkPanel } from "@/features/trips/trip-work";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
-import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canView } from "@/lib/permissions";
+import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { Registration, Trip, User } from "@/lib/types";
@@ -33,7 +34,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 
 function Panel({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
   return (
-    <section className="rounded-lg border bg-card p-4 sm:p-5">
+    <section className="rounded-2xl border bg-card p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-sm font-semibold">{title}</h2>
         {action}
@@ -47,13 +48,36 @@ function Panel({ title, children, action }: { title: string; children: ReactNode
 const mayBeReissued = (trip: Trip, registration: Registration) =>
   registration.status.toUpperCase() === "APPROVED" && ["ISSUED", "EXPIRED"].includes(trip.status.toUpperCase());
 
+/** Trucks that have checked in have steps and weighings to show. */
+const hasWork = (trip: Trip) => ["CHECKED_IN", "IN_PROCESS", "COMPLETED", "REJECTED"].includes(trip.status.toUpperCase());
+
+/** The steps and weighings of one truck, opened on request (staff accounts only). */
+function TripWorkToggle({ trip, user }: { trip: Trip; user: User }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-3 border-t pt-3">
+      <Button variant="outline" size="sm" aria-expanded={open} onClick={() => setOpen((value) => !value)} aria-label={`Langkah dan timbang truk ${trip.seq}`}>
+        {open ? <ChevronUp aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+        Langkah dan timbang
+      </Button>
+      {open ? (
+        <div className="mt-3">
+          <TripWorkPanel tripId={trip.id} user={user} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function TripCard({
   trip,
   registration,
+  user,
   onReissue,
 }: {
   trip: Trip;
   registration: Registration;
+  user: User;
   /** Present when the account may reissue the SPJ of this truck. */
   onReissue?: () => void;
 }) {
@@ -63,7 +87,7 @@ function TripCard({
     return allocation?.doNo ?? allocation?.contractNo ?? `Alokasi ${seq}`;
   };
   return (
-    <li className="rounded-lg border bg-card p-4 sm:p-5" data-trip-seq={trip.seq}>
+    <li className="rounded-2xl border bg-card p-4 sm:p-5" data-trip-seq={trip.seq}>
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">
@@ -157,6 +181,8 @@ function TripCard({
           </div>
         </div>
       ) : null}
+
+      {isStaff(user) && hasWork(trip) ? <TripWorkToggle trip={trip} user={user} /> : null}
     </li>
   );
 }
@@ -245,7 +271,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
           className={
             status === "SUBMITTED"
               ? "rounded-lg border border-warning/40 bg-warning-subtle p-4 sm:p-5"
-              : "rounded-lg border bg-card p-4 sm:p-5"
+              : "rounded-2xl border bg-card p-4 sm:p-5"
           }
         >
           <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -315,6 +341,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
               key={trip.id}
               trip={trip}
               registration={registration}
+              user={user}
               onReissue={canReissueSpj(user) && mayBeReissued(trip, registration) ? () => setReissuing(trip) : undefined}
             />
           ))}

@@ -20,6 +20,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { cardSaveErrorMessage } from "@/lib/messages";
@@ -171,8 +173,8 @@ function CardFormSheet({
 
 function CardsPage({ user }: { user: User }) {
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
-  const [status, setStatus] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
+  const [status, setStatus] = useUrlFilter("status");
   const [reloadToken, setReloadToken] = useState(0);
   const [saved, setSaved] = useState<string | null>(null);
   // undefined: sheet closed, null: new card, otherwise the card being edited
@@ -187,7 +189,7 @@ function CardsPage({ user }: { user: User }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Kartu RFID" description="Kartu yang dibawa truk selama di dalam pabrik. Kartu terikat ke truk saat check-in di pos.">
+      <PageHeader title="Kartu RFID" figures={list.data ? <TotalFigure value={list.data.total} noun="kartu" /> : null} description="Kartu yang dibawa truk selama di dalam pabrik. Kartu terikat ke truk saat check-in di pos.">
         {canCreate(user, "rfid_cards") ? (
           <Button onClick={() => setEditing(null)}>
             <Plus aria-hidden="true" />

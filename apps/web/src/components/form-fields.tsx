@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 // on purpose: they bring the phone's own pickers and need no extra code.
 
 const CONTROL_CLASSES =
-  "w-full min-w-0 rounded-md border border-input bg-transparent px-3 text-base shadow-xs outline-none transition-[color,box-shadow] placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-input/30";
+  "w-full min-w-0 rounded-lg border border-input bg-card px-3.5 text-base shadow-[inset_0_1px_2px_oklch(0.2_0.02_255/0.06)] outline-none transition-[color,box-shadow,border-color] placeholder:text-muted-foreground hover:border-[color-mix(in_oklch,var(--input),var(--foreground)_20%)] focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 md:text-sm dark:bg-background/70 dark:shadow-[inset_0_1px_2px_oklch(0_0_0/0.3)]";
 
 interface FieldShellProps {
   label: string;
@@ -182,7 +182,7 @@ export function CheckboxField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         aria-describedby={description ? `${id}-description` : undefined}
-        className="mt-0.5 size-5 shrink-0 cursor-pointer rounded accent-secondary outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed dark:accent-primary"
+        className="mt-0.5 size-5 shrink-0 cursor-pointer rounded accent-primary outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed"
       />
       <div className="min-w-0">
         <label htmlFor={id} className="cursor-pointer text-sm font-medium">

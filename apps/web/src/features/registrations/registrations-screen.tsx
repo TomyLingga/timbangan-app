@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useId } from "react";
 import Link from "next/link";
 import { Plus } from "lucide-react";
 
@@ -19,6 +19,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
 import { canCreateIncoming, canCreateOutgoing, canView } from "@/lib/permissions";
@@ -110,9 +112,9 @@ const COLUMNS: ReadonlyArray<Column<RegistrationSummary>> = [
 
 function RegistrationsPage({ user }: { user: User }) {
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
-  const [direction, setDirection] = useState("");
-  const [status, setStatus] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
+  const [direction, setDirection] = useUrlFilter("arah");
+  const [status, setStatus] = useUrlFilter("status");
   const search = useDebouncedValue(searchText.trim(), 300);
 
   const list = useApiQuery(
@@ -127,7 +129,7 @@ function RegistrationsPage({ user }: { user: User }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Registrasi" description="Pendaftaran truk sebelum datang. Registrasi tanpa temuan langsung mendapat SPJ; yang punya temuan ditinjau admin logistik.">
+      <PageHeader title="Registrasi" figures={list.data ? <TotalFigure value={list.data.total} noun="registrasi" /> : null} description="Pendaftaran truk sebelum datang. Registrasi tanpa temuan langsung mendapat SPJ; yang punya temuan ditinjau admin logistik.">
         {canCreateIncoming(user) ? (
           <Button asChild>
             <Link href="/registrasi/baru?arah=in">

@@ -19,14 +19,10 @@ import { errorMessage } from "@/lib/messages";
 import { accessSummary, canSeeSyncRuns, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { latestRunPerEntity, runsBySource, syncEntityLabel, syncStatusInfo } from "@/lib/status";
-import { countFlow } from "@/lib/truck-flow";
-import type { Page, SyncRun, SyncRunList, Trip, User } from "@/lib/types";
+import { countFlow, insideTotal, type FlowAnswer } from "@/lib/truck-flow";
+import type { Page, SyncRun, SyncRunList, User } from "@/lib/types";
 
 const PLANT_TIME_ZONE = "Asia/Jakarta";
-
-function plantToday(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: PLANT_TIME_ZONE }).format(new Date());
-}
 
 function todayLabel(): string {
   return new Intl.DateTimeFormat("id-ID", { timeZone: PLANT_TIME_ZONE, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(
@@ -39,9 +35,7 @@ function initials(fullName: string): string {
   return words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "?";
 }
 
-// --- today: the truck flow and the key figures, from the list routes -----------------
-
-const FLOW_LIMIT = 50;
+// --- today: the truck flow and the key figures, from GET /api/trips/flow ------------
 
 /** A key figure in the line under the title: the number, then what it counts. */
 function Figure({ value, label, loading }: { value: number | undefined; label: string; loading: boolean }) {
@@ -60,30 +54,27 @@ function Figure({ value, label, loading }: { value: number | undefined; label: s
 }
 
 function Today({ user }: { user: User }) {
-  const today = plantToday();
-  // GET /api/trips: staff, with gate or registrations at view level.
+  // GET /api/trips/flow: staff, with gate or registrations at view level (the same as the trip list).
   const seesTrips = isStaff(user) && (canView(user, "gate") || canView(user, "registrations"));
   const seesRegistrations = canView(user, "registrations");
   const atPost = isStaff(user) && canView(user, "gate");
 
-  const list = (status: string, withDate: boolean) => (signal: AbortSignal) =>
-    api.request<Page<Trip>>("/api/trips", { query: { status, ...(withDate ? { date: today } : {}), limit: FLOW_LIMIT }, signal });
-  const expected = useApiQuery(seesTrips ? `flow-expected|${today}` : null, list("ISSUED,EXPIRED", true));
-  const inside = useApiQuery(seesTrips ? "flow-inside" : null, list("CHECKED_IN,IN_PROCESS", false));
-  const done = useApiQuery(seesTrips ? `flow-done|${today}` : null, list("COMPLETED", true));
+  const flow = useApiQuery(seesTrips ? "trip-flow" : null, (signal) => api.request<FlowAnswer>("/api/trips/flow", { signal }));
   const waiting = useApiQuery(seesRegistrations ? "home-waiting" : null, (signal) =>
     api.request<Page<unknown>>("/api/registrations", { query: { status: "SUBMITTED", limit: 1 }, signal }),
   );
 
-  const lists = [expected, inside, done];
-  const failed = lists.find((query) => query.hasError);
-  const ready = expected.data && inside.data && done.data;
-  const counts = useMemo(
-    () => (expected.data && inside.data && done.data ? countFlow(expected.data.items, inside.data.items, done.data.items) : null),
-    [expected.data, inside.data, done.data],
+  // a partner account gets no trip routes (403); it sees its own registrations and delivery orders
+  const partnerView = !isStaff(user);
+  const ownRegistrations = useApiQuery(partnerView && seesRegistrations ? "home-own-registrations" : null, (signal) =>
+    api.request<Page<unknown>>("/api/registrations", { query: { limit: 1 }, signal }),
   );
-  const partial = lists.some((query) => query.data && query.data.total > query.data.items.length);
+  const ownOrders = useApiQuery(partnerView && canView(user, "delivery_orders") ? "home-own-orders" : null, (signal) =>
+    api.request<Page<unknown>>("/api/delivery-orders", { query: { limit: 1 }, signal }),
+  );
 
+  const counts = useMemo(() => (flow.data ? countFlow(flow.data) : null), [flow.data]);
+  const answer = flow.data;
   return (
     <>
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
@@ -93,13 +84,27 @@ function Today({ user }: { user: User }) {
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[0.9375rem] text-muted-foreground">
             {seesTrips ? (
               <>
-                <Figure value={expected.data?.total} label="akan datang" loading={expected.isLoading} />
-                <Figure value={inside.data?.total} label="di dalam pabrik" loading={inside.isLoading} />
-                <Figure value={done.data?.total} label="selesai hari ini" loading={done.isLoading} />
+                <Figure value={answer ? answer.upcoming.in + answer.upcoming.out : undefined} label="akan datang" loading={flow.isLoading} />
+                <Figure value={answer ? insideTotal(answer) : undefined} label="di dalam pabrik" loading={flow.isLoading} />
+                <Figure
+                  value={answer ? answer.finishedToday.in + answer.finishedToday.out : undefined}
+                  label="selesai hari ini"
+                  loading={flow.isLoading}
+                />
               </>
             ) : null}
-            {seesRegistrations ? (
+            {partnerView && seesRegistrations ? (
               <Link href="/registrasi" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+                <Figure value={ownRegistrations.data?.total} label="registrasi" loading={ownRegistrations.isLoading} />
+              </Link>
+            ) : null}
+            {partnerView && canView(user, "delivery_orders") ? (
+              <Link href="/delivery-order" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+                <Figure value={ownOrders.data?.total} label="delivery order" loading={ownOrders.isLoading} />
+              </Link>
+            ) : null}
+            {seesRegistrations ? (
+              <Link href="/registrasi?status=SUBMITTED" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
                 <Figure value={waiting.data?.total} label="menunggu tinjauan" loading={waiting.isLoading} />
               </Link>
             ) : null}
@@ -110,11 +115,10 @@ function Today({ user }: { user: User }) {
 
       {seesTrips ? (
         <TruckFlow
-          counts={ready ? counts : null}
-          loading={!ready && !failed}
-          error={failed ? errorMessage(failed.error) : null}
-          onRetry={() => lists.forEach((query) => query.hasError && query.reload())}
-          partial={partial}
+          counts={counts}
+          loading={flow.isLoading && !flow.data}
+          error={flow.hasError ? errorMessage(flow.error) : null}
+          onRetry={flow.reload}
           links={atPost ? { upcoming: "/pos", gate: "/pos" } : {}}
         />
       ) : null}

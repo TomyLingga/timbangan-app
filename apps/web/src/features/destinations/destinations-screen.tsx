@@ -21,6 +21,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { useUrlFilter } from "@/hooks/use-url-filter";
+import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { destinationPayload, EMPTY_DESTINATION, validateDestination, type DestinationValues } from "@/lib/forms";
@@ -181,7 +183,7 @@ function DestinationsPage({ user }: { user: User }) {
   const mayAdd = canAddDestination(user);
   const mayEdit = canEditDestination(user);
   const ids = useId();
-  const [searchText, setSearchText] = useState("");
+  const [searchText, setSearchText] = useUrlFilter("q");
   const [customer, setCustomer] = useState<PartnerRef | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [saved, setSaved] = useState<string | null>(null);
@@ -203,7 +205,7 @@ function DestinationsPage({ user }: { user: User }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Tujuan" description="Alamat tujuan pengiriman untuk tiap customer.">
+      <PageHeader title="Tujuan" figures={list.data ? <TotalFigure value={list.data.total} noun="tujuan" /> : null} description="Alamat tujuan pengiriman untuk tiap customer.">
         {mayAdd ? (
           <Button onClick={() => setEditing(null)}>
             <Plus aria-hidden="true" />

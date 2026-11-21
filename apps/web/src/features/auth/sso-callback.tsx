@@ -68,7 +68,7 @@ export function SsoCallback() {
 
   return (
     <StatusScreen>
-      <div className="rounded-lg border bg-card p-5 sm:p-6">
+      <div className="rounded-2xl border bg-card p-5 sm:p-6">
         <h1 className="flex items-center gap-2 text-base font-semibold">
           <CircleAlert className="size-5 shrink-0 text-destructive" aria-hidden="true" />
           Belum berhasil masuk

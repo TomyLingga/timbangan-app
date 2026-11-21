@@ -122,6 +122,15 @@ async function run(browser) {
   );
   check("Beranda shows API health", Boolean(await browser.hasText("Terhubung")));
   check("partner account gets no Odoo panel", !(await browser.evaluate("document.body.innerText.includes('Salinan data dari Odoo')")));
+  check(
+    "a partner's Beranda has no truck flow and no error, and does not ask for the trip flow",
+    (await browser.evaluate(`!document.querySelector('[aria-label="Truk per tahap"]') && !document.querySelector('main [role="alert"]')`)) &&
+      (await stat("GET /api/trips/flow")) === 0,
+  );
+  check(
+    "a partner's Beranda counts its own registrations",
+    Boolean(await browser.waitFor(`${pageText}.includes(' registrasi') && !document.querySelector('[data-testid="approvals-bell"]')`)),
+  );
   check("access token is not in web storage", await browser.evaluate("JSON.stringify({...localStorage, ...sessionStorage}).length < 40"));
   await browser.screenshot("02-beranda-partner");
 
@@ -185,6 +194,11 @@ async function run(browser) {
   const historyAfterRoot = await browser.historyUrls();
   check("no history entry keeps the token (root landing)", !historyAfterRoot.some((url) => url.startsWith(WEB) && url.includes("token=")));
   check("staff account sees the Odoo panel on Beranda", Boolean(await browser.hasText("Salinan data dari Odoo")));
+  check(
+    "Beranda draws the truck flow per stage from GET /api/trips/flow",
+    Boolean(await browser.waitFor(`(document.querySelector('[aria-label="Truk per tahap"]')?.innerText ?? '').replace(/\\s+/g, ' ').includes('Akan datang 1')`)) &&
+      (await stat("GET /api/trips/flow")) > 0,
+  );
   check("exchange was called once for the root landing", (await stat("POST /api/auth/sso/exchange")) === 1);
 
   // 10. Admin: sync button, counts, list reload, Outgoing tab.
@@ -220,7 +234,8 @@ async function run(browser) {
     if (!dialog) return false;
     const links = [...dialog.querySelectorAll('a')].map((a) => a.getAttribute('href'));
     // Every page but Pengguna for a logistics admin; Denah comes later and is plain text.
-    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/kontrak', '/supir', '/kendaraan', '/tujuan', '/kartu'];
+    // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
+    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/tujuan', '/kartu', '/laporan', '/stasiun'];
     return dialog.innerText.includes('Denah') && !links.includes('/denah') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
@@ -466,7 +481,7 @@ async function run(browser) {
   const staffModules = await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].map((s) => s.name).join(' ')`);
   check(
     "a staff account is offered every module, each with its own levels",
-    ["contracts", "drivers", "vehicles", "destinations", "delivery_orders", "registrations", "gate", "rfid_cards", "users"].every((code) =>
+    ["contracts", "drivers", "vehicles", "destinations", "delivery_orders", "registrations", "gate", "rfid_cards", "users", "weighbridge", "approvals", "qc", "qc_approvals", "security_check", "unloading", "loading", "sealing", "reports"].every((code) =>
       (staffModules ?? "").includes(`permission-${code}`),
     ) &&
       (await browser.evaluate(`[...document.querySelector('[role="dialog"] select[name="permission-contracts"]').options].map((o) => o.value).join(',') === ',VIEW,EDIT'`)),
@@ -568,6 +583,7 @@ async function run(browser) {
   await signOut(browser);
 
   await phaseThree(browser);
+  await phaseFour(browser);
 }
 
 // --- phase 3: registration, delivery order, SPJ, the post ---------------------
@@ -931,6 +947,184 @@ async function phaseThree(browser) {
   await browser.waitFor(`${textOf('[data-testid="gate-inside"]')}.includes('ZZ 0001 CTH')`);
   check("the post has no horizontal scroll on a phone", await browser.evaluate(noHorizontalScroll));
   await browser.screenshot("29-pos-phone-light");
+  await browser.viewport(1366, 900);
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
+// --- phase 4: stations, decisions, the bell, truck steps, card return, reports ----
+
+async function phaseFour(browser) {
+  // 27. An account without the modules of phase 4: no bell, no access to the reports.
+  await staffSignIn(browser, "pos.contoh");
+  check("an account without approvals has no bell", !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="approvals-bell"]'))`)));
+  await browser.goto(`${WEB}/laporan`);
+  check("/laporan refuses an account without the reports module", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && (await stat("GET /api/reports/contracts")) === 0);
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+
+  // 28. The bell of a holder of approvals counts the requests waiting.
+  await staffSignIn(browser, "admin.contoh");
+  check(
+    "the bell shows the number of requests waiting",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="approvals-bell"]')?.getAttribute('aria-label') === 'Permintaan keputusan, 3 menunggu'`)),
+  );
+  await browser.click('[data-testid="approvals-bell"]');
+  check(
+    "the bell lists the waiting requests and leads to Keputusan",
+    Boolean(await browser.waitFor(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.innerText.includes('Selisih bruto')) && Boolean(document.querySelector('[role="menu"] a[href="/keputusan"]'))`)),
+  );
+  await browser.pressEscape();
+
+  // 29. Stasiun: list, a new weighbridge, its machine key shown once.
+  await browser.click('a[href="/stasiun"]');
+  check("/stasiun lists the stations", Boolean(await browser.waitFor(`location.pathname === '/stasiun' && ${rowText("WB-1")}.includes('Ada')`)));
+  await browser.click("Stasiun baru");
+  await browser.fill(inSheet('input[name="code"]'), "");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("the station form asks for the code and the name", Boolean(await browser.hasText("Isi kode.")) && Boolean(await browser.hasText("Isi nama.")) && (await stat("POST /api/stations")) === 0);
+  await browser.fill(inSheet('input[name="code"]'), "wb-9");
+  await browser.fill(inSheet('input[name="name"]'), "Timbangan Uji");
+  await browser.fill(inSheet('input[name="cameraWeigh1"]'), "5");
+  await browser.fill(inSheet('input[name="cameraWeigh2"]'), "6");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "a new weighbridge is saved with its cameras",
+    Boolean(await browser.hasText("Stasiun WB-9 ditambahkan.")) && Boolean(await browser.waitFor(`${rowText("WB-9")}.includes('Kamera 5 dan 6') && ${rowText("WB-9")}.includes('Belum ada')`)),
+  );
+  await browser.click('button[aria-label="Buat kunci mesin WB-9"]');
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="station-key-dialog"]'))`);
+  await browser.click("Buat kunci mesin");
+  check(
+    "the machine key is shown once, with the warning",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="station-key"]')?.value ?? '').length > 20`)) &&
+      Boolean(await browser.hasText("hanya ditampilkan sekali")) &&
+      (await stat("POST /api/stations/:id/key")) === 1,
+  );
+  await browser.screenshot("30-stasiun-kunci-light");
+  await browser.click("Sudah disimpan");
+  check("after the dialog the station shows that it has a key", Boolean(await browser.waitFor(`!document.querySelector('[data-testid="station-key-dialog"]') && ${rowText("WB-9")}.includes('Ada')`)));
+
+  // 30. Keputusan: the list, a reason that is required, a decision, a refusal of the server.
+  await browser.click('a[href="/keputusan"]');
+  check("/keputusan lists the requests waiting", Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 3`)));
+  check(
+    "a request shows the plate read by the camera next to the registered plate",
+    (await browser.evaluate(rowText("Plat tidak cocok"))).includes("Kamera: ZZ0002CTN") && (await browser.evaluate(rowText("Selisih bruto"))).includes("dari toleransi"),
+  );
+  const listCalls = await stat("GET /api/exceptions");
+  await sleep(5600);
+  check("the list refreshes by itself while the tab is visible", (await stat("GET /api/exceptions")) > listCalls);
+  await browser.click('button[aria-label^="Rincian Selisih bruto"]');
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`);
+  await browser.click("Setujui");
+  check("a weight difference needs a reason before it is sent", Boolean(await browser.hasText("Isi alasan, minimal 3 huruf.")) && (await stat("POST /api/exceptions/:id/decide")) === 0);
+  await browser.fill(inSheet('textarea[name="decisionReason"]'), "Selisih karena hujan (uji)");
+  await browser.click("Setujui");
+  check(
+    "the approval saves the weighing with a Berita Acara",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Disetujui') && document.querySelector('[data-testid="approval-outcome"]').innerText.includes('BA-SELISIH-BRUTO')`)),
+  );
+  await browser.pressEscape();
+  await browser.waitFor(`!document.querySelector('[role="dialog"]') && ${visibleRows} === 2`);
+
+  await browser.click('button[aria-label^="Rincian Selisih tarra"]');
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`);
+  check("the tare difference offers to make the weight the master tare", Boolean(await browser.waitFor(`Boolean(document.querySelector('[role="dialog"] input[name="updateMasterTare"]'))`)));
+  const tare = (await (await fetch(`${API}/api/exceptions?status=PENDING&type=TARE_OUT`, { headers: { authorization: `Bearer ${await apiSession("admin.contoh")}` } })).json()).items[0];
+  await fetch(`${API}/api/exceptions/${tare.id}/decide`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${await apiSession("admin.contoh")}`, "content-type": "application/json" },
+    body: JSON.stringify({ decision: "REJECT", reason: "Diputuskan di tempat lain (uji)" }),
+  });
+  await browser.fill(inSheet('textarea[name="decisionReason"]'), "Tarra sesuai (uji)");
+  await browser.click("Setujui");
+  check(
+    "a request decided elsewhere is refused in plain words and shows its decision",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-refusal"]')?.innerText ?? '').includes('sudah diputuskan orang lain')`)) &&
+      Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Ditolak')`)),
+  );
+  await browser.screenshot("31-keputusan-ditolak-server-light");
+  await browser.pressEscape();
+
+  // 31. Truck detail at the post: steps, weighings, the temporary step button; then the card comes back.
+  await browser.click('a[href="/pos"]');
+  await browser.waitFor(`${textOf('[data-testid="gate-inside"]')}.includes('ZZ 0003 CTH')`);
+  await browser.click('button[aria-label="Rincian ZZ 0003 CTH"]');
+  check(
+    "the truck detail shows the steps and the weighing",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="trip-work"]')}.includes('Timbang 1 (bruto)') && ${textOf('[data-step="QC"]')}.includes('Siap')`)),
+  );
+  await browser.click(inSheet('[data-testid="temporary-step"] button'));
+  check(
+    "a holder of the step's module completes it, and the next step is ready",
+    Boolean(await browser.waitFor(`${textOf('[data-step="QC"]')}.includes('Selesai') && ${textOf('[data-step="UNLOADING"]')}.includes('Siap')`)) &&
+      (await stat("POST /api/trips/:id/steps/:stepCode/complete")) === 1,
+  );
+  await browser.pressEscape();
+  await browser.waitFor(`!document.querySelector('[role="dialog"]')`);
+  await browser.click("Kembalikan kartu");
+  check("the card return box has focus", Boolean(await browser.waitFor("document.activeElement?.id === 'gate-checkout'")));
+  await browser.typeFocused("04a1b2c303");
+  await browser.pressEnter();
+  check(
+    "a truck that has not reached the exit cannot return its card",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="gate-checkout-refused"]')}.includes('Truk belum sampai langkah keluar')`)) &&
+      Boolean(await browser.waitFor("document.activeElement?.id === 'gate-checkout'")),
+  );
+  await browser.typeFocused("04A1B2C305");
+  await browser.pressEnter();
+  check(
+    "the card of a truck at the exit comes back",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="gate-checkout-done"]')}.includes('Kartu kembali') && ${textOf('[data-testid="gate-checkout-done"]')}.includes('ZZ 0004 CTH')`)),
+  );
+  check("the post has no horizontal scroll with the card return", await browser.evaluate(noHorizontalScroll));
+
+  // 32. The truck detail in the registration.
+  await browser.goto(`${WEB}/registrasi`);
+  await browser.waitFor(visibleRows);
+  const seeded = await browser.evaluate(`[...document.querySelectorAll('tbody tr')].find((row) => row.offsetParent !== null && row.innerText.includes('PKS Contoh B') && row.innerText.includes('0124/CONTOH'))?.querySelector('a')?.getAttribute('href') ?? ''`);
+  await browser.goto(`${WEB}${seeded}`);
+  await browser.click('button[aria-label="Langkah dan timbang truk 1"]');
+  check(
+    "the registration shows the weighings and the split per contract",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="trip-work"]')}.includes('Pembagian netto') && ${textOf('[data-testid="trip-work"]')}.includes('0124/CONTOH/CPO/XI/2026')`)),
+  );
+
+  // 33. Laporan: both reports, and the CSV.
+  await browser.click('a[href="/laporan"]');
+  check("/laporan shows the realisation per contract", Boolean(await browser.waitFor(`location.pathname === '/laporan' && ${visibleRows} > 0 && ${rowText("0125/CONTOH")} !== ''`)));
+  await browser.click("Per truk");
+  check("the trip report lists the weighed trucks", Boolean(await browser.waitFor(`${rowText("ZZ0004CTH")}.includes('24.020 kg') || ${rowText("ZZ0004CTH")}.includes('15.020 kg')`)));
+  const csvBefore = await stat("GET /api/reports/trips");
+  await browser.click("Unduh CSV");
+  await sleep(800);
+  check(
+    "the CSV is fetched with the session and no error is shown",
+    (await stat("GET /api/reports/trips")) === csvBefore + 1 && !(await browser.evaluate("document.body.innerText.includes('CSV belum bisa diunduh')")),
+  );
+  // 34. List filters live in the address bar; the vehicle table fits without scrolling.
+  await browser.goto(`${WEB}/registrasi?status=SUBMITTED`);
+  check(
+    "a list opened with a filter in the address applies it",
+    // every registration of this run has been reviewed by now, so the filtered list is empty
+    Boolean(await browser.waitFor(`document.querySelector('select[name="statusFilter"]')?.value === 'SUBMITTED' && document.body.innerText.includes('Tidak ada registrasi yang cocok')`)),
+  );
+  await browser.fill('select[name="directionFilter"]', "IN");
+  check("changing a filter writes it to the address", Boolean(await browser.waitFor("location.search.includes('arah=IN') && location.search.includes('status=SUBMITTED')")));
+  await browser.goto(`${WEB}/kendaraan`);
+  await browser.waitFor(`${visibleRows} > 0`);
+  check(
+    "the vehicle table fits a desktop screen without scrolling",
+    await browser.evaluate(`[...document.querySelectorAll('[data-slot="table-container"]')].every((box) => box.offsetParent === null || box.scrollWidth <= box.clientWidth)`),
+  );
+  await browser.viewport(390, 844, true);
+  for (const page of ["/keputusan", "/stasiun", "/laporan"]) {
+    await browser.goto(`${WEB}${page}`);
+    await browser.waitFor("document.querySelector('main h1')");
+    await sleep(400);
+    check(`${page} has no horizontal scroll on a phone`, await browser.evaluate(noHorizontalScroll));
+  }
   await browser.viewport(1366, 900);
   await browser.goto(`${WEB}/`);
   await signOut(browser);

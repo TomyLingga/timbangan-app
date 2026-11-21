@@ -95,6 +95,8 @@ export interface ApiClientOptions {
 
 export interface ApiClient {
   request<T = unknown>(path: string, options?: RequestOptions): Promise<T>;
+  /** A file answer (a CSV export): the body as a blob and the file name the server gave, with the same session handling. */
+  download(path: string, options?: RequestOptions): Promise<{ blob: Blob; fileName: string | null }>;
   /** Asks for a new access token with the refresh cookie. False means no session. */
   refresh(): Promise<boolean>;
   setAccessToken(token: string | null): void;
@@ -205,7 +207,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return new ApiError(401, SIGNED_OUT, "The session has ended");
   }
 
-  async function request<T>(path: string, requestOptions: RequestOptions = {}): Promise<T> {
+  /** Sends the request; a 401 on a session call gets one refresh and one retry. */
+  async function authorized(path: string, requestOptions: RequestOptions): Promise<Response> {
     const useAuth = requestOptions.auth !== false;
     const tokenUsed = useAuth ? accessToken : null;
 
@@ -218,14 +221,27 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       response = await send(path, requestOptions, accessToken);
       if (response.status === 401) throw signedOut();
     }
+    return response;
+  }
 
+  async function request<T>(path: string, requestOptions: RequestOptions = {}): Promise<T> {
+    const response = await authorized(path, requestOptions);
     const body = await readBody(response);
     if (!response.ok) throw toApiError(response.status, body);
     return body as T;
   }
 
+  async function download(path: string, requestOptions: RequestOptions = {}): Promise<{ blob: Blob; fileName: string | null }> {
+    const response = await authorized(path, requestOptions);
+    if (!response.ok) throw toApiError(response.status, await readBody(response));
+    const disposition = response.headers.get("content-disposition") ?? "";
+    const fileName = /filename="?([^";]+)"?/i.exec(disposition)?.[1] ?? null;
+    return { blob: await response.blob(), fileName };
+  }
+
   return {
     request,
+    download,
     refresh,
     setAccessToken(token) {
       accessToken = token;

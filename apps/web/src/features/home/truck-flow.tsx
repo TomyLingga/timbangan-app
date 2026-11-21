@@ -139,13 +139,12 @@ export interface TruckFlowProps {
   loading: boolean;
   error: string | null;
   onRetry: () => void;
-  /** Some list held more trucks than one page returns; the counts cover the first page only. */
-  partial: boolean;
+
   /** A page that lists the trucks of a stage, where one exists. */
   links: Partial<Record<StageKey, string>>;
 }
 
-export function TruckFlow({ counts, loading, error, onRetry, partial, links }: TruckFlowProps) {
+export function TruckFlow({ counts, loading, error, onRetry, links }: TruckFlowProps) {
   const uid = useId().replace(/[^a-zA-Z0-9_-]/g, "");
   const reduceMotion = useReducedMotion() ?? false;
   const [filter, setFilter] = useState<Filter>("ALL");
@@ -192,7 +191,7 @@ export function TruckFlow({ counts, loading, error, onRetry, partial, links }: T
   const summary = shown
     ? `Aliran truk saat ini. ${stages.map((stage) => `${stage.label} ${formatNumber(stage.total)}`).join(", ")}.${
         peak !== null ? ` Paling ramai: ${stages[peak].label}.` : " Belum ada truk."
-      }${partial ? " Dihitung dari halaman pertama tiap daftar." : ""}`
+      }${shown.unplaced > 0 ? ` ${formatNumber(shown.unplaced)} truk di langkah yang tidak dikenal.` : ""}`
     : "";
 
   return (
@@ -484,8 +483,10 @@ export function TruckFlow({ counts, loading, error, onRetry, partial, links }: T
         })}
       </ul>
 
-      {partial ? (
-        <p className="-mt-2 px-4 pb-4 text-xs text-muted-foreground sm:px-6">Dihitung dari 50 truk pertama di tiap daftar.</p>
+      {shown && shown.unplaced > 0 ? (
+        <p className="-mt-2 px-4 pb-4 text-xs text-muted-foreground sm:px-6" data-testid="flow-unplaced">
+          {formatNumber(shown.unplaced)} truk di dalam pabrik berada di langkah yang belum dikenal halaman ini, jadi tidak digambar.
+        </p>
       ) : null}
     </section>
   );
