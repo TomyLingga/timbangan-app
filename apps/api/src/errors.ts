@@ -21,6 +21,11 @@ const INVALID = "Data yang dikirim tidak valid.";
 export const invalid = (field: string, message: string) => new AppError(400, "VALIDATION", INVALID, [{ field, message }]);
 export const notFound = (what: string) => new AppError(404, "NOT_FOUND", `${what} tidak ditemukan.`);
 export const duplicate = (message: string) => new AppError(409, "DUPLICATE", message);
+/** A change the current status does not allow. */
+export const invalidState = (message: string) => new AppError(409, "INVALID_STATE", message);
+export const forbidden = () => new AppError(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+/** A business rule refused the request: 409 with the rule's own code. */
+export const refused = (code: string, message: string) => new AppError(409, code, message);
 
 export const notConfigured = (what: string) => new AppError(503, "NOT_CONFIGURED", `${what} belum diatur di server.`);
 

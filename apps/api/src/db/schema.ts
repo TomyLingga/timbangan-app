@@ -203,3 +203,261 @@ export const destinations = pgTable("destinations", {
   createdBy: bigint("created_by", { mode: "number" }),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });
+
+// --- Phase 3: sites, settings, numbering, delivery orders, registrations, trips, SPJ, cards ---
+
+export const sites = pgTable("sites", {
+  id: smallint("id").primaryKey().generatedAlwaysAsIdentity(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  timezone: text("timezone").notNull().default("Asia/Jakarta"),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+export const settings = pgTable("settings", {
+  siteId: smallint("site_id"),
+  key: text("key").notNull(),
+  value: jsonb("value").notNull(),
+  updatedBy: bigint("updated_by", { mode: "number" }),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+export const documentCounters = pgTable("document_counters", {
+  counterKey: text("counter_key").primaryKey(),
+  lastNo: integer("last_no").notNull().default(0),
+});
+
+export const flowSteps = pgTable("flow_steps", {
+  siteId: smallint("site_id").notNull(),
+  flowCode: text("flow_code").notNull(),
+  stepCode: text("step_code").notNull(),
+  seq: smallint("seq").notNull(),
+  name: text("name").notNull(),
+  isOptional: boolean("is_optional").notNull().default(false),
+  onReject: text("on_reject").notNull().default("SKIP"),
+  performerRole: text("performer_role"),
+  waitZoneId: integer("wait_zone_id"),
+  workZoneId: integer("work_zone_id"),
+});
+
+export const driverBlocks = pgTable("driver_blocks", {
+  id: id(),
+  driverId: bigint("driver_id", { mode: "number" }).notNull(),
+  reason: text("reason").notNull(),
+  source: text("source", { enum: ["LOCAL", "CENTRAL"] }).notNull().default("LOCAL"),
+  blockedBy: bigint("blocked_by", { mode: "number" }),
+  blockedAt: timestamptz("blocked_at").notNull().defaultNow(),
+  blockedUntil: timestamptz("blocked_until"),
+  liftedBy: bigint("lifted_by", { mode: "number" }),
+  liftedAt: timestamptz("lifted_at"),
+  liftReason: text("lift_reason"),
+});
+
+export const qualityParameters = pgTable("quality_parameters", {
+  code: text("code").primaryKey(),
+  name: text("name").notNull(),
+  unit: text("unit").notNull().default("%"),
+  decimals: smallint("decimals").notNull().default(2),
+  minValid: numeric("min_valid", { precision: 9, scale: 4, mode: "number" }).notNull().default(0),
+  maxValid: numeric("max_valid", { precision: 9, scale: 4, mode: "number" }).notNull().default(100),
+  sortOrder: smallint("sort_order").notNull().default(0),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+export const deliveryOrders = pgTable("delivery_orders", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  doNo: text("do_no").notNull(),
+  doDate: date("do_date").notNull(),
+  contractId: bigint("contract_id", { mode: "number" }),
+  contractNo: text("contract_no"),
+  customerPoNo: text("customer_po_no"),
+  partnerId: bigint("partner_id", { mode: "number" }).notNull(),
+  productId: bigint("product_id", { mode: "number" }).notNull(),
+  qty: numeric("qty", { precision: 16, scale: 3, mode: "number" }).notNull(),
+  uom: text("uom").notNull().default("kg"),
+  tolerancePct: numeric("tolerance_pct", { precision: 7, scale: 4, mode: "number" }).notNull().default(0),
+  destinationId: bigint("destination_id", { mode: "number" }).notNull(),
+  deliveryFrom: date("delivery_from").notNull(),
+  deliveryUntil: date("delivery_until"),
+  transportTerms: text("transport_terms"),
+  transporterId: bigint("transporter_id", { mode: "number" }),
+  truckCount: smallint("truck_count"),
+  truckCountBy: text("truck_count_by", { enum: ["ADMIN", "TRANSPORTER"] }),
+  status: text("status", { enum: ["DRAFT", "SENT", "ACCEPTED", "CLOSED", "CANCELLED"] }).notNull().default("DRAFT"),
+  remark: text("remark"),
+  createdBy: bigint("created_by", { mode: "number" }).notNull(),
+  sentAt: timestamptz("sent_at"),
+  acceptedBy: bigint("accepted_by", { mode: "number" }),
+  acceptedAt: timestamptz("accepted_at"),
+  closedAt: timestamptz("closed_at"),
+  cancelReason: text("cancel_reason"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+/** One finding of the registration checks, stored in registrations.check_findings. */
+export interface Finding {
+  code: string;
+  message: string;
+  tripSeq?: number;
+  allocationSeq?: number;
+}
+
+export const registrations = pgTable("registrations", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  regNo: text("reg_no").notNull(),
+  direction: text("direction", { enum: ["IN", "OUT"] }).notNull(),
+  flowCode: text("flow_code", { enum: ["IN_CPO", "IN_GOODS", "OUT_BULK", "OUT_PACKED"] }).notNull(),
+  partnerId: bigint("partner_id", { mode: "number" }).notNull(),
+  transporterId: bigint("transporter_id", { mode: "number" }),
+  status: text("status", { enum: ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "CANCELLED", "CLOSED"] }).notNull().default("DRAFT"),
+  plannedDate: date("planned_date"),
+  truckCount: smallint("truck_count").notNull().default(1),
+  qtyTotal: numeric("qty_total", { precision: 16, scale: 3, mode: "number" }),
+  uom: text("uom").notNull().default("kg"),
+  closeCargo: boolean("close_cargo"),
+  flexiBag: boolean("flexi_bag"),
+  remark: text("remark"),
+  createdVia: text("created_via", { enum: ["PORTAL", "OPERATOR", "SCAN", "API"] }).notNull(),
+  createdBy: bigint("created_by", { mode: "number" }).notNull(),
+  submittedAt: timestamptz("submitted_at"),
+  reviewedBy: bigint("reviewed_by", { mode: "number" }),
+  reviewedAt: timestamptz("reviewed_at"),
+  reviewNote: text("review_note"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  // added by 0003
+  checkFindings: jsonb("check_findings").$type<Finding[]>().notNull().default([]),
+});
+
+export const registrationAllocations = pgTable("registration_allocations", {
+  id: id(),
+  registrationId: bigint("registration_id", { mode: "number" }).notNull(),
+  seq: smallint("seq").notNull(),
+  contractId: bigint("contract_id", { mode: "number" }),
+  deliveryOrderId: bigint("delivery_order_id", { mode: "number" }),
+  qtyPlanned: numeric("qty_planned", { precision: 16, scale: 3, mode: "number" }),
+  contractNo: text("contract_no").notNull(),
+  doNo: text("do_no"),
+  tolerancePct: numeric("tolerance_pct", { precision: 7, scale: 4, mode: "number" }).notNull().default(0),
+});
+
+export const TRIP_STATUSES = ["DRAFT", "READY", "ISSUED", "CHECKED_IN", "IN_PROCESS", "COMPLETED", "REJECTED", "CANCELLED", "EXPIRED"] as const;
+export type TripStatus = (typeof TRIP_STATUSES)[number];
+
+export const trips = pgTable("trips", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  registrationId: bigint("registration_id", { mode: "number" }).notNull(),
+  seq: smallint("seq").notNull().default(1),
+  tripNo: text("trip_no"),
+  status: text("status", { enum: TRIP_STATUSES }).notNull().default("DRAFT"),
+  outcome: text("outcome", { enum: ["OK", "TRUCK_REJECT", "SPEC_REJECT", "SEAL_REJECT", "OTHER_REJECT"] }),
+  vehicleId: bigint("vehicle_id", { mode: "number" }),
+  driverId: bigint("driver_id", { mode: "number" }),
+  transporterId: bigint("transporter_id", { mode: "number" }),
+  containerNo: text("container_no"),
+  plateNo: text("plate_no"),
+  driverName: text("driver_name"),
+  licenceNo: text("licence_no"),
+  qtyPlanned: numeric("qty_planned", { precision: 16, scale: 3, mode: "number" }),
+  plannedArrival: date("planned_arrival"),
+  docGrossKg: integer("doc_gross_kg"),
+  docTareKg: integer("doc_tare_kg"),
+  docNetKg: integer("doc_net_kg"),
+  grossKg: integer("gross_kg"),
+  tareKg: integer("tare_kg"),
+  netKg: integer("net_kg"),
+  currentStep: text("current_step"),
+  checkedInAt: timestamptz("checked_in_at"),
+  completedAt: timestamptz("completed_at"),
+  exitedAt: timestamptz("exited_at"),
+  cancelledAt: timestamptz("cancelled_at"),
+  cancelReason: text("cancel_reason"),
+  remark: text("remark"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+export const tripAllocations = pgTable("trip_allocations", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  registrationAllocationId: bigint("registration_allocation_id", { mode: "number" }).notNull(),
+  seq: smallint("seq").notNull(),
+  qtyPlanned: numeric("qty_planned", { precision: 16, scale: 3, mode: "number" }),
+  handoverNo: text("handover_no"),
+  spbNo: text("spb_no"),
+  spbDate: date("spb_date"),
+  originTicketNo: text("origin_ticket_no"),
+  originGrossKg: integer("origin_gross_kg"),
+  originTareKg: integer("origin_tare_kg"),
+  originNetKg: integer("origin_net_kg"),
+  netKg: integer("net_kg"),
+  qtyActual: numeric("qty_actual", { precision: 16, scale: 3, mode: "number" }),
+  splitMethod: text("split_method", { enum: ["SINGLE", "PROPORTIONAL", "SEQUENTIAL", "MANUAL"] }),
+  splitBy: bigint("split_by", { mode: "number" }),
+  splitAt: timestamptz("split_at"),
+});
+
+export const qualityValues = pgTable("quality_values", {
+  id: id(),
+  parameterCode: text("parameter_code").notNull(),
+  value: numeric("value", { precision: 9, scale: 4, mode: "number" }).notNull(),
+  source: text("source", { enum: ["DECLARED", "QC", "LAB"] }).notNull(),
+  tripAllocationId: bigint("trip_allocation_id", { mode: "number" }),
+  qualityCheckId: bigint("quality_check_id", { mode: "number" }),
+});
+
+export const spjDocuments = pgTable("spj_documents", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  spjNo: text("spj_no").notNull(),
+  barcodeToken: text("barcode_token").notNull(),
+  issuedBy: bigint("issued_by", { mode: "number" }).notNull(),
+  issuedAt: timestamptz("issued_at").notNull().defaultNow(),
+  validUntil: timestamptz("valid_until"),
+  printCount: integer("print_count").notNull().default(0),
+  fileId: bigint("file_id", { mode: "number" }),
+  revokedAt: timestamptz("revoked_at"),
+  revokedBy: bigint("revoked_by", { mode: "number" }),
+  revokeReason: text("revoke_reason"),
+});
+
+export const rfidCards = pgTable("rfid_cards", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  uid: text("uid").notNull(),
+  label: text("label"),
+  status: text("status", { enum: ["AVAILABLE", "IN_USE", "LOST", "RETIRED"] }).notNull().default("AVAILABLE"),
+  note: text("note"),
+});
+
+export const cardAssignments = pgTable("card_assignments", {
+  id: id(),
+  cardId: bigint("card_id", { mode: "number" }).notNull(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  stationId: integer("station_id"),
+  assignedBy: bigint("assigned_by", { mode: "number" }).notNull(),
+  assignedAt: timestamptz("assigned_at").notNull().defaultNow(),
+  releasedBy: bigint("released_by", { mode: "number" }),
+  releasedAt: timestamptz("released_at"),
+  releaseReason: text("release_reason", { enum: ["CHECK_OUT", "REPLACED", "CANCELLED", "LOST"] }),
+});
+
+export const tripSteps = pgTable("trip_steps", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  stepCode: text("step_code").notNull(),
+  seq: smallint("seq").notNull(),
+  attempt: smallint("attempt").notNull().default(1),
+  status: text("status", { enum: ["PENDING", "READY", "IN_PROGRESS", "DONE", "SKIPPED", "FAILED"] }).notNull().default("PENDING"),
+  result: text("result", { enum: ["PASS", "FAIL", "HOLD"] }),
+  stationId: integer("station_id"),
+  performedBy: bigint("performed_by", { mode: "number" }),
+  readyAt: timestamptz("ready_at"),
+  startedAt: timestamptz("started_at"),
+  finishedAt: timestamptz("finished_at"),
+  note: text("note"),
+});

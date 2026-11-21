@@ -9,11 +9,16 @@ import { registerSsoRoutes } from "./auth/sso-routes.js";
 import type { Config } from "./config.js";
 import { registerContractRoutes } from "./contracts/routes.js";
 import type { Database } from "./db/client.js";
+import { registerDeliveryOrderRoutes } from "./delivery-orders/routes.js";
 import { registerDestinationRoutes } from "./destinations/routes.js";
 import { registerDriverRoutes } from "./drivers/routes.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
+import { registerGateRoutes } from "./gate/routes.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
+import { registerTripRoutes } from "./trips/routes.js";
 import { registerPartnerRoutes } from "./partners/routes.js";
+import { registerRegistrationRoutes } from "./registrations/routes.js";
+import { registerRfidCardRoutes } from "./rfid-cards/routes.js";
 import { registerUserAdminRoutes } from "./users/routes.js";
 import { type VcfClient, vcfClientFor } from "./vcf/client.js";
 import { registerVcfRoutes } from "./vcf/routes.js";
@@ -89,6 +94,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerVehicleRoutes(app, context, guards);
   registerPartnerRoutes(app, context, guards);
   registerDestinationRoutes(app, context, guards);
+  registerRfidCardRoutes(app, context, guards);
+  registerDeliveryOrderRoutes(app, context, guards);
+  registerRegistrationRoutes(app, context, guards);
+  registerTripRoutes(app, context, guards);
+  registerGateRoutes(app, context, guards);
 
   return app;
 }

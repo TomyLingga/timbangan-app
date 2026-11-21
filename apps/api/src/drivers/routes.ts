@@ -6,7 +6,7 @@ import { accountOf, type Guards } from "../auth/guard.js";
 import { drivers } from "../db/schema.js";
 import { duplicate } from "../errors.js";
 import { dateText, lettersAndDigits, likeText, limitParam, searchParam, todayAtPlant } from "../http.js";
-import { pushPendingDrivers } from "../vcf/push.js";
+import { driverIdByLicence, insertDriver, pushNewDriver } from "./create.js";
 
 const STATUSES = ["NORMAL", "WARNING", "BLACKLIST", "UNKNOWN"] as const;
 /** registry_push: NONE (nothing to send), PENDING, SENT, FAILED. */
@@ -83,26 +83,12 @@ export function registerDriverRoutes(app: FastifyInstance, context: AppContext, 
   const writers = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR")] };
   app.post("/api/drivers", writers, async (request, reply) => {
     const body = createBody.parse(request.body);
-    const [taken] = await orm.select({ id: drivers.id }).from(drivers).where(eq(drivers.licenceNo, body.licenceNo));
-    if (taken) throw duplicate(`Nomor SIM ${body.licenceNo} sudah terdaftar.`);
+    if ((await driverIdByLicence(orm, body.licenceNo)) !== null) throw duplicate(`Nomor SIM ${body.licenceNo} sudah terdaftar.`);
     const now = context.now();
-    const [created] = await orm
-      .insert(drivers)
-      .values({ ...body, registryStatus: "UNKNOWN", registryPush: "PENDING", createdBy: accountOf(request).id, createdAt: now, updatedAt: now })
-      .returning(columns);
-    if (!created) throw new Error("The driver was not created.");
-
-    let pushStopped: string | null = null;
-    if (context.vcf?.canPush) {
-      try {
-        const signal = AbortSignal.timeout(context.registryPushTimeoutMs);
-        pushStopped = (await pushPendingDrivers(context.database, context.vcf, context.now, { driverId: created.id, signal })).stopped;
-        if (pushStopped) request.log.warn({ reason: pushStopped }, "sending the new driver to the registry stopped");
-      } catch (error) {
-        request.log.warn({ err: error }, "sending the new driver to the registry failed");
-      }
-    }
-    const [current] = await orm.select(columns).from(drivers).where(eq(drivers.id, created.id));
-    return reply.code(201).send({ driver: toItem(current ?? created, todayAtPlant(now)), ...(pushStopped ? { pushStopped } : {}) });
+    const id = await insertDriver(orm, body, accountOf(request).id, now);
+    const pushStopped = await pushNewDriver(context, id, request.log);
+    const [current] = await orm.select(columns).from(drivers).where(eq(drivers.id, id));
+    if (!current) throw new Error("The driver was not created.");
+    return reply.code(201).send({ driver: toItem(current, todayAtPlant(now)), ...(pushStopped ? { pushStopped } : {}) });
   });
 }
