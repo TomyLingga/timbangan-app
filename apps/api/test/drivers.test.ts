@@ -23,7 +23,7 @@ describe("POST /api/admin/sync/vcf", () => {
     const { call, database } = await setup({ VCF_URL: vcf.url });
     const response = await call("POST", "/api/admin/sync/vcf");
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ drivers: 1, transporters: 1, skipped: 1, durationMs: expect.any(Number) });
+    expect(response.json()).toEqual({ drivers: 1, transporters: 1, skipped: 1, pushed: 0, pushFailed: 0, durationMs: expect.any(Number) });
     expect(await database.query("select count(*)::int as n from drivers")).toEqual([{ n: 1 }]);
 
     vcf.requests.length = 0;
@@ -69,7 +69,7 @@ describe("sync:vcf command", () => {
     const open = async () => ({ ...database, close: async () => {} });
     const lines: string[] = [];
     expect(await runSyncVcf({ ...base, VCF_URL: vcf.url }, (line) => lines.push(line), open)).toBe(0);
-    expect(lines.join("\n")).toMatch(/^Driver registry sync finished in \d+ ms: 1 drivers, 2 transporters written; 0 rows skipped\.$/);
+    expect(lines.join("\n")).toMatch(/^Driver registry sync finished in \d+ ms: 1 drivers, 2 transporters written; 0 rows skipped; 0 drivers sent to the registry, 0 failed\.$/);
 
     lines.length = 0;
     expect(await runSyncVcf(base, (line) => lines.push(line), open)).toBe(1);
@@ -107,6 +107,8 @@ describe("GET /api/drivers", () => {
       licenceExpired: true,
       registryStatus: "WARNING",
       registrySyncedAt: "2026-11-20T01:00:00.000Z",
+      registryPush: "NONE",
+      registryPushError: null,
       isActive: true,
     });
     expect(body.items.map((item: { fullName: string; licenceExpired: boolean }) => [item.fullName, item.licenceExpired])).toEqual([
@@ -133,6 +135,26 @@ describe("GET /api/drivers", () => {
     const invalid = await call("GET", "/api/drivers?status=banned");
     expect(invalid.statusCode).toBe(400);
     expect(invalid.json().error.fields).toEqual([{ field: "status", message: "Status harus NORMAL, WARNING, BLACKLIST, atau UNKNOWN." }]);
+  });
+
+  it("shows the state of sending to the registry and filters by it", async () => {
+    const { call, database, names } = await withDrivers();
+    await database.script(`
+      insert into drivers (full_name, licence_no, registry_push) values ('Eko Antre', 'JK00000001', 'PENDING');
+      insert into drivers (full_name, licence_no, registry_push, registry_push_error) values ('Fajar Gagal', 'JK00000002', 'FAILED', 'VCF menjawab HTTP 503.');
+      insert into drivers (full_name, licence_no, registry_ref, registry_status, registry_push) values ('Gilang Terkirim', 'JK00000003', '1001', 'NORMAL', 'SENT');
+    `);
+    const failed = (await call("GET", "/api/drivers?push=FAILED")).json();
+    expect(failed.total).toBe(1);
+    expect(failed.items[0]).toMatchObject({ fullName: "Fajar Gagal", registryPush: "FAILED", registryPushError: "VCF menjawab HTTP 503." });
+    expect(await names("?push=PENDING")).toEqual(["Eko Antre"]);
+    expect(await names("?push=SENT")).toEqual(["Gilang Terkirim"]);
+    expect(await names("?push=NONE")).toEqual(["Agus Wibowo", "Bambang", "Cahya", "Dedi Lokal"]);
+    expect(await names("?push=PENDING&q=fajar")).toEqual([]);
+
+    const invalid = await call("GET", "/api/drivers?push=DONE");
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json().error.fields).toEqual([{ field: "push", message: "Status kirim harus NONE, PENDING, SENT, atau FAILED." }]);
   });
 
   it("is for staff with a role: partner accounts and staff without a role get 403", async () => {
@@ -163,6 +185,8 @@ describe("POST /api/drivers", () => {
         licenceExpired: false,
         registryStatus: "UNKNOWN",
         registrySyncedAt: null,
+        registryPush: "PENDING",
+        registryPushError: null,
         isActive: true,
       },
     });

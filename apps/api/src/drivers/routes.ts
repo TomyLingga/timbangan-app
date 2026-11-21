@@ -6,11 +6,15 @@ import { accountOf, type Guards } from "../auth/guard.js";
 import { drivers } from "../db/schema.js";
 import { duplicate } from "../errors.js";
 import { dateText, lettersAndDigits, likeText, limitParam, searchParam, todayAtPlant } from "../http.js";
+import { pushPendingDrivers } from "../vcf/push.js";
 
 const STATUSES = ["NORMAL", "WARNING", "BLACKLIST", "UNKNOWN"] as const;
+/** registry_push: NONE (nothing to send), PENDING, SENT, FAILED. */
+const PUSH_STATES = ["NONE", "PENDING", "SENT", "FAILED"] as const;
 const listQuery = z.object({
   q: searchParam,
   status: z.enum(STATUSES, "Status harus NORMAL, WARNING, BLACKLIST, atau UNKNOWN.").optional(),
+  push: z.enum(PUSH_STATES, "Status kirim harus NONE, PENDING, SENT, atau FAILED.").optional(),
   limit: limitParam,
 });
 
@@ -34,6 +38,8 @@ const columns = {
   licenceValidUntil: drivers.licenceValidUntil,
   registryStatus: drivers.registryStatus,
   registrySyncedAt: drivers.registrySyncedAt,
+  registryPush: drivers.registryPush,
+  registryPushError: drivers.registryPushError,
   isActive: drivers.isActive,
 };
 type Row = Pick<typeof drivers.$inferSelect, keyof typeof columns>;
@@ -47,6 +53,8 @@ const toItem = (row: Row, today: string) => ({
   licenceExpired: row.licenceValidUntil !== null && row.licenceValidUntil < today,
   registryStatus: row.registryStatus,
   registrySyncedAt: row.registrySyncedAt,
+  registryPush: row.registryPush,
+  registryPushError: row.registryPushError,
   isActive: row.isActive,
 });
 
@@ -57,6 +65,7 @@ export function registerDriverRoutes(app: FastifyInstance, context: AppContext, 
     const query = listQuery.parse(request.query);
     const conditions: (SQL | undefined)[] = [];
     if (query.status) conditions.push(eq(drivers.registryStatus, query.status));
+    if (query.push) conditions.push(eq(drivers.registryPush, query.push));
     if (query.q) {
       const licence = lettersAndDigits(query.q);
       conditions.push(or(ilike(drivers.fullName, likeText(query.q)), licence ? ilike(drivers.licenceNo, likeText(licence)) : undefined));
@@ -69,6 +78,8 @@ export function registerDriverRoutes(app: FastifyInstance, context: AppContext, 
   });
 
   // A driver entered here is not in the central registry yet: status UNKNOWN, queued to be sent there.
+  // With a registry account it is sent at once, within a few seconds; whatever happens there, the driver is
+  // created here, and one that was not sent waits for the next sync run.
   const writers = { preHandler: [guards.authenticate, guards.requireRole("SUPER_ADMIN", "LOGISTICS_ADMIN", "REGISTRATION_OPERATOR")] };
   app.post("/api/drivers", writers, async (request, reply) => {
     const body = createBody.parse(request.body);
@@ -80,6 +91,18 @@ export function registerDriverRoutes(app: FastifyInstance, context: AppContext, 
       .values({ ...body, registryStatus: "UNKNOWN", registryPush: "PENDING", createdBy: accountOf(request).id, createdAt: now, updatedAt: now })
       .returning(columns);
     if (!created) throw new Error("The driver was not created.");
-    return reply.code(201).send({ driver: toItem(created, todayAtPlant(now)) });
+
+    let pushStopped: string | null = null;
+    if (context.vcf?.canPush) {
+      try {
+        const signal = AbortSignal.timeout(context.registryPushTimeoutMs);
+        pushStopped = (await pushPendingDrivers(context.database, context.vcf, context.now, { driverId: created.id, signal })).stopped;
+        if (pushStopped) request.log.warn({ reason: pushStopped }, "sending the new driver to the registry stopped");
+      } catch (error) {
+        request.log.warn({ err: error }, "sending the new driver to the registry failed");
+      }
+    }
+    const [current] = await orm.select(columns).from(drivers).where(eq(drivers.id, created.id));
+    return reply.code(201).send({ driver: toItem(current ?? created, todayAtPlant(now)), ...(pushStopped ? { pushStopped } : {}) });
   });
 }

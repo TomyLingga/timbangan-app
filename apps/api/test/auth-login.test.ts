@@ -176,7 +176,7 @@ describe("GET /api/me", () => {
 describe("requireRole", () => {
   async function guarded() {
     const context = await testApp();
-    const guards = createGuards({ config: context.config, database: context.database, now: context.clock.now });
+    const guards = createGuards({ config: context.config, database: context.database, now: context.clock.now, vcf: null, registryPushTimeoutMs: 5_000 });
     context.app.get("/test/logistics", { preHandler: [guards.authenticate, guards.requireRole("LOGISTICS_ADMIN", "LOGISTICS_SUPERVISOR")] }, async () => ({ ok: true }));
     context.app.get("/test/any", { preHandler: [guards.authenticate, guards.requireRole()] }, async () => ({ ok: true }));
     const get = async (url: string, username?: string) =>

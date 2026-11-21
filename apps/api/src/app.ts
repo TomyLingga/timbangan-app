@@ -15,6 +15,7 @@ import { errorHandler, notFoundHandler } from "./errors.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
 import { registerPartnerRoutes } from "./partners/routes.js";
 import { registerUserAdminRoutes } from "./users/routes.js";
+import { type VcfClient, vcfClientFor } from "./vcf/client.js";
 import { registerVcfRoutes } from "./vcf/routes.js";
 import { registerVehicleRoutes } from "./vehicles/routes.js";
 
@@ -24,6 +25,9 @@ export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", impor
 const SECRET_KEYS = ["authorization", "cookie", "password", "token"];
 const REDACT_PATHS = SECRET_KEYS.flatMap((key) => [key, `*.${key}`, `*.*.${key}`]);
 
+/** How long POST /api/drivers waits for the registry before it answers anyway. */
+export const DEFAULT_REGISTRY_PUSH_TIMEOUT_MS = 5_000;
+
 export interface AppOptions {
   config: Config;
   database: Database;
@@ -31,6 +35,8 @@ export interface AppOptions {
   now?: () => Date;
   /** `false` silences the log; an object is merged into the pino options (level, stream). */
   logger?: false | Exclude<FastifyServerOptions["logger"], boolean | undefined>;
+  /** Tests shorten it. */
+  registryPushTimeoutMs?: number;
 }
 
 /** Everything a route needs, built once per application. */
@@ -38,13 +44,22 @@ export interface AppContext {
   config: Config;
   database: Database;
   now: () => Date;
+  /** One client for the whole process, so its login token is reused; null without VCF_URL. */
+  vcf: VcfClient | null;
+  registryPushTimeoutMs: number;
 }
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
     logger: options.logger === false ? false : { ...options.logger, redact: { paths: REDACT_PATHS, censor: "[REDACTED]" } },
   });
-  const context: AppContext = { config: options.config, database: options.database, now: options.now ?? (() => new Date()) };
+  const context: AppContext = {
+    config: options.config,
+    database: options.database,
+    now: options.now ?? (() => new Date()),
+    vcf: vcfClientFor(options.config.vcf),
+    registryPushTimeoutMs: options.registryPushTimeoutMs ?? DEFAULT_REGISTRY_PUSH_TIMEOUT_MS,
+  };
 
   app.setErrorHandler(errorHandler);
   app.setNotFoundHandler(notFoundHandler);

@@ -70,7 +70,7 @@ describe("syncVcf: drivers", () => {
         registryDriver(3, { status: "something-new", is_active: 1 }),
       ],
     });
-    expect(await sync()).toEqual({ drivers: 3, transporters: 0, skipped: 0, durationMs: expect.any(Number) });
+    expect(await sync()).toEqual({ drivers: 3, transporters: 0, skipped: 0, pushed: 0, pushFailed: 0, durationMs: expect.any(Number) });
     expect(await driverRows(database)).toEqual([
       { full_name: "Supir Satu", licence_no: "1100000000AB", licence_class: "B2 UMUM", licence_valid_until: "2027-01-31", registry_ref: "1", registry_status: "WARNING", registry_synced_at: clock.now(), registry_push: "NONE", is_active: true },
       { full_name: "Supir 2", licence_no: "990000000002", licence_class: null, licence_valid_until: null, registry_ref: "2", registry_status: "BLACKLIST", registry_synced_at: clock.now(), registry_push: "NONE", is_active: false },

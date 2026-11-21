@@ -1,11 +1,13 @@
-// Copies the central driver registry into `drivers` and its transporters into `partners`. Read-only on the
-// registry side. A driver that exists here but not in the registry is left as it is.
+// Copies the central driver registry into `drivers` and its transporters into `partners`. When an account is
+// configured, drivers entered here are sent to the registry first (push.ts). A driver that exists here but not
+// in the registry is left as it is.
 import { and, eq, inArray, isNull, like } from "drizzle-orm";
 import type { Database, Orm } from "../db/client.js";
 import { drivers, erpSyncRuns, partners } from "../db/schema.js";
 import { lettersAndDigits } from "../http.js";
 import { datePart, textOrNull } from "../odoo/values.js";
 import type { RegistryRecord, VcfClient } from "./client.js";
+import { pushPendingDrivers } from "./push.js";
 
 export interface VcfSyncResult {
   /** Rows inserted or changed in this run. */
@@ -13,6 +15,11 @@ export interface VcfSyncResult {
   transporters: number;
   /** Registry rows that were not copied: no usable licence number or name, a duplicate, a conflict. */
   skipped: number;
+  /** Drivers sent to the registry (or linked to the one there) in this run. */
+  pushed: number;
+  pushFailed: number;
+  /** Present when sending stopped early: why. */
+  pushStopped?: string;
   durationMs: number;
 }
 
@@ -37,7 +44,7 @@ const refOf = (row: RegistryRecord) => (typeof row.id === "number" || typeof row
 /** The registry sends a flag as true/false or 1/0; a missing flag means active. */
 const activeOf = (row: RegistryRecord) => !(row.is_active === false || row.is_active === 0 || row.is_active === "0");
 
-function statusOf(value: unknown): RegistryStatus {
+export function statusOf(value: unknown): RegistryStatus {
   const status = String(value ?? "").toUpperCase();
   return status === "NORMAL" || status === "WARNING" || status === "BLACKLIST" ? status : "UNKNOWN";
 }
@@ -103,10 +110,12 @@ async function writeDrivers(tx: Orm, candidates: DriverCandidate[], now: Date): 
     }
     seen.add(match.id);
     const { licenceNo: _kept, ...copied } = candidate;
-    const changed = match.registryPush !== "NONE" || (Object.keys(copied) as (keyof typeof copied)[]).some((key) => match[key] !== copied[key]);
+    // a driver the registry knows no longer waits to be sent to it; one sent from here keeps SENT
+    const registryPush = match.registryPush === "SENT" ? "SENT" : "NONE";
+    const changed = match.registryPush !== registryPush || (Object.keys(copied) as (keyof typeof copied)[]).some((key) => match[key] !== copied[key]);
     if (changed) {
-      // the licence number stored here stays; a driver the registry knows no longer waits to be sent to it
-      await tx.update(drivers).set({ ...copied, registryPush: "NONE", updatedAt: now }).where(eq(drivers.id, match.id));
+      // the licence number stored here stays
+      await tx.update(drivers).set({ ...copied, registryPush, registryPushError: null, updatedAt: now }).where(eq(drivers.id, match.id));
       written++;
     }
   }
@@ -152,7 +161,7 @@ async function writeTransporters(tx: Orm, rows: RegistryRecord[], now: Date): Pr
 }
 
 /**
- * One sync run. Writes two erp_sync_runs rows (VCF/DRIVER and VCF/PARTNER). Both lists are read before
+ * One sync run: sends pending drivers (when the client has an account), then copies both lists. Writes two erp_sync_runs rows (VCF/DRIVER and VCF/PARTNER). Both lists are read before
  * anything is written; on failure nothing of the run is kept except those rows, marked FAILED.
  */
 export async function syncVcf(database: Database, client: VcfClient, now: () => Date): Promise<VcfSyncResult> {
@@ -166,6 +175,7 @@ export async function syncVcf(database: Database, client: VcfClient, now: () => 
   const driverRun = await startRun("DRIVER");
   const partnerRun = await startRun("PARTNER");
   try {
+    const push = await pushPendingDrivers(database, client, now);
     const registry = driverCandidates(await client.drivers());
     const transporterRows = await client.transporters();
     return await orm.transaction(async (tx) => {
@@ -179,6 +189,9 @@ export async function syncVcf(database: Database, client: VcfClient, now: () => 
         drivers: driversDone.written,
         transporters: transportersDone.written,
         skipped: registry.skipped + driversDone.skipped + transportersDone.skipped,
+        pushed: push.pushed,
+        pushFailed: push.failed,
+        ...(push.stopped ? { pushStopped: push.stopped } : {}),
         durationMs: Math.round(performance.now() - started),
       };
     });

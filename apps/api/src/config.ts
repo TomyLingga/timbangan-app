@@ -48,7 +48,7 @@ export interface PortalConfig {
 
 export interface VcfConfig {
   url: string;
-  /** Reading the registry needs no account; these are for a later slice. */
+  /** Reading the registry needs no account; sending drivers to it needs both of these. */
   username: string | null;
   password: string | null;
 }
