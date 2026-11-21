@@ -1,7 +1,7 @@
 // Requests for a decision (exceptions) for the holders of `approvals`: list, detail, decide, report data.
 import { and, eq, inArray, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
@@ -10,7 +10,7 @@ import { notFound, refused } from "../errors.js";
 import { idParams, limitParam } from "../http.js";
 import { loadAllocations } from "../weighing/view.js";
 import { decideBody, decideException, REPORT_TITLE } from "./decide.js";
-import { contextOf, expireStaleExceptions, loadExceptionViews } from "./service.js";
+import { contextOf, expireStaleExceptions, loadExceptionViews, visibleTypes } from "./service.js";
 
 const listFilter = <T extends readonly [string, ...string[]]>(values: T, message: string) =>
   z
@@ -29,12 +29,15 @@ const decider = alias(users, "report_decider");
 
 export function registerExceptionRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
-  const viewers = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("approvals", "VIEW")] };
-  const deciders = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("approvals", "EDIT")] };
+  // weighbridge requests are for the holders of approvals, QC holds for the holders of qc_approvals
+  const viewers = { preHandler: [guards.authenticate, guards.requireInternal, guards.requireAnyPermission(["approvals", "VIEW"], ["qc_approvals", "VIEW"])] };
+  const deciders = { preHandler: [guards.authenticate, guards.requireInternal, guards.requireAnyPermission(["approvals", "EDIT"], ["qc_approvals", "EDIT"])] };
+  const reporters = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("approvals", "VIEW")] };
 
-  const one = async (id: number) => {
+  /** One request of a type the account may see; 404 otherwise. */
+  const one = async (id: number, request: FastifyRequest) => {
     const [view] = await loadExceptionViews(orm, eq(exceptions.id, id), 1);
-    if (!view) throw notFound("Permintaan");
+    if (!view || !visibleTypes(accountOf(request)).includes(view.type)) throw notFound("Permintaan");
     return view;
   };
 
@@ -44,6 +47,7 @@ export function registerExceptionRoutes(app: FastifyInstance, context: AppContex
     const conditions: (SQL | undefined)[] = [
       query.status?.length ? inArray(exceptions.status, query.status) : undefined,
       query.type?.length ? inArray(exceptions.type, query.type) : undefined,
+      inArray(exceptions.type, visibleTypes(accountOf(request))),
     ];
     return { items: await loadExceptionViews(orm, and(...conditions), query.limit) };
   });
@@ -51,7 +55,7 @@ export function registerExceptionRoutes(app: FastifyInstance, context: AppContex
   app.get("/api/exceptions/:id", viewers, async (request) => {
     const { id } = idParams.parse(request.params);
     await expireStaleExceptions(orm, context.now());
-    return { exception: await one(id) };
+    return { exception: await one(id, request) };
   });
 
   app.post("/api/exceptions/:id/decide", deciders, async (request) => {
@@ -60,11 +64,11 @@ export function registerExceptionRoutes(app: FastifyInstance, context: AppContex
     const account = accountOf(request);
     const now = context.now();
     const result = await orm.transaction((tx) => decideException(tx, request, account, id, body, now));
-    return { exception: await one(result.exceptionId), weighing: result.weighing, next: result.next };
+    return { exception: await one(result.exceptionId, request), weighing: result.weighing, next: result.next };
   });
 
   // the data of the Berita Acara of an approved weight difference
-  app.get("/api/exceptions/:id/report", viewers, async (request) => {
+  app.get("/api/exceptions/:id/report", reporters, async (request) => {
     const { id } = idParams.parse(request.params);
     const [row] = await orm
       .select({

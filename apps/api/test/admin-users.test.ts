@@ -93,7 +93,9 @@ describe("GET /api/admin/modules", () => {
         { code: "unloading", name: "Bongkar", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "loading", name: "Muat", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "sealing", name: "Segel", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "dashboard", name: "Dashboard", levels: ["VIEW"], partnerAllowed: false },
         { code: "reports", name: "Laporan", levels: ["VIEW"], partnerAllowed: false },
+        { code: "plant_masters", name: "Master pabrik", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
       ],
     });
   });
@@ -134,6 +136,8 @@ describe("PUT /api/admin/users/:id/permissions", () => {
 
   it("answers 400 VALIDATION for an unknown module, a level the module does not have, or a module partners may not get", async () => {
     const { call, qcId, partnerUserId, audit, database } = await setup();
+    // every module is active since 0007; the dashboard is switched off here to stand for a module of a later phase
+    await database.query("update modules set is_active = false where code = 'dashboard'");
     const unknown = await call("PUT", `/api/admin/users/${qcId}/permissions`, { permissions: { gate: "VIEW", nope: "VIEW", dashboard: "VIEW" } });
     expect(unknown.statusCode).toBe(400);
     expect(unknown.json()).toEqual({

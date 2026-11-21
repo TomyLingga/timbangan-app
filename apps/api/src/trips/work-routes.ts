@@ -89,6 +89,7 @@ export function registerTripWorkRoutes(app: FastifyInstance, context: AppContext
       if (step.stepCode === "WEIGH_1" || step.stepCode === "WEIGH_2") throw refused("STEP_AT_WEIGHBRIDGE", "Langkah timbang dikerjakan di timbangan.");
       if (step.stepCode === "CHECK_OUT") throw refused("USE_CHECK_OUT", "Kartu dikembalikan lewat pos registrasi.");
       if (!step.performerModule || !can(account, step.performerModule as ModuleCode, "CREATE")) throw forbidden();
+      if (step.result === "HOLD") throw refused("NOT_READY", "Langkah ini menunggu keputusan QC.");
       if (step.status !== "READY" && step.status !== "IN_PROGRESS") throw refused("NOT_READY", "Langkah ini belum siap atau sudah selesai.");
       if (body.qtyActual?.length) {
         const rows = await loadAllocations(tx, id);

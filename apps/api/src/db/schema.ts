@@ -1,7 +1,7 @@
 // Drizzle definitions of the tables this slice reads and writes. The SQL files in `migrations/` are the
 // source of truth; test/schema-drift.test.ts fails when a definition here no longer matches the database.
 // Constraints (checks, unique indexes, foreign keys) live in the migrations only.
-import { bigint, boolean, date, inet, integer, jsonb, numeric, pgTable, smallint, text, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, date, inet, integer, jsonb, numeric, pgTable, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 const id = () => bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity();
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
@@ -385,6 +385,9 @@ export const trips = pgTable("trips", {
   remark: text("remark"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  // added by 0006
+  deliveryNoteNo: text("delivery_note_no"),
+  outSpecLetterNo: text("out_spec_letter_no"),
 });
 
 export const tripAllocations = pgTable("trip_allocations", {
@@ -585,6 +588,153 @@ export const weighbridgeRequests = pgTable("weighbridge_requests", {
   tripStepId: bigint("trip_step_id", { mode: "number" }),
   result: text("result", { enum: ["SAVED", "PENDING", "PLATE_RETRY"] }).notNull(),
   statusCode: smallint("status_code").notNull(),
+  response: jsonb("response").$type<Record<string, unknown>>().notNull(),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// --- Phase 5: plant masters, files, field forms ---
+
+export const productQualitySpecs = pgTable("product_quality_specs", {
+  id: id(),
+  productId: bigint("product_id", { mode: "number" }).notNull(),
+  parameterCode: text("parameter_code").notNull(),
+  minValue: numeric("min_value", { precision: 9, scale: 4, mode: "number" }),
+  maxValue: numeric("max_value", { precision: 9, scale: 4, mode: "number" }),
+  onFail: text("on_fail", { enum: ["INFO", "HOLD", "REJECT"] }).notNull().default("HOLD"),
+  validFrom: date("valid_from").notNull().defaultNow(),
+});
+
+export const storageTanks = pgTable("storage_tanks", {
+  id: integer("id").primaryKey().generatedAlwaysAsIdentity(),
+  siteId: smallint("site_id").notNull(),
+  code: text("code").notNull(),
+  name: text("name"),
+  productId: bigint("product_id", { mode: "number" }),
+  capacityKg: bigint("capacity_kg", { mode: "number" }),
+  erpRef: text("erp_ref"),
+  isActive: boolean("is_active").notNull().default(true),
+});
+
+export const SEAL_KINDS = ["LOCIS", "CUSTOMS"] as const;
+export const SEAL_STATUSES = ["AVAILABLE", "USED", "VOID"] as const;
+
+export const seals = pgTable("seals", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  sealNo: text("seal_no").notNull(),
+  kind: text("kind", { enum: SEAL_KINDS }).notNull().default("LOCIS"),
+  status: text("status", { enum: SEAL_STATUSES }).notNull().default("AVAILABLE"),
+  batchRef: text("batch_ref"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+export const files = pgTable("files", {
+  id: id(),
+  storageKey: text("storage_key").notNull(),
+  originalName: text("original_name"),
+  mimeType: text("mime_type").notNull(),
+  sizeBytes: bigint("size_bytes", { mode: "number" }).notNull(),
+  sha256: text("sha256").notNull(),
+  kind: text("kind", { enum: ["PHOTO", "SCAN", "PDF", "OTHER"] }).notNull(),
+  capturedAt: timestamptz("captured_at"),
+  uploadedBy: bigint("uploaded_by", { mode: "number" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+export const tripFiles = pgTable("trip_files", {
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  fileId: bigint("file_id", { mode: "number" }).notNull(),
+  weighingId: bigint("weighing_id", { mode: "number" }),
+  stepCode: text("step_code"),
+  label: text("label"),
+});
+
+export const qualityChecks = pgTable("quality_checks", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  stage: text("stage", { enum: ["RECEIVING", "LOADING"] }).notNull(),
+  method: text("method", { enum: ["MANUAL", "DIP_PROBE", "AUTO_SAMPLER", "LAB"] }).notNull().default("MANUAL"),
+  deviceRef: text("device_ref"),
+  tankId: integer("tank_id"),
+  sampledBy: bigint("sampled_by", { mode: "number" }),
+  sampledAt: timestamptz("sampled_at").notNull().defaultNow(),
+  decision: text("decision", { enum: ["PASS", "HOLD", "REJECT"] }),
+  decidedBy: bigint("decided_by", { mode: "number" }),
+  decidedAt: timestamptz("decided_at"),
+  remark: text("remark"),
+  clientUuid: uuid("client_uuid"),
+  // added by 0006
+  disposition: text("disposition", { enum: ["OK", "HOLD", "NOT_OK"] }),
+  reasonCode: text("reason_code", { enum: ["FFA_OUT", "MI_OUT", "FFA_MI_OUT"] }),
+  certificateNo: text("certificate_no"),
+});
+
+/** One line of an inspection checklist: a stable key, the label shown to the operator, and the answer. */
+export interface ChecklistItem {
+  key: string;
+  item: string;
+  ok?: boolean | null;
+  value?: unknown;
+  note?: string | null;
+}
+
+export const inspections = pgTable("inspections", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  kind: text("kind", { enum: ["SEAL_CHECK", "TANK_EMPTY", "CLEANLINESS", "TRUCK_CONDITION"] }).notNull(),
+  result: text("result", { enum: ["PASS", "FAIL"] }).notNull(),
+  checklist: jsonb("checklist").$type<ChecklistItem[]>().notNull().default([]),
+  performedBy: bigint("performed_by", { mode: "number" }).notNull(),
+  performedAt: timestamptz("performed_at").notNull().defaultNow(),
+  remark: text("remark"),
+  clientUuid: uuid("client_uuid"),
+});
+
+export const handlings = pgTable("handlings", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  kind: text("kind", { enum: ["UNLOAD", "LOAD"] }).notNull(),
+  tankId: integer("tank_id"),
+  stationId: integer("station_id"),
+  startedAt: timestamptz("started_at"),
+  finishedAt: timestamptz("finished_at"),
+  temperatureC: numeric("temperature_c", { precision: 5, scale: 1, mode: "number" }),
+  qtyMeter: numeric("qty_meter", { precision: 16, scale: 3, mode: "number" }),
+  operatorId: bigint("operator_id", { mode: "number" }).notNull(),
+  logSheet: jsonb("log_sheet").$type<Record<string, unknown>>().notNull().default({}),
+  remark: text("remark"),
+  clientUuid: uuid("client_uuid"),
+});
+
+export const tripSeals = pgTable("trip_seals", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  sealNo: text("seal_no").notNull(),
+  kind: text("kind", { enum: SEAL_KINDS }).notNull().default("LOCIS"),
+  origin: text("origin", { enum: ["DECLARED", "APPLIED"] }).notNull(),
+  position: text("position"),
+  sealId: bigint("seal_id", { mode: "number" }),
+  photoFileId: bigint("photo_file_id", { mode: "number" }),
+  appliedBy: bigint("applied_by", { mode: "number" }),
+  appliedAt: timestamptz("applied_at"),
+  removedAt: timestamptz("removed_at"),
+  removeReason: text("remove_reason"),
+  // added by 0006
+  tripStepId: bigint("trip_step_id", { mode: "number" }),
+  removedBy: bigint("removed_by", { mode: "number" }),
+});
+
+export const FIELD_FORMS = ["SEAL_CHECK", "QC_RECEIVING", "RESEAL", "UNLOADING", "CLEANLINESS", "QC_LOADING", "LOADING_START", "LOADING_FINISH", "SEALING"] as const;
+export type FieldForm = (typeof FIELD_FORMS)[number];
+
+export const fieldSubmissions = pgTable("field_submissions", {
+  clientUuid: uuid("client_uuid").primaryKey(),
+  tripStepId: bigint("trip_step_id", { mode: "number" }).notNull(),
+  form: text("form", { enum: FIELD_FORMS }).notNull(),
+  userId: bigint("user_id", { mode: "number" }).notNull(),
   response: jsonb("response").$type<Record<string, unknown>>().notNull(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
 });

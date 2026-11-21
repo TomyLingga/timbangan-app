@@ -22,6 +22,7 @@ describe("loadConfig", () => {
       vcf: null,
       bootstrapAdminEmails: [],
       tts: { engine: "off", cacheDir: ".data/tts-cache" },
+      files: { dir: ".data/files" },
     });
   });
 

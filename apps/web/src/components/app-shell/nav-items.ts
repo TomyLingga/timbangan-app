@@ -30,6 +30,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
   "/registrasi": { label: "Registrasi", icon: ClipboardList },
   "/delivery-order": { label: "Delivery Order", icon: PackageCheck },
   "/pos": { label: "Pos registrasi", icon: ScanLine },
+  "/ruang-kontrol": { label: "Ruang kontrol", icon: Map },
   "/keputusan": { label: "Keputusan", icon: Gavel },
   "/kontrak": { label: "Kontrak", icon: FileText },
   "/supir": { label: "Supir", icon: IdCard },
@@ -47,7 +48,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
  */
 export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly NavHref[] }> = [
   { label: null, hrefs: ["/"] },
-  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/keputusan"] },
+  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/ruang-kontrol", "/keputusan"] },
   { label: "Data induk", hrefs: ["/kontrak", "/supir", "/kendaraan", "/tujuan", "/kartu"] },
   { label: "Laporan", hrefs: ["/laporan"] },
   { label: "Sistem", hrefs: ["/stasiun", "/pengguna"] },
@@ -55,7 +56,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly N
 
 // Modules that come in later phases. Listed so people know they are planned,
 // rendered as plain text so nothing leads to a page that does not exist.
-export const PLANNED: ReadonlyArray<NavItem> = [{ label: "Denah", icon: Map }];
+export const PLANNED: ReadonlyArray<NavItem> = [];
 
 export function isCurrent(pathname: string, href: string): boolean {
   return href === "/" ? pathname === "/" : pathname === href || pathname.startsWith(`${href}/`);

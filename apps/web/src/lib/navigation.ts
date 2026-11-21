@@ -9,6 +9,7 @@ export type NavHref =
   | "/registrasi"
   | "/delivery-order"
   | "/pos"
+  | "/ruang-kontrol"
   | "/keputusan"
   | "/kontrak"
   | "/supir"
@@ -27,6 +28,8 @@ const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> 
   { href: "/delivery-order", visible: view("delivery_orders") },
   // the lists of the post (GET /api/trips) are staff only
   { href: "/pos", visible: (user) => isStaff(user) && canView(user, "gate") },
+  // the control room routes are staff only (apps/api src/control-room/routes.ts)
+  { href: "/ruang-kontrol", visible: (user) => isStaff(user) && canView(user, "dashboard") },
   { href: "/keputusan", visible: canSeeApprovals },
   { href: "/kontrak", visible: view("contracts") },
   { href: "/supir", visible: canSeeDrivers },

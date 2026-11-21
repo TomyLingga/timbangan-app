@@ -16,13 +16,15 @@
     "migrate": "tsx --env-file-if-exists=.env src/cli/migrate.ts",
     "user:create": "tsx --env-file-if-exists=.env src/cli/user-create.ts",
     "sync:odoo": "tsx --env-file-if-exists=.env src/cli/sync-odoo.ts",
-    "sync:vcf": "tsx --env-file-if-exists=.env src/cli/sync-vcf.ts"
+    "sync:vcf": "tsx --env-file-if-exists=.env src/cli/sync-vcf.ts",
+    "plan:import": "tsx --env-file-if-exists=.env src/control-room/plan-import.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.17",
     "@fastify/cookie": "11.1.5",
     "@fastify/cors": "11.4.3",
     "@fastify/helmet": "13.2.0",
+    "@fastify/multipart": "10.1.9",
     "@node-rs/argon2": "2.2.2",
     "drizzle-orm": "0.45.4",
     "fastify": "5.12.8",

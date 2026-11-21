@@ -36,6 +36,8 @@ const envSchema = z.object({
   TTS_ENGINE: z.enum(["off"], "must be off (the only speech engine built so far)").default("off"),
   // where the audio of each sentence is kept, per engine
   TTS_CACHE_DIR: z.string().default(".data/tts-cache"),
+  // where uploaded photos are kept; each file is stored under a random key below this folder
+  FILE_STORAGE_DIR: z.string().default(".data/files"),
 });
 
 export interface OdooConfig {
@@ -79,6 +81,7 @@ export interface Config {
   /** Lower case; compared with the portal email of an account at sign-in. */
   bootstrapAdminEmails: string[];
   tts: TtsConfig;
+  files: { dir: string };
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -112,5 +115,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
     tts: { engine: e.TTS_ENGINE, cacheDir: e.TTS_CACHE_DIR },
+    files: { dir: e.FILE_STORAGE_DIR },
   };
 }

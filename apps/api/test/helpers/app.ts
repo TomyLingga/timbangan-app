@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { inject, onTestFinished } from "vitest";
 import { type AppOptions, buildApp } from "../../src/app.js";
@@ -45,7 +49,10 @@ export interface TestApp {
 /** The application on a fresh database. `env` adds or replaces environment keys; nothing is read from .env. */
 export async function testApp(env: Record<string, string> = {}, options: Partial<AppOptions> = {}): Promise<TestApp> {
   const database = await freshDatabase();
-  const config = loadConfig({ DATABASE_URL: "pglite://memory", JWT_SECRET: TEST_JWT_SECRET, ...env });
+  // uploaded files go to a folder of this test, removed when it ends
+  const filesDir = join(tmpdir(), `tr-test-files-${randomUUID()}`);
+  onTestFinished(() => rm(filesDir, { recursive: true, force: true }));
+  const config = loadConfig({ DATABASE_URL: "pglite://memory", JWT_SECRET: TEST_JWT_SECRET, FILE_STORAGE_DIR: filesDir, ...env });
   const clock = new TestClock();
   // TEST_LOG_ERRORS=1 prints the cause of each 500, which the answer itself never carries
   const logger = process.env.TEST_LOG_ERRORS === "1" ? { level: "error" } : false;

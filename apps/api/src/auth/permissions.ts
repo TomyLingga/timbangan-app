@@ -24,7 +24,8 @@ export type ModuleCode =
   | "unloading"
   | "loading"
   | "sealing"
-  | "reports";
+  | "reports"
+  | "plant_masters";
 
 /** Module code to level, for the modules the account may open. */
 export type Permissions = Record<string, PermissionLevel>;

@@ -9,12 +9,14 @@ import { registerSsoRoutes } from "./auth/sso-routes.js";
 import { SpeechCache, type SpeechEngine, speechEngineFor, warmSpeechCache } from "./speech/engine.js";
 import type { Config } from "./config.js";
 import { registerContractRoutes } from "./contracts/routes.js";
+import { registerControlRoomRoutes } from "./control-room/routes.js";
 import type { Database } from "./db/client.js";
 import { registerDeliveryOrderRoutes } from "./delivery-orders/routes.js";
 import { registerDestinationRoutes } from "./destinations/routes.js";
 import { registerDriverRoutes } from "./drivers/routes.js";
 import { errorHandler, notFoundHandler } from "./errors.js";
 import { registerExceptionRoutes } from "./exceptions/routes.js";
+import { registerFileRoutes } from "./files/routes.js";
 import { registerGateRoutes } from "./gate/routes.js";
 import { registerLookupRoutes } from "./lookup/routes.js";
 import { registerProductRoutes } from "./products/routes.js";
@@ -23,6 +25,7 @@ import { registerTripRoutes } from "./trips/routes.js";
 import { registerTripWorkRoutes } from "./trips/work-routes.js";
 import { registerWeighbridgeRoutes } from "./weighing/routes.js";
 import { registerPartnerRoutes } from "./partners/routes.js";
+import { registerPlantMasterRoutes } from "./plant-masters/routes.js";
 import { registerRegistrationRoutes } from "./registrations/routes.js";
 import { registerReportRoutes } from "./reports/routes.js";
 import { registerRfidCardRoutes } from "./rfid-cards/routes.js";
@@ -31,6 +34,8 @@ import { registerUserAdminRoutes } from "./users/routes.js";
 import { type VcfClient, vcfClientFor } from "./vcf/client.js";
 import { registerVcfRoutes } from "./vcf/routes.js";
 import { registerVehicleRoutes } from "./vehicles/routes.js";
+import { registerFormRoutes } from "./work/form-routes.js";
+import { registerWorkRoutes } from "./work/routes.js";
 
 export const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
@@ -121,6 +126,11 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerTripWorkRoutes(app, context, guards);
   registerExceptionRoutes(app, context, guards);
   registerReportRoutes(app, context, guards);
+  registerPlantMasterRoutes(app, context, guards);
+  await registerFileRoutes(app, context, guards);
+  registerWorkRoutes(app, context, guards);
+  registerFormRoutes(app, context, guards);
+  registerControlRoomRoutes(app, context, guards);
 
   if (options.warmSpeech) {
     // in the background: a slow voice never delays the start

@@ -28,7 +28,10 @@ export type ModuleCode =
   | "unloading"
   | "loading"
   | "sealing"
-  | "reports";
+  | "reports"
+  // phase 5 and 6: plant masters, control room
+  | "plant_masters"
+  | "dashboard";
 
 /** EDIT covers CREATE, CREATE covers VIEW. */
 export type PermissionLevel = "VIEW" | "CREATE" | "EDIT";

@@ -168,7 +168,8 @@ describe("POST /api/auth/sso/exchange", () => {
 describe("bootstrap admins", () => {
   const EVERY_ACTIVE_MODULE = {
     contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
-    weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW",
+    weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW", plant_masters: "EDIT",
+    dashboard: "VIEW",
   };
 
   async function withBootstrap(emails: string) {
@@ -202,12 +203,14 @@ describe("bootstrap admins", () => {
 
   it("picks up a module that is switched on later, at its highest level", async () => {
     const { database, signIn } = await withBootstrap("budi.santoso@example.test");
+    // every module is active since 0007; the dashboard is switched off here to stand for a module of a later phase
+    await database.query("update modules set is_active = false where code = 'dashboard'");
     const first = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
     expect(first.permissions).not.toHaveProperty("dashboard");
 
     await database.query("update modules set is_active = true where code = 'dashboard'");
     const later = await signIn("Budi.Santoso@example.test", "5b0c2a52-7d1f-4d0e-9b57-0a8f1f6f0001");
-    expect(later.permissions).toEqual({ ...EVERY_ACTIVE_MODULE, dashboard: "VIEW" });
+    expect(later.permissions).toEqual(EVERY_ACTIVE_MODULE);
   });
 
   it("grants nothing when the setting is empty", async () => {

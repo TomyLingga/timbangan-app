@@ -229,14 +229,15 @@ async function run(browser) {
   check("phone width has no horizontal scroll", await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
   await browser.screenshot("06-kontrak-phone-dark");
   await browser.click('button[aria-label="Buka menu"]');
-  check("drawer lists the pages of a logistics admin and Denah without a link", Boolean(await browser.waitFor(`(() => {
+  check("drawer lists the pages of a logistics admin and no planned entries", Boolean(await browser.waitFor(`(() => {
     const dialog = document.querySelector('[role="dialog"]');
     if (!dialog) return false;
     const links = [...dialog.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-    // Every page but Pengguna for a logistics admin; Denah comes later and is plain text.
+    // Every page but Pengguna for a logistics admin. The plant map now is the control room (module dashboard),
+    // which this account does not hold, so nothing is listed as planned any more.
     // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
     const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/tujuan', '/kartu', '/laporan', '/stasiun'];
-    return dialog.innerText.includes('Denah') && !links.includes('/denah') && links.join() === expected.join();
+    return !dialog.innerText.includes('Belum tersedia') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
   await browser.colorScheme("light");

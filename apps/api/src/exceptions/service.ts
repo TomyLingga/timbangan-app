@@ -2,8 +2,9 @@
 // the weighbridge program stops sending, and how a request is shown.
 import { and, desc, eq, inArray, isNull, lt, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import { type Account, can } from "../auth/guard.js";
 import type { Orm } from "../db/client.js";
-import { exceptions, stations, trips, users, vehicles } from "../db/schema.js";
+import { type ExceptionType, exceptions, stations, trips, users, vehicles } from "../db/schema.js";
 import { type Finding, figures, type Measure } from "../weighing/checks.js";
 import { messages } from "../weighing/messages.js";
 import type { WeighContext } from "../weighing/service.js";
@@ -13,6 +14,13 @@ import type { Spoken } from "../weighing/speech.js";
 export const HEARTBEAT_TIMEOUT_MS = 10_000;
 /** The types raised by the weighbridge. */
 export const WEIGHING_TYPES = ["PLATE", "GROSS_IN", "TARE_OUT", "NET_IN", "NET_OUT"] as const;
+/** The types raised by the field forms: no heartbeat, no expiry, decided by the holders of qc_approvals. */
+export const QC_TYPES = ["QC_HOLD"] as const;
+
+/** The types an account may see: weighbridge requests with approvals, QC holds with qc_approvals. */
+export function visibleTypes(account: Account): ExceptionType[] {
+  return [...(can(account, "approvals", "VIEW") ? WEIGHING_TYPES : []), ...(can(account, "qc_approvals", "VIEW") ? QC_TYPES : [])];
+}
 
 export type ExceptionRow = typeof exceptions.$inferSelect;
 
@@ -195,6 +203,7 @@ export async function loadExceptionViews(orm: Orm, where: SQL | undefined, limit
       reason: row.decisionReason,
       reportNo: row.reportNo,
       weighingId: row.weighingId,
+      qualityCheckId: row.qualityCheckId,
       context: row.context,
     };
   });

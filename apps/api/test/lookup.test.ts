@@ -17,6 +17,7 @@ describe("GET /api/quality-parameters", () => {
         { code: "IMPURITIES", name: "Impurities (kotoran)", unit: "%", decimals: 3, minValid: 0, maxValid: 5 },
         { code: "FFA", name: "FFA", unit: "%", decimals: 2, minValid: 0, maxValid: 20 },
         { code: "MOISTURE", name: "Moisture (kadar air)", unit: "%", decimals: 3, minValid: 0, maxValid: 5 },
+        // the QC loading parameters of migration 0006 are switched off and not listed
       ],
     });
     expect((await get(call, "/api/quality-parameters", "pks1")).statusCode).toBe(200);

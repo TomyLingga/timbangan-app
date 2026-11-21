@@ -141,7 +141,9 @@ describe("GET /api/me", () => {
     const headers = await bearer(app, "admin");
     await database.query("delete from user_permissions where user_id = $1 and module_code <> 'gate'", [id]);
     await database.query("insert into user_permissions (user_id, module_code, level) values ($1, 'users', 'VIEW')", [id]);
-    // a permission on a module that is not active yet is not shown
+    // a permission on a module that is not active yet is not shown; every module is active since 0007, so the
+    // dashboard is switched off here to stand for one
+    await database.query("update modules set is_active = false where code = 'dashboard'");
     await database.query("insert into user_permissions (user_id, module_code, level) values ($1, 'dashboard', 'VIEW')", [id]);
 
     const response = await app.inject({ method: "GET", url: "/api/me", headers });

@@ -16,6 +16,7 @@ import { loadWeighContext } from "../weighing/service.js";
 import { joinSpoken, type Spoken } from "../weighing/speech.js";
 import { loadSteps, readyStep, repeatLoading } from "../weighing/steps.js";
 import { loadWeighTrip, weighingView } from "../weighing/view.js";
+import { decideQcHold } from "../work/qc-hold.js";
 import { contextOf, decisionOf, type ExceptionRow, expireStaleExceptions, pendingSpoken } from "./service.js";
 
 /** The three weight differences: a written reason is required and an approval gets a Berita Acara number. */
@@ -37,6 +38,7 @@ function checkBody(row: ExceptionRow, body: DecideBody): void {
   const allowed = netOut ? ["OK", "ADD_LOAD", "REDUCE_LOAD"] : ["APPROVE", "REJECT"];
   if (!allowed.includes(body.decision)) fields.push({ field: "decision", message: netOut ? "Keputusan harus OK, ADD_LOAD, atau REDUCE_LOAD." : "Keputusan harus APPROVE atau REJECT." });
   if (DIFFERENCE_TYPES.includes(row.type) && (body.reason ?? "").length < 3) fields.push({ field: "reason", message: "Alasan wajib diisi, minimal 3 huruf." });
+  if (row.type === "QC_HOLD" && (body.reason ?? "").length > 300) fields.push({ field: "reason", message: "Catatan keputusan paling banyak 300 huruf." });
   if (body.updateMasterTare && !(row.type === "TARE_OUT" && body.decision === "APPROVE")) {
     fields.push({ field: "updateMasterTare", message: "Tarra master hanya bisa diganti pada selisih tarra yang disetujui." });
   }
@@ -60,6 +62,7 @@ export async function decideException(tx: Orm, request: FastifyRequest, account:
   if (row.status === "CANCELLED" || row.status === "EXPIRED") throw cancelledError();
   if (row.status !== "PENDING") throw decidedError();
   if (!can(account, row.approverModule as ModuleCode, "EDIT")) throw forbidden();
+  if (row.type === "QC_HOLD") return decideQcHold(tx, request, account, row, body.decision === "APPROVE" ? "APPROVE" : "REJECT", body.reason && body.reason.length > 0 ? body.reason : null, now);
   if (row.stationId === null || row.liveWeightKg === null) throw invalidState("Permintaan ini tidak berasal dari timbangan.");
 
   const weigh = await loadWeighContext(tx, row.tripId, null, true);

@@ -28,6 +28,8 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   loading: "Muat",
   sealing: "Segel",
   reports: "Laporan",
+  plant_masters: "Master pabrik",
+  dashboard: "Dashboard",
 };
 
 export const LEVEL_LABELS: Readonly<Record<PermissionLevel, string>> = {

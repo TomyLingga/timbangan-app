@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 import { freshDatabase } from "./helpers/app.js";
 
 describe("migration 0005", () => {
-  it("activates the phase 4 modules and leaves the dashboard off", async () => {
+  it("activates the phase 4 modules; the dashboard stays off until 0007 switches it on", async () => {
     const database = await freshDatabase();
     const rows = await database.query<{ code: string; is_active: boolean }>("select code, is_active from modules order by sort_order");
-    expect(rows.filter((row) => !row.is_active).map((row) => row.code)).toEqual(["dashboard"]);
+    // freshDatabase applies every migration, 0007 included
+    expect(rows.filter((row) => !row.is_active).map((row) => row.code)).toEqual([]);
+    expect(rows.find((row) => row.code === "dashboard")?.is_active).toBe(true);
     for (const code of ["weighbridge", "approvals", "security_check", "qc", "qc_approvals", "unloading", "loading", "sealing", "reports"]) {
       expect(rows.find((row) => row.code === code)?.is_active, code).toBe(true);
     }

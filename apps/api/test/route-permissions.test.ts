@@ -93,13 +93,44 @@ const ROUTES: Row[] = [
   row("PATCH", "/api/stations/999999", [["weighbridge", "EDIT"]], true),
   row("POST", "/api/stations/999999/key", [["weighbridge", "EDIT"]], true),
 
-  row("GET", "/api/exceptions", [["approvals", "VIEW"]], true),
-  row("GET", "/api/exceptions/999999", [["approvals", "VIEW"]], true),
+  // QC holds are seen and decided by the holders of qc_approvals (phase 5)
+  row("GET", "/api/exceptions", [["approvals", "VIEW"], ["qc_approvals", "VIEW"]], true),
+  row("GET", "/api/exceptions/999999", [["approvals", "VIEW"], ["qc_approvals", "VIEW"]], true),
   row("GET", "/api/exceptions/999999/report", [["approvals", "VIEW"]], true),
-  row("POST", "/api/exceptions/999999/decide", [["approvals", "EDIT"]], true),
+  row("POST", "/api/exceptions/999999/decide", [["approvals", "EDIT"], ["qc_approvals", "EDIT"]], true),
+
+  row("GET", "/api/tanks", [["plant_masters", "VIEW"]], true),
+  row("POST", "/api/tanks", [["plant_masters", "CREATE"]], true),
+  row("PATCH", "/api/tanks/999999", [["plant_masters", "EDIT"]], true),
+  row("GET", "/api/seals", [["plant_masters", "VIEW"]], true),
+  row("POST", "/api/seals/batch", [["plant_masters", "CREATE"]], true),
+  row("PATCH", "/api/seals/999999", [["plant_masters", "EDIT"]], true),
+  row("POST", "/api/files", [], true),
+  row("GET", "/api/files/999999", [], true),
+
+  // the work list shows the steps of the modules the account views; one step answers 404 outside them
+  row("GET", "/api/work/steps", [], true),
+  row("GET", "/api/work/steps/999999", [], true),
+  row("GET", "/api/work/find", [], true),
+  row("GET", "/api/work/seals/available", [["sealing", "CREATE"]], true),
+  // the module of a form is the module of its step, checked after the body
+  row("POST", "/api/work/steps/999999/seal-check", [], true),
+  row("POST", "/api/work/steps/999999/qc-receiving", [], true),
+  row("POST", "/api/work/steps/999999/reseal", [], true),
+  row("POST", "/api/work/steps/999999/unloading", [], true),
+  row("POST", "/api/work/steps/999999/cleanliness", [], true),
+  row("POST", "/api/work/steps/999999/qc-loading", [], true),
+  row("POST", "/api/work/steps/999999/loading/start", [], true),
+  row("POST", "/api/work/steps/999999/loading/finish", [], true),
+  row("POST", "/api/work/steps/999999/sealing", [], true),
 
   row("GET", "/api/reports/contracts", [["reports", "VIEW"]], true),
   row("GET", "/api/reports/trips", [["reports", "VIEW"]], true),
+
+  // `dashboard` is not in ModuleCode; GET /api/control-room/stream stays open, so it is checked in control-room.test.ts
+  row("GET", "/api/control-room/state", [["dashboard" as ModuleCode, "VIEW"]], true),
+  row("GET", "/api/control-room/trips/999999", [["dashboard" as ModuleCode, "VIEW"]], true),
+  row("GET", "/api/control-room/plan.svg", [["dashboard" as ModuleCode, "VIEW"]], true),
 
   row("GET", "/api/admin/users", [["users", "VIEW"]]),
   row("GET", "/api/admin/modules", [["users", "VIEW"]]),

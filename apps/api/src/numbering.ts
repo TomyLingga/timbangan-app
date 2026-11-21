@@ -78,6 +78,24 @@ export async function nextDocumentNo(orm: Orm, series: Series, site: string, at:
   return series === "SPJ" ? spjNumber(site, at, seq) : registrationNo(site, at, seq);
 }
 
+/** Documents of the field steps whose pattern is a setting (migration 0006), numbered per site per year. */
+export const FIELD_DOCUMENTS = {
+  /** nomor CoA, at QC loading */
+  COA: { setting: "coa_number_format", fallback: "{seq:4}/COA/{site}/{roman}/{yyyy}" },
+  /** nomor surat jalan, when loading is finished */
+  SJ: { setting: "delivery_note_number_format", fallback: "{seq:4}/SJ/{site}/{roman}/{yyyy}" },
+  /** nomor surat out spec, at the reseal of a rejected incoming truck */
+  OS: { setting: "out_spec_letter_number_format", fallback: "{seq:4}/OS/{site}/{roman}/{yyyy}" },
+} as const;
+export type FieldDocument = keyof typeof FIELD_DOCUMENTS;
+
+/** The next number of a field document; `format` is the setting's value, or null for the default pattern. */
+export async function nextFieldDocumentNo(orm: Orm, document: FieldDocument, format: string | null, site: string, at: Date): Promise<string> {
+  const { yyyy } = plantDateParts(at);
+  const seq = await takeNumber(orm, `${document}/${site}/${yyyy}`);
+  return doNumber(format ?? FIELD_DOCUMENTS[document].fallback, { seq, site, at });
+}
+
 /** The next DO number of the site: per site per year, in the pattern of settings.do_number_format. */
 export async function nextDoNumber(orm: Orm, format: string, site: string, at: Date): Promise<string> {
   const { yyyy } = plantDateParts(at);

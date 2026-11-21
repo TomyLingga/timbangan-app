@@ -4,7 +4,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutGroup, motion } from "motion/react";
 
-import { isCurrent, NAV_ENTRIES, NAV_GROUPS, PLANNED } from "@/components/app-shell/nav-items";
+import {
+  isCurrent,
+  NAV_ENTRIES,
+  NAV_GROUPS,
+  PLANNED,
+} from "@/components/app-shell/nav-items";
 import { navigationFor } from "@/lib/navigation";
 import { MOTION_SPRING } from "@/lib/motion";
 import type { User } from "@/lib/types";
@@ -20,12 +25,21 @@ const railTip =
  * The menu. `id` keeps the sliding tile of the desktop sidebar apart from the
  * one in the phone drawer, which always shows its labels.
  */
-export function SidebarNav({ user, onNavigate, id = "sidebar" }: { user: User; onNavigate?: () => void; id?: string }) {
+export function SidebarNav({
+  user,
+  onNavigate,
+  id = "sidebar",
+}: {
+  user: User;
+  onNavigate?: () => void;
+  id?: string;
+}) {
   const pathname = usePathname();
   const allowed = new Set(navigationFor(user));
-  const groups = NAV_GROUPS.map((group) => ({ ...group, hrefs: group.hrefs.filter((href) => allowed.has(href)) })).filter(
-    (group) => group.hrefs.length > 0,
-  );
+  const groups = NAV_GROUPS.map((group) => ({
+    ...group,
+    hrefs: group.hrefs.filter((href) => allowed.has(href)),
+  })).filter((group) => group.hrefs.length > 0);
 
   return (
     <nav
@@ -37,8 +51,15 @@ export function SidebarNav({ user, onNavigate, id = "sidebar" }: { user: User; o
           <div key={group.label ?? "home"}>
             {group.label ? (
               <>
-                <h2 className="kicker mb-2 px-3 text-sidebar-muted rail:lg:sr-only">{group.label}</h2>
-                {index > 0 ? <span aria-hidden="true" className="mx-auto mb-3 hidden h-px w-8 bg-sidebar-border rail:lg:block" /> : null}
+                <h2 className="kicker mb-2 px-3 text-sidebar-muted rail:lg:sr-only">
+                  {group.label}
+                </h2>
+                {index > 0 ? (
+                  <span
+                    aria-hidden="true"
+                    className="mx-auto mb-3 hidden h-px w-8 bg-sidebar-border rail:lg:block"
+                  />
+                ) : null}
               </>
             ) : null}
             <ul className="flex flex-col gap-1 rail:lg:items-center">
@@ -66,8 +87,14 @@ export function SidebarNav({ user, onNavigate, id = "sidebar" }: { user: User; o
                           className="absolute inset-0 rounded-xl bg-sidebar-accent shadow-[inset_0_0_0_1px_color-mix(in_oklch,var(--sidebar-primary)_22%,transparent)]"
                         />
                       ) : null}
-                      <item.icon className="relative size-[1.125rem] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-                      <span className={cn("relative truncate", railLabel)}>{item.label}</span>
+                      <item.icon
+                        className="relative size-[1.125rem] shrink-0"
+                        strokeWidth={1.75}
+                        aria-hidden="true"
+                      />
+                      <span className={cn("relative truncate", railLabel)}>
+                        {item.label}
+                      </span>
                       <span aria-hidden="true" className={railTip}>
                         {item.label}
                       </span>
@@ -80,21 +107,31 @@ export function SidebarNav({ user, onNavigate, id = "sidebar" }: { user: User; o
         ))}
       </LayoutGroup>
 
-      <div className="mt-auto rail:lg:hidden">
-        <h2 className="kicker mb-2 px-3 text-sidebar-muted">Belum tersedia</h2>
-        <ul className="flex flex-col gap-1">
-          {PLANNED.map((item) => (
-            <li
-              key={item.label}
-              className="flex min-h-10 cursor-default items-center gap-3 rounded-xl px-3 text-sm text-sidebar-muted/80"
-            >
-              <item.icon className="size-[1.125rem] shrink-0" strokeWidth={1.75} aria-hidden="true" />
-              {item.label}
-              <span className="ml-auto rounded-full border border-dashed border-sidebar-border px-2 text-[0.6875rem]">Nanti</span>
-            </li>
-          ))}
-        </ul>
-      </div>
+      {PLANNED.length > 0 && (
+        <div className="mt-auto rail:lg:hidden">
+          <h2 className="kicker mb-2 px-3 text-sidebar-muted">
+            Belum tersedia
+          </h2>
+          <ul className="flex flex-col gap-1">
+            {PLANNED.map((item) => (
+              <li
+                key={item.label}
+                className="flex min-h-10 cursor-default items-center gap-3 rounded-xl px-3 text-sm text-sidebar-muted/80"
+              >
+                <item.icon
+                  className="size-[1.125rem] shrink-0"
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
+                {item.label}
+                <span className="ml-auto rounded-full border border-dashed border-sidebar-border px-2 text-[0.6875rem]">
+                  Nanti
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </nav>
   );
 }

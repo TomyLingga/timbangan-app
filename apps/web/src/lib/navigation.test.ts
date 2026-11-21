@@ -67,6 +67,7 @@ describe("navigationFor", () => {
 
   it("adds the weighing pages for the modules of phase 4", () => {
     expect(navigationFor(staff({ approvals: "VIEW", reports: "VIEW", weighbridge: "EDIT" }))).toEqual(["/", "/keputusan", "/laporan", "/stasiun"]);
+    expect(navigationFor(staff({ dashboard: "VIEW" }))).toEqual(["/", "/ruang-kontrol"]);
     // the station list needs the edit level
     expect(navigationFor(staff({ weighbridge: "VIEW" }))).toEqual(["/"]);
     expect(navigationFor(partner({ approvals: "EDIT", reports: "VIEW" }))).toEqual(["/"]);
