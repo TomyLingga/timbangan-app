@@ -76,6 +76,8 @@ async function pickPartner(browser, inputSelector, text) {
 }
 
 async function signOut(browser) {
+  // Sign-out sits in the account menu of the top bar.
+  await browser.click('[data-testid="user-menu"]');
   await browser.click("Keluar");
   await browser.waitFor("location.pathname === '/login'");
 }

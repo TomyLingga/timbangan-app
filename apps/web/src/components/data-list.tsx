@@ -37,7 +37,7 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
 
   return (
     <div aria-busy={stale} className={cn("transition-opacity duration-150", stale && "opacity-60")}>
-      <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
+      <div className="hidden overflow-hidden rounded-2xl border bg-card shadow-panel md:block">
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
@@ -45,16 +45,13 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
                 <TableHead
                   key={column.id}
                   scope="col"
-                  className={cn(
-                    "h-11 px-3 text-xs font-medium text-muted-foreground",
-                    column.align === "right" && "text-right",
-                  )}
+                  className={cn("h-10 px-3", column.align === "right" && "text-right")}
                 >
                   {column.header}
                 </TableHead>
               ))}
               {actions ? (
-                <TableHead scope="col" className="h-11 px-3">
+                <TableHead scope="col" className="h-10 px-3">
                   <span className="sr-only">Tindakan</span>
                 </TableHead>
               ) : null}
@@ -67,7 +64,7 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-                className="border-b transition-colors last:border-0 hover:bg-muted/50"
+                className="transition-colors duration-150 hover:bg-muted/60"
               >
                 {columns.map((column) => (
                   <TableCell
@@ -88,24 +85,24 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
         </Table>
       </div>
 
-      <ul className="flex flex-col gap-3 md:hidden">
+      <ul className="flex flex-col gap-2.5 md:hidden">
         {rows.map((row, index) => (
           <motion.li
             key={rowKey(row)}
-            initial={{ opacity: 0, y: 4 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-            className="rounded-lg border bg-card p-4"
+            className="rounded-2xl border bg-card p-4 shadow-panel"
           >
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 text-sm wrap-break-word">{primary.cell(row)}</div>
+              <div className="min-w-0 text-[0.9375rem] wrap-break-word">{primary.cell(row)}</div>
               {actions ? <div className="-mt-1.5 -mr-1.5 shrink-0">{actions(row)}</div> : null}
             </div>
-            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 text-sm">
+            <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-dashed pt-3 text-sm">
               {details.map((column) => (
                 <div key={column.id} className={cn("min-w-0", column.wide && "col-span-2")}>
                   <dt className="text-xs text-muted-foreground">{column.header}</dt>
-                  <dd className="wrap-break-word">{column.cell(row)}</dd>
+                  <dd className={cn("mt-0.5 wrap-break-word", column.align === "right" && "tabular-nums")}>{column.cell(row)}</dd>
                 </div>
               ))}
             </dl>

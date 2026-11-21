@@ -1,42 +1,147 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { CircleAlert, CircleCheck, RefreshCw } from "lucide-react";
+import { useMemo } from "react";
+import Link from "next/link";
+import { CircleAlert, Database, RefreshCw, Server, UserRound } from "lucide-react";
 
+import { CountUp } from "@/components/count-up";
+import { Panel } from "@/components/page-parts";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
+import { TruckFlow } from "@/features/home/truck-flow";
 import { useApiQuery, type ApiQuery } from "@/hooks/use-api-query";
 import { isApiError } from "@/lib/api-client";
 import { API_URL } from "@/lib/config";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { errorMessage } from "@/lib/messages";
-import { accessSummary, canSeeSyncRuns } from "@/lib/permissions";
+import { accessSummary, canSeeSyncRuns, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { latestRunPerEntity, runsBySource, syncEntityLabel, syncStatusInfo } from "@/lib/status";
-import type { SyncRun, SyncRunList, User } from "@/lib/types";
+import { countFlow } from "@/lib/truck-flow";
+import type { Page, SyncRun, SyncRunList, Trip, User } from "@/lib/types";
 
-function Panel({ title, action, children }: { title: string; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="rounded-lg border bg-card">
-      <div className="flex min-h-14 items-center justify-between gap-3 border-b px-4 py-2 sm:px-5">
-        <h2 className="text-sm font-semibold">{title}</h2>
-        {action}
-      </div>
-      <div className="px-4 py-4 sm:px-5">{children}</div>
-    </section>
+const PLANT_TIME_ZONE = "Asia/Jakarta";
+
+function plantToday(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: PLANT_TIME_ZONE }).format(new Date());
+}
+
+function todayLabel(): string {
+  return new Intl.DateTimeFormat("id-ID", { timeZone: PLANT_TIME_ZONE, weekday: "long", day: "numeric", month: "long", year: "numeric" }).format(
+    new Date(),
   );
 }
 
-function AccountPanel({ user }: { user: User }) {
+function initials(fullName: string): string {
+  const words = fullName.trim().split(/\s+/).filter(Boolean);
+  return words.slice(0, 2).map((word) => word[0]?.toUpperCase() ?? "").join("") || "?";
+}
+
+// --- today: the truck flow and the key figures, from the list routes -----------------
+
+const FLOW_LIMIT = 50;
+
+/** A key figure in the line under the title: the number, then what it counts. */
+function Figure({ value, label, loading }: { value: number | undefined; label: string; loading: boolean }) {
   return (
-    <Panel title="Akun yang sedang masuk">
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-[10rem_1fr]">
-        <dt className="text-muted-foreground">Nama</dt>
-        <dd className="font-medium wrap-break-word">{user.fullName}</dd>
-        <dt className="text-muted-foreground">Nama pengguna</dt>
-        <dd className="wrap-break-word">{user.username}</dd>
+    <span className="flex items-baseline gap-1.5">
+      {value !== undefined ? (
+        <CountUp value={value} className="font-semibold text-foreground tabular-nums" />
+      ) : loading ? (
+        <Skeleton className="inline-block h-4 w-5 self-center" />
+      ) : (
+        <span className="font-semibold text-foreground">-</span>
+      )}
+      {label}
+    </span>
+  );
+}
+
+function Today({ user }: { user: User }) {
+  const today = plantToday();
+  // GET /api/trips: staff, with gate or registrations at view level.
+  const seesTrips = isStaff(user) && (canView(user, "gate") || canView(user, "registrations"));
+  const seesRegistrations = canView(user, "registrations");
+  const atPost = isStaff(user) && canView(user, "gate");
+
+  const list = (status: string, withDate: boolean) => (signal: AbortSignal) =>
+    api.request<Page<Trip>>("/api/trips", { query: { status, ...(withDate ? { date: today } : {}), limit: FLOW_LIMIT }, signal });
+  const expected = useApiQuery(seesTrips ? `flow-expected|${today}` : null, list("ISSUED,EXPIRED", true));
+  const inside = useApiQuery(seesTrips ? "flow-inside" : null, list("CHECKED_IN,IN_PROCESS", false));
+  const done = useApiQuery(seesTrips ? `flow-done|${today}` : null, list("COMPLETED", true));
+  const waiting = useApiQuery(seesRegistrations ? "home-waiting" : null, (signal) =>
+    api.request<Page<unknown>>("/api/registrations", { query: { status: "SUBMITTED", limit: 1 }, signal }),
+  );
+
+  const lists = [expected, inside, done];
+  const failed = lists.find((query) => query.hasError);
+  const ready = expected.data && inside.data && done.data;
+  const counts = useMemo(
+    () => (expected.data && inside.data && done.data ? countFlow(expected.data.items, inside.data.items, done.data.items) : null),
+    [expected.data, inside.data, done.data],
+  );
+  const partial = lists.some((query) => query.data && query.data.total > query.data.items.length);
+
+  return (
+    <>
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <p className="kicker mb-2 text-primary-ink">Hari ini</p>
+          <h1 className="text-[1.875rem] leading-tight font-semibold sm:text-[2.25rem]">Beranda</h1>
+          <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[0.9375rem] text-muted-foreground">
+            {seesTrips ? (
+              <>
+                <Figure value={expected.data?.total} label="akan datang" loading={expected.isLoading} />
+                <Figure value={inside.data?.total} label="di dalam pabrik" loading={inside.isLoading} />
+                <Figure value={done.data?.total} label="selesai hari ini" loading={done.isLoading} />
+              </>
+            ) : null}
+            {seesRegistrations ? (
+              <Link href="/registrasi" className="rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-3 focus-visible:ring-ring/50">
+                <Figure value={waiting.data?.total} label="menunggu tinjauan" loading={waiting.isLoading} />
+              </Link>
+            ) : null}
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">{todayLabel()}</p>
+      </div>
+
+      {seesTrips ? (
+        <TruckFlow
+          counts={ready ? counts : null}
+          loading={!ready && !failed}
+          error={failed ? errorMessage(failed.error) : null}
+          onRetry={() => lists.forEach((query) => query.hasError && query.reload())}
+          partial={partial}
+          links={atPost ? { upcoming: "/pos", gate: "/pos" } : {}}
+        />
+      ) : null}
+    </>
+  );
+}
+
+// --- account, API, sync -----------------------------------------------------------
+
+function AccountPanel({ user }: { user: User }) {
+  const summary = accessSummary(user.permissions, [], user.kind);
+  const parts = summary.includes(":") ? summary.split(" · ") : [summary];
+  return (
+    <Panel title="Akun yang sedang masuk" icon={UserRound}>
+      <div className="flex items-center gap-4">
+        <span
+          aria-hidden="true"
+          className="flex size-14 shrink-0 items-center justify-center rounded-lg bg-secondary font-mono text-lg font-semibold text-secondary-foreground"
+        >
+          {initials(user.fullName)}
+        </span>
+        <div className="min-w-0">
+          <p className="display text-xl leading-tight font-semibold wrap-break-word">{user.fullName}</p>
+          <p className="mt-0.5 truncate font-mono text-sm text-muted-foreground">{user.username}</p>
+        </div>
+      </div>
+      <dl className="mt-5 grid grid-cols-1 gap-x-6 gap-y-3 border-t pt-4 text-sm sm:grid-cols-[9rem_1fr]">
         <dt className="text-muted-foreground">Jenis akun</dt>
         <dd>{user.kind === "INTERNAL" ? "Karyawan INL" : "Perusahaan partner"}</dd>
         {user.partner ? (
@@ -46,8 +151,12 @@ function AccountPanel({ user }: { user: User }) {
           </>
         ) : null}
         <dt className="text-muted-foreground">Hak akses</dt>
-        <dd className="wrap-break-word" data-testid="access-summary">
-          {accessSummary(user.permissions, [], user.kind)}
+        <dd data-testid="access-summary" className="flex flex-wrap gap-1.5">
+          {parts.map((part) => (
+            <span key={part} className="rounded-sm border bg-surface px-2 py-0.5 text-xs leading-5">
+              {part}
+            </span>
+          ))}
         </dd>
       </dl>
     </Panel>
@@ -60,6 +169,7 @@ function HealthPanel() {
   return (
     <Panel
       title="Server API"
+      icon={Server}
       action={
         <Button variant="ghost" size="sm" onClick={health.reload} disabled={health.isLoading}>
           <RefreshCw className={health.isLoading ? "animate-spin" : undefined} aria-hidden="true" />
@@ -69,7 +179,7 @@ function HealthPanel() {
     >
       <div aria-live="polite" className="text-sm">
         {health.isLoading ? (
-          <Skeleton className="h-5 w-40" />
+          <Skeleton className="h-6 w-32" />
         ) : health.hasError ? (
           <p className="flex items-start gap-2 text-destructive">
             <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -78,15 +188,18 @@ function HealthPanel() {
             </span>
           </p>
         ) : (
-          <p className="flex items-center gap-2 text-success">
-            <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          <p className="flex items-center gap-2.5 text-success">
+            <span className="relative flex size-2.5" aria-hidden="true">
+              <span className="absolute inset-0 animate-ping rounded-full bg-success opacity-40 [animation-duration:2.4s]" />
+              <span className="relative size-2.5 rounded-full bg-success" />
+            </span>
             <span className="font-medium">Terhubung</span>
           </p>
         )}
       </div>
       <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-muted-foreground">Alamat</dt>
-        <dd className="break-all">{API_URL}</dd>
+        <dd className="font-mono text-[0.8125rem] break-all">{API_URL}</dd>
         <dt className="text-muted-foreground">Diperiksa</dt>
         <dd className="tabular-nums">
           {health.settledAt ? formatDateTime(new Date(health.settledAt).toISOString()) : "-"}
@@ -140,6 +253,7 @@ function SyncPanel({
   return (
     <Panel
       title={title}
+      icon={Database}
       action={
         <Button variant="ghost" size="sm" onClick={runs.reload} disabled={runs.isLoading}>
           <RefreshCw className={runs.isLoading ? "animate-spin" : undefined} aria-hidden="true" />
@@ -166,10 +280,8 @@ function SyncPanel({
             <li key={run.id} className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 py-2.5 first:pt-0 last:pb-0">
               <span className="font-medium">{syncEntityLabel(run.entity)}</span>
               <StatusBadge info={syncStatusInfo(run.status)} />
-              <span className="text-muted-foreground tabular-nums">
-                {formatDateTime(run.finishedAt ?? run.startedAt)}
-              </span>
-              <span className="text-right text-muted-foreground tabular-nums">
+              <span className="text-xs text-muted-foreground tabular-nums">{formatDateTime(run.finishedAt ?? run.startedAt)}</span>
+              <span className="text-right font-mono text-xs text-muted-foreground">
                 {run.rowsUpserted === null ? "-" : `${formatNumber(run.rowsUpserted)} baris`}
               </span>
               {run.error ? (
@@ -190,10 +302,11 @@ export function HomeScreen() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold tracking-tight">Beranda</h1>
-      <div className="grid items-start gap-4 lg:grid-cols-[3fr_2fr]">
+      <Today user={user} />
+
+      <div className="grid items-start gap-5 lg:grid-cols-[3fr_2fr]">
         <AccountPanel user={user} />
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           <HealthPanel />
           {canSeeSyncRuns(user) ? <SyncPanels /> : null}
         </div>

@@ -1255,9 +1255,66 @@ function seedRegistration({ partner, transporter, vehicleId, driverId, contractN
   for (const trip of tripsOf(registration)) issueSpj(trip, new Date(Date.now() - issuedDaysAgo * 86_400_000));
 }
 
-// Expected today at the post, and one whose SPJ ran out last week.
-seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-2", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: plantDate().iso, issuedDaysAgo: 0 });
-seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-6", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: daysFromNow(-9), issuedDaysAgo: 9 });
+// Expected today at the post, and one whose SPJ ran out last week. MOCK_FLOW=empty
+// leaves them out, for looking at Beranda without any truck.
+if (process.env.MOCK_FLOW !== "empty") {
+  seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-2", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: plantDate().iso, issuedDaysAgo: 0 });
+  seedRegistration({ partner: partners.pksB, transporter: partners.transporterB, vehicleId: "v-3", driverId: "d-6", contractNo: "0125/CONTOH/CPO/XI/2026", plannedDate: daysFromNow(-9), issuedDaysAgo: 9 });
+}
+
+// MOCK_FLOW=sample: trucks spread over the stages of the plant (expected today,
+// inside at a step, done today), for looking at the truck flow on Beranda. Off
+// by default, so the smoke test keeps its own counts. Invented like the rest.
+if (process.env.MOCK_FLOW === "sample") seedFlowSample();
+
+function seedFlowSample() {
+  const today = plantDate().iso;
+  // Trucks still to come use a vehicle and drivers that are not inside, so the post can check them in.
+  const comingDrivers = ["d-1", "d-7"];
+  const insideDrivers = ["d-5", "d-6", "d-8", "d-9", "d-10"];
+  const plan = [
+    ["upcoming", "IN", 3], ["upcoming", "OUT", 2],
+    ["WEIGH_1", "IN", 2], ["WEIGH_1", "OUT", 1],
+    ["QC", "IN", 4],
+    ["UNLOADING", "IN", 6], ["LOADING", "OUT", 2],
+    ["SEAL", "OUT", 1],
+    ["WEIGH_2", "IN", 2], ["WEIGH_2", "OUT", 1],
+    ["CHECK_OUT", "IN", 1],
+    ["done", "IN", 3], ["done", "OUT", 1],
+  ];
+  let n = 0;
+  for (const [stage, direction, count] of plan) {
+    for (let index = 0; index < count; index += 1) {
+      n += 1;
+      const before = registrations.length;
+      seedRegistration({
+        partner: partners.pksB,
+        transporter: partners.transporterB,
+        vehicleId: stage === "upcoming" ? "v-1" : `v-${(n % 3) + 3}`,
+        driverId: stage === "upcoming" ? comingDrivers[n % comingDrivers.length] : insideDrivers[n % insideDrivers.length],
+        contractNo: "0125/CONTOH/CPO/XI/2026",
+        plannedDate: today,
+        issuedDaysAgo: 0,
+      });
+      const registration = registrations[before];
+      if (direction === "OUT") Object.assign(registration, { direction: "OUT", flowCode: "OUT_BULK" });
+      if (stage === "upcoming") continue;
+      const flow = flowSteps[registration.flowCode];
+      const checkedIn = new Date(Date.now() - (30 + n * 7) * 60_000);
+      const { year, month, day, iso } = plantDate(checkedIn);
+      const at = flow.indexOf(stage);
+      for (const trip of tripsOf(registration)) {
+        Object.assign(trip, {
+          status: stage === "done" ? "COMPLETED" : "IN_PROCESS",
+          checkedInAt: checkedIn.toISOString(),
+          tripNo: `${year}${month}${day}-${String(nextNumber(`TRIP|${iso}`)).padStart(4, "0")}`,
+          currentStep: stage === "done" ? null : stage,
+          steps: flow.map((code, step) => ({ code, status: stage === "done" || step < at ? "DONE" : step === at ? "READY" : "PENDING" })),
+        });
+      }
+    }
+  }
+}
 
 const GATE_MESSAGES = {
   SPJ_EXPIRED: "SPJ sudah lewat masa berlaku. Minta terbit ulang.",

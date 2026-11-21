@@ -35,6 +35,7 @@ npm run build
 - Rute, kode galat, dan bentuk jawaban mengikuti API asli (`docs/fase-3-penyelarasan.md`), termasuk tiga rute `lookup` untuk form registrasi, `GET /api/admin/modules`, dan `PUT /api/admin/users/:id/permissions`.
 - Supir baru dari form berstatus "menunggu dikirim ke VCF" dan terkirim saat "Ambil dari VCF". Satu supir contoh selalu gagal dikirim, supaya tanda gagal dan alasannya bisa dilihat.
 - Fase 3: supir `CONTOH0004` berstatus blacklist, `CONTOH0003` warning; kartu `04A1B2C301` sampai `04A1B2C305` tersedia.
+- `MOCK_FLOW=sample` mengisi truk di semua tahap pabrik (akan datang, di dalam pabrik per langkah, selesai hari ini) untuk melihat Aliran truk di Beranda; `MOCK_FLOW=empty` menghapus truk contoh bawaan. Tanpa variabel itu data tidak berubah.
 - `MOCK_ODOO=off` membuat sinkron menjawab 503, `MOCK_SSO=off` membuat penukaran tiket menjawab 503, `MOCK_VCF=off` atau `MOCK_VCF=fail` membuat ambil dari VCF menjawab 503 atau 502.
 
 ## Uji asap di browser
@@ -47,6 +48,8 @@ npm run smoke
 ```
 
 `SMOKE_MODE=dev npm run smoke` memakai `next dev` (tanpa build), sehingga React Strict Mode ikut teruji. Tangkapan layar ditulis ke `dev/.smoke/`.
+
+`node dev/ui-shots.mjs [folder]` memakai build dan port yang sama untuk memotret halaman utama dalam tema gelap dan terang, lebar 1440 dan 390 piksel. Skrip itu menjalankan API tiruan dua kali: dengan `MOCK_FLOW=sample` untuk semua halaman, lalu dengan `MOCK_FLOW=empty` untuk Beranda tanpa truk. Folder bawaannya `.data/ui-pilot` di akar repo.
 
 ## Uji browser terhadap API asli
 

@@ -1,15 +1,13 @@
 "use client";
 
-import { CircleAlert, RefreshCw, SearchX } from "lucide-react";
 import { motion } from "motion/react";
 
+import { ListEmpty, ListError, ListSkeleton, ResultCount } from "@/components/page-parts";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useApiQuery } from "@/hooks/use-api-query";
-import { formatDate, formatNumber, formatPercent, formatQuantity } from "@/lib/format";
-import { errorMessage } from "@/lib/messages";
+import { formatDate, formatPercent, formatQuantity } from "@/lib/format";
 import { MOTION_BASE, rowDelay } from "@/lib/motion";
 import { api } from "@/lib/session";
 import { contractStateInfo } from "@/lib/status";
@@ -19,7 +17,16 @@ import { cn } from "@/lib/utils";
 /** Rows asked for in one request: the API caps a list at 50 and has no offset. */
 const PAGE_LIMIT = 50;
 
-const COLUMNS = ["Nomor kontrak", "Partner", "Barang", "Quantity", "Toleransi", "Sertifikat", "Berlaku sampai", "Status"];
+const COLUMNS: ReadonlyArray<{ label: string; numeric?: boolean }> = [
+  { label: "Nomor kontrak" },
+  { label: "Partner" },
+  { label: "Barang" },
+  { label: "Quantity", numeric: true },
+  { label: "Toleransi", numeric: true },
+  { label: "Sertifikat" },
+  { label: "Berlaku sampai" },
+  { label: "Status" },
+];
 
 interface ContractListProps {
   direction: Direction;
@@ -33,7 +40,7 @@ interface ContractListProps {
 function ContractNumber({ contract }: { contract: Contract }) {
   return (
     <>
-      <span className="font-medium">{contract.contractNo}</span>
+      <span className="ident font-medium">{contract.contractNo}</span>
       {contract.customerPoNo ? (
         <span className="block text-xs text-muted-foreground">PO {contract.customerPoNo}</span>
       ) : null}
@@ -43,20 +50,13 @@ function ContractNumber({ contract }: { contract: Contract }) {
 
 function ContractTable({ items }: { items: Contract[] }) {
   return (
-    <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
+    <div className="hidden overflow-hidden rounded-2xl border bg-card shadow-panel md:block">
       <Table>
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             {COLUMNS.map((column) => (
-              <TableHead
-                key={column}
-                scope="col"
-                className={cn(
-                  "h-11 px-3 text-xs font-medium text-muted-foreground",
-                  (column === "Quantity" || column === "Toleransi") && "text-right",
-                )}
-              >
-                {column}
+              <TableHead key={column.label} scope="col" className={cn("h-10 px-3", column.numeric && "text-right")}>
+                {column.label}
               </TableHead>
             ))}
           </TableRow>
@@ -68,22 +68,26 @@ function ContractTable({ items }: { items: Contract[] }) {
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-              className="border-b transition-colors last:border-0 hover:bg-muted/50"
+              className="group/row transition-colors duration-150 hover:bg-muted/60"
             >
-              <TableCell className="px-3 py-2.5">
+              <TableCell className="relative px-3 py-2.5">
+                <span
+                  aria-hidden="true"
+                  className="absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-primary opacity-0 transition-opacity duration-150 group-hover/row:opacity-100"
+                />
                 <ContractNumber contract={contract} />
               </TableCell>
               <TableCell className="max-w-56 truncate px-3 py-2.5" title={contract.partner.name}>
                 {contract.partner.name}
               </TableCell>
-              <TableCell className="max-w-48 truncate px-3 py-2.5" title={contract.product.name}>
+              <TableCell className="max-w-48 truncate px-3 py-2.5 text-muted-foreground" title={contract.product.name}>
                 {contract.product.name}
               </TableCell>
-              <TableCell className="px-3 py-2.5 text-right tabular-nums">
+              <TableCell className="px-3 py-2.5 text-right font-mono text-[0.8125rem] font-medium">
                 {formatQuantity(contract.qtyContract, contract.uom)}
               </TableCell>
-              <TableCell className="px-3 py-2.5 text-right tabular-nums">{formatPercent(contract.tolerancePct)}</TableCell>
-              <TableCell className="px-3 py-2.5">{contract.certificate || "-"}</TableCell>
+              <TableCell className="px-3 py-2.5 text-right font-mono text-[0.8125rem]">{formatPercent(contract.tolerancePct)}</TableCell>
+              <TableCell className="px-3 py-2.5 text-muted-foreground">{contract.certificate || "-"}</TableCell>
               <TableCell className="px-3 py-2.5 tabular-nums">{formatDate(contract.validUntil)}</TableCell>
               <TableCell className="px-3 py-2.5">
                 <StatusBadge info={contractStateInfo(contract.state)} />
@@ -98,35 +102,33 @@ function ContractTable({ items }: { items: Contract[] }) {
 
 function ContractCards({ items }: { items: Contract[] }) {
   return (
-    <ul className="flex flex-col gap-3 md:hidden">
+    <ul className="flex flex-col gap-2.5 md:hidden">
       {items.map((contract, index) => (
         <motion.li
           key={contract.id}
-          initial={{ opacity: 0, y: 4 }}
+          initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-          className="rounded-lg border bg-card p-4"
+          className="rounded-2xl border bg-card p-4 shadow-panel"
         >
           <div className="flex items-start justify-between gap-3">
-            <p className="min-w-0 text-sm wrap-break-word">
+            <p className="min-w-0 text-[0.9375rem] wrap-break-word">
               <ContractNumber contract={contract} />
             </p>
             <StatusBadge info={contractStateInfo(contract.state)} />
           </div>
-          <p className="mt-1 text-sm wrap-break-word text-muted-foreground">{contract.partner.name}</p>
-          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t pt-3 text-sm">
-            <div className="col-span-2">
-              <dt className="text-xs text-muted-foreground">Barang</dt>
-              <dd className="wrap-break-word">{contract.product.name}</dd>
+          <p className="mt-1 text-sm wrap-break-word">{contract.partner.name}</p>
+          <p className="text-sm wrap-break-word text-muted-foreground">{contract.product.name}</p>
+          <div className="mt-3 flex items-end justify-between gap-3 border-t border-dashed pt-3">
+            <div className="min-w-0">
+              <p className="text-xs text-muted-foreground">Quantity</p>
+              <p className="font-mono text-lg leading-tight font-semibold">{formatQuantity(contract.qtyContract, contract.uom)}</p>
             </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Quantity</dt>
-              <dd className="tabular-nums">{formatQuantity(contract.qtyContract, contract.uom)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Toleransi</dt>
-              <dd className="tabular-nums">{formatPercent(contract.tolerancePct)}</dd>
-            </div>
+            <p className="shrink-0 text-right text-xs text-muted-foreground">
+              Toleransi <span className="font-mono text-foreground">{formatPercent(contract.tolerancePct)}</span>
+            </p>
+          </div>
+          <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
             <div>
               <dt className="text-xs text-muted-foreground">Sertifikat</dt>
               <dd>{contract.certificate || "-"}</dd>
@@ -142,40 +144,6 @@ function ContractCards({ items }: { items: Contract[] }) {
   );
 }
 
-function ListSkeleton() {
-  return (
-    <div aria-busy="true">
-      <span className="sr-only" role="status">
-        Memuat daftar kontrak
-      </span>
-      <div className="hidden overflow-hidden rounded-lg border bg-card md:block">
-        <div className="flex h-11 items-center border-b px-3">
-          <Skeleton className="h-3 w-1/3" />
-        </div>
-        {Array.from({ length: 6 }, (_, row) => (
-          <div key={row} className="flex h-[53px] items-center gap-6 border-b px-3 last:border-0">
-            <Skeleton className="h-4 w-44" />
-            <Skeleton className="h-4 w-32" />
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="ml-auto h-4 w-24" />
-            <Skeleton className="h-4 w-16" />
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-col gap-3 md:hidden">
-        {Array.from({ length: 3 }, (_, card) => (
-          <div key={card} className="rounded-lg border bg-card p-4">
-            <Skeleton className="h-4 w-48" />
-            <Skeleton className="mt-2 h-4 w-32" />
-            <Skeleton className="mt-5 h-4 w-full" />
-            <Skeleton className="mt-3 h-4 w-2/3" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function ContractList({ direction, search, includeClosed, reloadToken, onClearSearch }: ContractListProps) {
   const query = useApiQuery(
     `${direction}|${search}|${includeClosed}|${reloadToken}`,
@@ -188,58 +156,38 @@ export function ContractList({ direction, search, includeClosed, reloadToken, on
   );
 
   if (query.hasError) {
-    return (
-      <div className="flex flex-col items-center rounded-lg border bg-card px-4 py-10 text-center">
-        <CircleAlert className="size-6 text-destructive" aria-hidden="true" />
-        <h2 className="mt-3 text-sm font-semibold">Daftar kontrak belum bisa dimuat</h2>
-        <p role="alert" className="mt-1 max-w-md text-sm text-muted-foreground">
-          {errorMessage(query.error)}
-        </p>
-        <Button variant="secondary" className="mt-4" onClick={query.reload}>
-          <RefreshCw aria-hidden="true" />
-          Coba lagi
-        </Button>
-      </div>
-    );
+    return <ListError title="Daftar kontrak belum bisa dimuat" error={query.error} onRetry={query.reload} />;
   }
 
-  if (!query.data) return <ListSkeleton />;
+  if (!query.data) return <ListSkeleton label="Memuat daftar kontrak" />;
 
   const { items, total } = query.data;
 
   if (items.length === 0) {
     return (
-      <div
-        className={cn(
-          "flex flex-col items-center rounded-lg border bg-card px-4 py-10 text-center transition-opacity duration-150",
-          query.isStale && "opacity-60",
-        )}
-      >
-        <SearchX className="size-6 text-muted-foreground" aria-hidden="true" />
-        <h2 className="mt-3 text-sm font-semibold">Tidak ada kontrak yang cocok</h2>
-        <p className="mt-1 max-w-md text-sm text-muted-foreground">
-          {search
+      <ListEmpty
+        title="Tidak ada kontrak yang cocok"
+        hint={
+          search
             ? "Periksa lagi nomor kontrak atau nama partner yang dicari."
             : includeClosed
               ? "Belum ada kontrak untuk arah ini."
-              : "Kontrak yang sudah tutup tidak ikut ditampilkan."}
-        </p>
+              : "Kontrak yang sudah tutup tidak ikut ditampilkan."
+        }
+        stale={query.isStale}
+      >
         {search ? (
-          <Button variant="outline" className="mt-4" onClick={onClearSearch}>
+          <Button variant="outline" onClick={onClearSearch}>
             Hapus pencarian
           </Button>
         ) : null}
-      </div>
+      </ListEmpty>
     );
   }
 
   return (
-    <div aria-busy={query.isStale} className={cn("transition-opacity duration-150", query.isStale && "opacity-60")}>
-      <p role="status" className="mb-3 text-sm text-muted-foreground">
-        {total > items.length
-          ? `Menampilkan ${formatNumber(items.length)} dari ${formatNumber(total)} kontrak. Persempit pencarian untuk melihat yang lain.`
-          : `${formatNumber(items.length)} kontrak`}
-      </p>
+    <div aria-busy={query.isStale} className={cn("flex flex-col gap-3 transition-opacity duration-150", query.isStale && "opacity-60")}>
+      <ResultCount shown={items.length} total={total} noun="kontrak" />
       <ContractTable items={items} />
       <ContractCards items={items} />
     </div>
