@@ -10,8 +10,26 @@ import { tokenStore } from "../platform/tokens";
 
 const ACCOUNT_KEY = "account-v1";
 
-/** EXPO_PUBLIC_API_URL is put into the bundle when it is built. */
+/** EXPO_PUBLIC_API_URL is put into the bundle when it is built; the sign-in screen can change it per phone. */
 export const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? "").replace(/\/+$/, "");
+const SERVER_KEY = "server-address-v1";
+let serverAddress = API_URL;
+
+/** The API address in use: the one saved on this phone, or the one built in. */
+export const currentServer = () => serverAddress;
+
+/** Normalises what the operator typed: adds http:// when no scheme is given and drops trailing slashes. */
+export function normaliseServer(input: string): string {
+  const trimmed = input.trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+export async function saveServer(input: string): Promise<string> {
+  serverAddress = normaliseServer(input) || API_URL;
+  await AsyncStorage.setItem(SERVER_KEY, serverAddress).catch(() => undefined);
+  return serverAddress;
+}
 
 type Status = "loading" | "signedOut" | "signedIn";
 
@@ -33,7 +51,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signedOutRef = useRef<() => void>(() => undefined);
 
   const api = useMemo(
-    () => createApiClient({ baseUrl: API_URL, tokens: tokenStore, clientKind: Platform.OS === "ios" ? "ios" : "android", onSignedOut: () => signedOutRef.current() }),
+    () => createApiClient({ baseUrl: currentServer, tokens: tokenStore, clientKind: Platform.OS === "ios" ? "ios" : "android", onSignedOut: () => signedOutRef.current() }),
     [],
   );
 
@@ -58,6 +76,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     (async () => {
+      const saved = await AsyncStorage.getItem(SERVER_KEY).catch(() => null);
+      if (saved) serverAddress = saved;
       const token = await tokenStore.load().catch(() => null);
       if (!token) {
         if (alive) setStatus("signedOut");

@@ -37,6 +37,15 @@
         {
           "faceIDPermission": "Identitas dicek sebelum keputusan dikirim."
         }
+      ],
+      "expo-build-properties",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
       ]
     ]
   }

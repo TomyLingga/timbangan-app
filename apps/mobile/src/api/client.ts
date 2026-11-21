@@ -57,7 +57,8 @@ export interface RequestOptions {
 }
 
 export interface ApiClientOptions {
-  baseUrl: string;
+  /** The API address, or a function giving it (it may change at the sign-in screen). */
+  baseUrl: string | (() => string);
   tokens: TokenStore;
   fetch?: typeof fetch;
   /** Default timeout of a call in milliseconds. */
@@ -131,7 +132,8 @@ export function toApiError(status: number, body: unknown): ApiError {
 const isAbort = (error: unknown) => typeof error === "object" && error !== null && (error as { name?: unknown }).name === "AbortError";
 
 export function createApiClient(options: ApiClientOptions): ApiClient {
-  const { baseUrl, tokens, onSignedOut } = options;
+  const { tokens, onSignedOut } = options;
+  const baseUrl = () => (typeof options.baseUrl === "function" ? options.baseUrl() : options.baseUrl);
   const clientKind = options.clientKind ?? "android";
   const doFetch: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const defaultTimeout = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -152,7 +154,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       controller.abort();
     }, request.timeoutMs ?? defaultTimeout);
     try {
-      return await doFetch(buildUrl(baseUrl, path, request.query), {
+      return await doFetch(buildUrl(baseUrl(), path, request.query), {
         method: request.method ?? (hasBody ? "POST" : "GET"),
         headers,
         body: !hasBody ? undefined : isForm ? (request.body as FormData) : JSON.stringify(request.body),

@@ -2,7 +2,7 @@ import { Redirect, router } from "expo-router";
 import { useRef, useState } from "react";
 import { type TextInputInstance, View } from "react-native";
 import { loginErrorMessage } from "../src/api/messages";
-import { useSession } from "../src/state/session";
+import { currentServer, saveServer, useSession } from "../src/state/session";
 import { useTheme } from "../src/theme/ThemeProvider";
 import { radius, space } from "../src/theme/tokens";
 import { Banner, Button, ErrorText, Field, Input, Panel, Screen, T } from "../src/ui/kit";
@@ -12,6 +12,7 @@ export default function Masuk() {
   const { colors } = useTheme();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [server, setServer] = useState(currentServer());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [portalNote, setPortalNote] = useState(false);
@@ -20,10 +21,15 @@ export default function Masuk() {
   if (status === "signedIn") return <Redirect href="/beranda" />;
 
   const submit = async () => {
+    if (!server.trim()) {
+      setError("Isi alamat server, misalnya 192.168.1.10:3100.");
+      return;
+    }
     if (!username.trim() || !password) {
       setError("Isi username dan password.");
       return;
     }
+    setServer(await saveServer(server));
     setBusy(true);
     setError(null);
     try {
@@ -44,6 +50,18 @@ export default function Masuk() {
         <T kind="muted">Daftar kerja langkah lapangan dan keputusan selisih.</T>
       </View>
       <Panel>
+        <Field label="Alamat server">
+          <Input
+            value={server}
+            onChangeText={setServer}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            placeholder="192.168.1.10:3100"
+            testID="login-server"
+            accessibilityLabel="Alamat server"
+          />
+        </Field>
         <Field label="Username">
           <Input
             value={username}
