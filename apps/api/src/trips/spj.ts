@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Orm } from "../db/client.js";
 import { drivers, spjDocuments, trips, vehicles } from "../db/schema.js";
+import { replaceShareLink } from "../gps/share.js";
 import { nextDocumentNo } from "../numbering.js";
 import { readSetting, siteById } from "../settings.js";
 
@@ -47,6 +48,8 @@ export async function issueSpj(orm: Orm, tripId: number, actor: number, now: Dat
     issuedAt: now,
     validUntil,
   });
+  // the driver's location-sharing link printed with it; a reissue replaces the old one
+  await replaceShareLink(orm, tripId, actor, now);
 }
 
 /** Revokes the active SPJ of the trip, if there is one. */

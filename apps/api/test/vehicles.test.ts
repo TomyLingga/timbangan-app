@@ -68,6 +68,7 @@ describe("POST /api/vehicles", () => {
         kirValidUntil: "2027-03-31",
         // the test clock stands on 20 November in Jakarta: only the STNK is past
         expired: ["STNK"],
+        hasGps: false,
         isActive: true,
         verified: true,
       },

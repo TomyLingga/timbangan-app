@@ -1,7 +1,7 @@
 // Drizzle definitions of the tables this slice reads and writes. The SQL files in `migrations/` are the
 // source of truth; test/schema-drift.test.ts fails when a definition here no longer matches the database.
 // Constraints (checks, unique indexes, foreign keys) live in the migrations only.
-import { bigint, boolean, date, inet, integer, jsonb, numeric, pgTable, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { bigint, boolean, date, doublePrecision, inet, integer, jsonb, numeric, pgTable, real, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 const id = () => bigint("id", { mode: "number" }).primaryKey().generatedAlwaysAsIdentity();
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true });
@@ -755,4 +755,80 @@ export const fieldSubmissions = pgTable("field_submissions", {
   userId: bigint("user_id", { mode: "number" }).notNull(),
   response: jsonb("response").$type<Record<string, unknown>>().notNull(),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+// Phase 8 (0011): positions of vehicles outside the plant.
+export const GPS_SOURCE_KINDS = ["PROVIDER", "DEVICE"] as const;
+export const POSITION_SOURCE_KINDS = ["DEVICE", "PHONE"] as const;
+export type PositionSourceKind = (typeof POSITION_SOURCE_KINDS)[number];
+
+export const gpsSources = pgTable("gps_sources", {
+  id: id(),
+  name: text("name").notNull(),
+  kind: text("kind", { enum: GPS_SOURCE_KINDS }).notNull(),
+  keyHash: text("key_hash"),
+  keyCreatedAt: timestamptz("key_created_at"),
+  isActive: boolean("is_active").notNull().default(true),
+  lastSeenAt: timestamptz("last_seen_at"),
+  createdBy: bigint("created_by", { mode: "number" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+export const vehicleTrackers = pgTable("vehicle_trackers", {
+  id: id(),
+  vehicleId: bigint("vehicle_id", { mode: "number" }).notNull(),
+  sourceId: bigint("source_id", { mode: "number" }).notNull(),
+  deviceId: text("device_id").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  attachedBy: bigint("attached_by", { mode: "number" }),
+  attachedAt: timestamptz("attached_at").notNull().defaultNow(),
+  detachedBy: bigint("detached_by", { mode: "number" }),
+  detachedAt: timestamptz("detached_at"),
+});
+
+export const gpsUnknownDevices = pgTable("gps_unknown_devices", {
+  sourceId: bigint("source_id", { mode: "number" }).notNull(),
+  deviceId: text("device_id").notNull(),
+  firstSeenAt: timestamptz("first_seen_at").notNull(),
+  lastSeenAt: timestamptz("last_seen_at").notNull(),
+  lastPointAt: timestamptz("last_point_at").notNull(),
+  pointCount: integer("point_count").notNull().default(0),
+});
+
+export const vehiclePositions = pgTable("vehicle_positions", {
+  id: id(),
+  vehicleId: bigint("vehicle_id", { mode: "number" }).notNull(),
+  tripId: bigint("trip_id", { mode: "number" }),
+  at: timestamptz("at").notNull(),
+  lat: doublePrecision("lat").notNull(),
+  lon: doublePrecision("lon").notNull(),
+  speedKph: real("speed_kph"),
+  headingDeg: real("heading_deg"),
+  accuracyM: real("accuracy_m"),
+  sourceKind: text("source_kind", { enum: POSITION_SOURCE_KINDS }).notNull(),
+  sourceId: bigint("source_id", { mode: "number" }),
+  receivedAt: timestamptz("received_at").notNull().defaultNow(),
+});
+
+export const vehicleLastPositions = pgTable("vehicle_last_positions", {
+  vehicleId: bigint("vehicle_id", { mode: "number" }).primaryKey(),
+  tripId: bigint("trip_id", { mode: "number" }),
+  at: timestamptz("at").notNull(),
+  lat: doublePrecision("lat").notNull(),
+  lon: doublePrecision("lon").notNull(),
+  speedKph: real("speed_kph"),
+  headingDeg: real("heading_deg"),
+  accuracyM: real("accuracy_m"),
+  sourceKind: text("source_kind", { enum: POSITION_SOURCE_KINDS }).notNull(),
+  receivedAt: timestamptz("received_at").notNull(),
+});
+
+export const tripShareLinks = pgTable("trip_share_links", {
+  id: id(),
+  tripId: bigint("trip_id", { mode: "number" }).notNull(),
+  tokenHash: text("token_hash"),
+  createdBy: bigint("created_by", { mode: "number" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  revokedAt: timestamptz("revoked_at"),
+  revokedBy: bigint("revoked_by", { mode: "number" }),
 });

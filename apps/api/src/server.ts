@@ -15,7 +15,7 @@ export async function startServer(
     // An in-memory database is empty at every start, so nothing else can have migrated it.
     // Every other database is migrated with `npm run migrate`.
     if (config.databaseUrl === "pglite://memory") await migrate(database);
-    const app = await buildApp({ config, database, logger: options.logger ?? { level: "info" }, warmSpeech: true });
+    const app = await buildApp({ config, database, logger: options.logger ?? { level: "info" }, warmSpeech: true, gpsRetention: true });
     app.addHook("onClose", () => database.close());
     const address = await app.listen({ port: config.port, host: config.host });
     return { app, address };

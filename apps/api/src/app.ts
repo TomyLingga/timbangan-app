@@ -19,6 +19,11 @@ import { registerExceptionRoutes } from "./exceptions/routes.js";
 import { registerAttachmentRoutes } from "./attachments/routes.js";
 import { registerFileRoutes } from "./files/routes.js";
 import { registerGateRoutes } from "./gate/routes.js";
+import { registerGpsIntakeRoutes } from "./gps/intake-routes.js";
+import { registerGpsMasterRoutes } from "./gps/master-routes.js";
+import { registerGpsReadRoutes } from "./gps/read-routes.js";
+import { scheduleGpsRetention } from "./gps/retention.js";
+import { registerGpsShareRoutes } from "./gps/share-routes.js";
 import { registerHistoryRoutes } from "./history/routes.js";
 import { registerLookupRoutes } from "./lookup/routes.js";
 import { registerProductRoutes } from "./products/routes.js";
@@ -61,6 +66,8 @@ export interface AppOptions {
   speechEngine?: SpeechEngine;
   /** Makes the audio of the fixed sentences once the server listens (the server does; tests do not). */
   warmSpeech?: boolean;
+  /** Deletes GPS points past their retention once a day while the server listens (the server does; tests do not). */
+  gpsRetention?: boolean;
 }
 
 /** Everything a route needs, built once per application. */
@@ -142,6 +149,21 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerWorkRoutes(app, context, guards);
   registerFormRoutes(app, context, guards);
   registerControlRoomRoutes(app, context, guards);
+  registerGpsIntakeRoutes(app, context);
+  registerGpsMasterRoutes(app, context, guards);
+  registerGpsShareRoutes(app, context, guards);
+  registerGpsReadRoutes(app, context, guards);
+
+  if (options.gpsRetention) {
+    let stop: (() => void) | null = null;
+    app.addHook("onListen", async () => {
+      stop = scheduleGpsRetention(context.database, context.now, {
+        info: (data, message) => app.log.info(data, message),
+        warn: (data, message) => app.log.warn(data, message),
+      });
+    });
+    app.addHook("onClose", async () => stop?.());
+  }
 
   if (options.warmSpeech) {
     // in the background: a slow voice never delays the start

@@ -95,6 +95,7 @@ describe("GET /api/admin/modules", () => {
         { code: "dashboard", name: "Dashboard", levels: ["VIEW"], partnerAllowed: false },
         { code: "reports", name: "Laporan", levels: ["VIEW"], partnerAllowed: false },
         { code: "plant_masters", name: "Master pabrik", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
+        { code: "gps", name: "Lacak kendaraan", levels: ["VIEW", "EDIT"], partnerAllowed: true },
       ],
     });
   });

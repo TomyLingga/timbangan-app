@@ -1,4 +1,4 @@
-import { and, asc, count, eq, ilike, ne, type SQL } from "drizzle-orm";
+import { and, asc, count, eq, ilike, ne, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
@@ -55,6 +55,8 @@ const columns = {
   kirValidUntil: vehicles.kirValidUntil,
   isActive: vehicles.isActive,
   verifiedAt: vehicles.verifiedAt,
+  // an active GPS tracker (migration 0011); the table name is written out so the subquery cannot pick vt.id
+  hasGps: sql<boolean>`exists (select 1 from vehicle_trackers vt where vt.vehicle_id = vehicles.id and vt.is_active)`.mapWith(Boolean),
 };
 
 async function listVehicles(orm: Orm, where: SQL | undefined, limit: number, today: string) {

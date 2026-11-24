@@ -141,6 +141,22 @@ const ROUTES: Row[] = [
   row("GET", "/api/control-room/trips/999999", [["dashboard" as ModuleCode, "VIEW"]], true),
   row("GET", "/api/control-room/plan.svg", [["dashboard" as ModuleCode, "VIEW"]], true),
 
+  // the masters of the GPS intake; POST /api/gps/positions and the share routes have no account (gps-*.test.ts)
+  row("GET", "/api/gps/sources", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/sources", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/sources/999999/key", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/sources/999999/deactivate", [["gps", "EDIT"]], true),
+  row("GET", "/api/gps/sources/999999/unknown-devices", [["gps", "EDIT"]], true),
+  row("GET", "/api/gps/trackers", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/trackers", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/trackers/999999/detach", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/trips/999999/share-link/revoke", [["gps", "EDIT"]], true),
+  row("POST", "/api/gps/trips/999999/share-link/renew", [["gps", "EDIT"]], true),
+  // partner accounts read what concerns their company; the rest answers 404 (gps-read.test.ts)
+  row("GET", "/api/gps/vehicles", [["gps", "VIEW"]]),
+  row("GET", "/api/gps/vehicles/999999/track", [["gps", "VIEW"]]),
+  row("GET", "/api/gps/trips/999999/track", [["gps", "VIEW"]]),
+
   row("GET", "/api/admin/users", [["users", "VIEW"]]),
   row("GET", "/api/admin/modules", [["users", "VIEW"]]),
   row("PUT", "/api/admin/users/999999/permissions", [["users", "EDIT"]]),
@@ -149,7 +165,7 @@ const ROUTES: Row[] = [
 
 const BELOW: Record<PermissionLevel, PermissionLevel | null> = { VIEW: null, CREATE: "VIEW", EDIT: "CREATE" };
 /** Partner accounts at the top of every module they may hold. */
-const PARTNER_TOP: Permissions = { contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", delivery_orders: "EDIT", registrations: "EDIT" };
+const PARTNER_TOP: Permissions = { contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gps: "EDIT" };
 
 let database: Database;
 let app: FastifyInstance;

@@ -72,6 +72,8 @@ describe("SPJ print data", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({
       spj: {
+        // the second QR code: the driver's location-sharing page (gps-share.test.ts)
+        shareUrl: expect.stringMatching(/^http:\/\/localhost:3000\/bagi-lokasi\/[A-Za-z0-9_-]{22}$/),
         spjNo: trip.spj.spjNo,
         barcodeToken: trip.spj.barcodeToken,
         issuedAt: "2026-11-20T03:00:00.000Z",

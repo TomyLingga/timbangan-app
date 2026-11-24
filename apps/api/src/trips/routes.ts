@@ -28,6 +28,7 @@ import {
   vehicleTypes,
 } from "../db/schema.js";
 import { forbidden, invalidState, notFound } from "../errors.js";
+import { spjShareUrl } from "../gps/share-routes.js";
 import { dateText, idParams, lettersAndDigits, likeText, limitParam, PLANT_TIME_ZONE, searchParam, todayAtPlant } from "../http.js";
 import { registrationsVisibleTo } from "../registrations/view.js";
 import { issueSpj, revokeSpj } from "./spj.js";
@@ -224,8 +225,11 @@ export function registerTripRoutes(app: FastifyInstance, context: AppContext, gu
       .innerJoin(linePartner, or(eq(linePartner.id, erpContracts.partnerId), eq(linePartner.id, deliveryOrders.partnerId)))
       .where(eq(tripAllocations.tripId, id))
       .orderBy(asc(tripAllocations.seq));
+    // the second QR code: the driver's phone shares its location for this trip
+    const shareUrl = await spjShareUrl(context, id);
     return {
       spj: {
+        shareUrl,
         spjNo: spj.spjNo,
         barcodeToken: spj.barcodeToken,
         issuedAt: spj.issuedAt,
