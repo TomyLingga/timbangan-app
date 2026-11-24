@@ -36,6 +36,8 @@ const ROUTES: Row[] = [
   row("GET", "/api/vehicle-types", [["vehicles", "VIEW"], ["registrations", "VIEW"]]),
   row("POST", "/api/vehicles", [["vehicles", "CREATE"]], true),
   row("PATCH", "/api/vehicles/999999", [["vehicles", "EDIT"]], true),
+  row("POST", "/api/vehicles/999999/verify", [["vehicles", "EDIT"]], true),
+  row("POST", "/api/vehicles/999999/unverify", [["vehicles", "EDIT"]], true),
 
   row("GET", "/api/partners", [], true),
 
@@ -130,6 +132,9 @@ const ROUTES: Row[] = [
 
   row("GET", "/api/reports/contracts", [["reports", "VIEW"]], true),
   row("GET", "/api/reports/trips", [["reports", "VIEW"]], true),
+  // the archive of the old application; it has no route that changes it
+  row("GET", "/api/history/trips", [["reports", "VIEW"]], true),
+  row("GET", "/api/history/trips/999999", [["reports", "VIEW"]], true),
 
   // `dashboard` is not in ModuleCode; GET /api/control-room/stream stays open, so it is checked in control-room.test.ts
   row("GET", "/api/control-room/state", [["dashboard" as ModuleCode, "VIEW"]], true),

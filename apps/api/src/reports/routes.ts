@@ -58,7 +58,7 @@ const csvCell = (value: unknown) => {
 };
 
 /** CSV with a byte order mark (so spreadsheet programs read it as UTF-8), comma separated, CRLF lines. */
-function sendCsv(reply: FastifyReply, fileName: string, header: string[], rows: unknown[][]) {
+export function sendCsv(reply: FastifyReply, fileName: string, header: string[], rows: unknown[][]) {
   const text = [header.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\r\n");
   return reply
     .header("content-type", "text/csv; charset=utf-8")

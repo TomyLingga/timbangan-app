@@ -166,6 +166,19 @@ describe("sync:odoo command", () => {
     expect(lines[1]).toBe("Tanks: 4 written, 0 made inactive, 0 skipped.");
   });
 
+  it("reads every contract with --full and refuses an unknown option", async () => {
+    const odoo = await startFakeOdoo(sampleOdooRecords());
+    const database = await freshDatabase();
+    const open = async () => ({ ...database, close: async () => {} });
+    const lines: string[] = [];
+    expect(await runSyncOdoo({ ...base, ...odoo.env }, (line) => lines.push(line), open, ["--full"])).toBe(0);
+    expect(lines[0]).toMatch(/^Odoo full sync finished in \d+ ms: 8 contracts/);
+    expect(await database.query("select count(*)::int as n from settings where key = 'odoo_full_sync'")).toEqual([{ n: 1 }]);
+    lines.length = 0;
+    expect(await runSyncOdoo({ ...base, ...odoo.env }, (line) => lines.push(line), open, ["--everything"])).toBe(1);
+    expect(lines.join("\n")).toContain("--full");
+  });
+
   it("explains missing settings and a failed run, and exits with 1", async () => {
     const database = await freshDatabase();
     const open = async () => ({ ...database, close: async () => {} });

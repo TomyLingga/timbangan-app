@@ -1,6 +1,6 @@
 // The control room (/ruang-kontrol): the shapes GET /api/control-room/state and /trips/:id answer (apps/api
-// src/control-room), and the small rules of the plant map: where markers go inside a zone, when a wait counts as
-// long, and how waiting time is written.
+// src/control-room), and the small rules of the plant map: zone boxes, when a wait counts as long, and how waiting
+// time is written. The truck pictures, counts and zone lists are in control-room-map.ts.
 
 export type Direction = "IN" | "OUT";
 
@@ -58,6 +58,8 @@ export interface TripTimeline {
     checkedInAt: string | null;
     completedAt: string | null;
   };
+  /** The truck's papers for the detail window. */
+  truck: TruckPapers;
   steps: {
     code: string;
     name: string | null;
@@ -72,7 +74,33 @@ export interface TripTimeline {
   exceptions: { type: string; status: string; raisedAt: string; decidedAt: string | null; decisionCode: string | null }[];
 }
 
-/** A truck that has stood in one place this long gets a warning tint. */
+export interface TruckFigures {
+  grossKg: number | null;
+  tareKg: number | null;
+  netKg: number | null;
+}
+
+export interface TruckPapers {
+  regNo: string;
+  spjNo: string | null;
+  driverName: string | null;
+  transporterName: string | null;
+  /** Supplier of an incoming truck, customer of an outgoing one. */
+  partnerName: string;
+  partnerRole: "SUPPLIER" | "CUSTOMER";
+  vehicleType: string | null;
+  containerNo: string | null;
+  /** The number on the card the truck carries now. */
+  cardLabel: string | null;
+  products: string[];
+  allocations: { contractNo: string; doNo: string | null }[];
+  /** From the supplier's letter. */
+  letter: TruckFigures;
+  /** From the valid weighings. */
+  weighed: TruckFigures;
+}
+
+/** A truck that has stood in one place this long gets a warning mark. */
 export const LONG_WAIT_MINUTES = 60;
 
 /** Short zone names for the panel, the markers' tooltips and the screen-reader summary. */
@@ -151,57 +179,6 @@ export function shapeBox(shape: number[][] | null): Box | null {
 export interface Point {
   x: number;
   y: number;
-}
-
-export interface Placement {
-  /** Centres of the markers that are drawn, in the order of the trucks. */
-  slots: Point[];
-  /** Trucks that do not fit and are counted on the chip. */
-  overflow: number;
-  overflowSlot: Point | null;
-}
-
-/** How many markers of this size fit in the box without spilling over its edge (at least one). */
-export function markerCapacity(box: Pick<Box, "width" | "height">, marker: { width: number; height: number; gap: number }): number {
-  const columns = Math.max(1, Math.floor((box.width + marker.gap) / (marker.width + marker.gap)));
-  const rows = Math.max(1, Math.floor((box.height + marker.gap) / (marker.height + marker.gap)));
-  return columns * rows;
-}
-
-/** Whether one marker may stand in the box: it may stick out by a quarter of its width or a third of its height. */
-export function markerFits(box: Pick<Box, "width" | "height">, marker: { width: number; height: number }): boolean {
-  return marker.width <= box.width * 1.25 && marker.height <= box.height * 1.5;
-}
-
-/**
- * Places `count` markers of one size on a grid inside a zone's box (pixels): rows filled from the top left, the
- * group centred in the box. When they do not all fit, the last place shows a "+n" chip. A zone smaller than one
- * marker still holds one marker and the chip, which then spills below the box.
- */
-export function placeMarkers(box: Box, count: number, marker: { width: number; height: number; gap: number }): Placement {
-  if (count <= 0) return { slots: [], overflow: 0, overflowSlot: null };
-  const columns = Math.max(1, Math.floor((box.width + marker.gap) / (marker.width + marker.gap)));
-  let rows = Math.max(1, Math.floor((box.height + marker.gap) / (marker.height + marker.gap)));
-  if (count > 1 && columns * rows < 2) rows = 2;
-  const capacity = columns * rows;
-  const shown = count <= capacity ? count : capacity - 1;
-  const overflow = count - shown;
-  const items = shown + (overflow > 0 ? 1 : 0);
-  const usedColumns = Math.min(columns, items);
-  const usedRows = Math.ceil(items / usedColumns);
-  const groupWidth = usedColumns * marker.width + (usedColumns - 1) * marker.gap;
-  const groupHeight = usedRows * marker.height + (usedRows - 1) * marker.gap;
-  const left = box.x + (box.width - groupWidth) / 2 + marker.width / 2;
-  const top = box.y + (box.height - groupHeight) / 2 + marker.height / 2;
-  const at = (index: number): Point => ({
-    x: left + (index % usedColumns) * (marker.width + marker.gap),
-    y: top + Math.floor(index / usedColumns) * (marker.height + marker.gap),
-  });
-  return {
-    slots: Array.from({ length: shown }, (_, index) => at(index)),
-    overflow,
-    overflowSlot: overflow > 0 ? at(shown) : null,
-  };
 }
 
 /** One sentence per zone for screen readers: "Pos registrasi 1 truk. Timbangan kosong." */

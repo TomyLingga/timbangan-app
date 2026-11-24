@@ -17,7 +17,9 @@
     "user:create": "tsx --env-file-if-exists=.env src/cli/user-create.ts",
     "sync:odoo": "tsx --env-file-if-exists=.env src/cli/sync-odoo.ts",
     "sync:vcf": "tsx --env-file-if-exists=.env src/cli/sync-vcf.ts",
-    "plan:import": "tsx --env-file-if-exists=.env src/control-room/plan-import.ts"
+    "plan:import": "tsx --env-file-if-exists=.env src/control-room/plan-import.ts",
+    "legacy:import": "tsx --env-file-if-exists=.env src/cli/legacy-import.ts",
+    "cutover:opening": "tsx --env-file-if-exists=.env src/cli/cutover-opening.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.5.17",

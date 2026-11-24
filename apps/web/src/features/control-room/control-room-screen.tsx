@@ -10,8 +10,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
 import { PlantMap } from "@/features/control-room/plant-map";
 import { KpiStrip, RecentEvents, ZonePanel } from "@/features/control-room/panels";
-import { TripSheet } from "@/features/control-room/trip-sheet";
+import { LongWaitMark, TruckPicture } from "@/features/control-room/truck-picture";
 import { useLiveControlRoom, useNow, usePlanDrawing } from "@/features/control-room/use-control-room";
+import { useZoneExplorer, ZoneExplorerLayer } from "@/features/control-room/zone-explorer";
 import { formatClock, LONG_WAIT_MINUTES, zoneSummary } from "@/lib/control-room";
 import type { FeedStatus } from "@/lib/control-room-stream";
 import { cn } from "@/lib/utils";
@@ -53,10 +54,15 @@ function Legend({ tv }: { tv: boolean }) {
   );
   return (
     <ul aria-hidden="true" className={cn("flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground", tv ? "text-sm" : "text-xs")}>
-      {item(<span className="h-2.5 w-5 rounded-full bg-stream-in" />, "Incoming")}
-      {item(<span className="h-2.5 w-5 rounded-full bg-stream-out" />, "Outgoing")}
-      {item(<span className="h-2.5 w-5 rounded-full ring-2 ring-signal" />, "Menunggu keputusan")}
-      {item(<span className="h-2.5 w-5 rounded-full ring-1 ring-warning" style={{ background: "color-mix(in oklch, var(--stream-in) 62%, var(--warning))" }} />, `Lebih dari ${LONG_WAIT_MINUTES} menit di satu zona`)}
+      {item(
+        <span className="flex h-5 items-center gap-1 rounded-md border border-line-strong bg-card px-1">
+          <TruckPicture className="h-3 w-6" />
+          <span className="font-semibold text-foreground tabular-nums">3</span>
+        </span>,
+        tv ? "Jumlah truk di zona" : "Jumlah truk di zona, klik untuk daftar plat",
+      )}
+      {item(<span className="h-3.5 w-6 rounded-md bg-card ring-2 ring-signal" />, "Ada yang menunggu keputusan")}
+      {item(<LongWaitMark className="size-4" />, `Ada yang lebih dari ${LONG_WAIT_MINUTES} menit di satu zona`)}
     </ul>
   );
 }
@@ -96,7 +102,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
   const live = useLiveControlRoom();
   const plan = usePlanDrawing(live.state ? live.state.planImage ?? null : undefined);
   const now = useNow();
-  const [selected, setSelected] = useState<number | null>(null);
+  const explorer = useZoneExplorer();
   const [cursorHidden, setCursorHidden] = useState(false);
 
   // TV: larger type everywhere (the page's sizes are in rem), and the cursor hides after a few idle seconds
@@ -137,7 +143,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
       <div className={cn("grid min-h-0 gap-4", tv ? "flex-1 grid-cols-[minmax(0,1fr)_30rem]" : "lg:grid-cols-[minmax(0,1fr)_19rem]")}>
         <section aria-label="Denah pabrik" className={cn("min-w-0 rounded-3xl border bg-card p-3 shadow-panel sm:p-4", tv && "flex min-h-0 flex-col justify-center")}>
           <div className="site-grid rounded-2xl">
-            <PlantMap state={state} plan={plan} now={now} tv={tv} onSelect={tv ? undefined : setSelected} />
+            <PlantMap state={state} plan={plan} now={now} tv={tv} onZone={tv ? undefined : explorer.toggleZone} openZone={explorer.openZone} />
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
             <Legend tv={tv} />
@@ -145,7 +151,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
           </div>
         </section>
         <div className={cn("flex min-w-0 flex-col gap-4", tv && "min-h-0")}>
-          <ZonePanel state={state} tv={tv} onSelect={tv ? undefined : setSelected} />
+          <ZonePanel state={state} now={now} tv={tv} onZone={tv ? undefined : explorer.toggleZone} openZone={explorer.openZone} />
           <RecentEvents state={state} tv={tv} limit={tv ? 6 : undefined} />
         </div>
       </div>
@@ -194,7 +200,7 @@ function ControlRoom({ wall }: { wall: boolean }) {
         </div>
       </div>
       {body}
-      <TripSheet tripId={selected} onClose={() => setSelected(null)} />
+      {state ? <ZoneExplorerLayer explorer={explorer} state={state} now={now} /> : null}
     </div>
   );
 }

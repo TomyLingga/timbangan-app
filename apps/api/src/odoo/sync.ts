@@ -2,10 +2,10 @@
 // products they refer to, then the storage tanks (internal children of one stock.location). Read-only on the
 // Odoo side. The contract step is incremental (headers changed after the last successful cursor); both steps are
 // idempotent: a row is written only when a copied value differs.
-import { and, desc, eq, inArray, isNotNull, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import type { Database, Orm } from "../db/client.js";
-import { erpContracts, erpSyncRuns, partners, products, storageTanks } from "../db/schema.js";
+import { erpContracts, erpSyncRuns, partners, products, settings, storageTanks } from "../db/schema.js";
 import { productForLabel } from "../plant-masters/tank-products.js";
 import { defaultSite } from "../settings.js";
 import type { OdooClient, OdooDomain, OdooRecord } from "./client.js";
@@ -38,7 +38,15 @@ export type TankStepResult =
 export interface SyncOptions {
   /** The stock.location whose internal children are the tanks; without it the tank step is skipped. */
   tankParentLocationId?: number | null;
+  /**
+   * Read every contract, not only those whose header changed after the cursor. A delivery posted in Odoo changes
+   * the line's delivered quantity without touching the header's write_date, so only a full run picks it up.
+   */
+  full?: boolean;
 }
+
+/** The settings key (global) holding when the last successful full contract sync finished: { at, runId }. */
+export const FULL_SYNC_SETTING = "odoo_full_sync";
 
 export const TANKS_NOT_CONFIGURED = "Lokasi induk tangki di Odoo belum diatur (ODOO_TANK_PARENT_LOCATION_ID); tangki tidak disinkronkan.";
 const TANK_FIELDS = ["id", "name", "complete_name", "comment", "active", "location_id"];
@@ -424,13 +432,23 @@ export async function syncOdoo(database: Database, client: OdooClient, now: () =
       .limit(1);
     const cursor = last?.cursor ?? null;
 
-    const read = await readFromOdoo(client, cursor);
+    const read = await readFromOdoo(client, options.full ? null : cursor);
     const counts = await orm.transaction(async (tx) => {
       const written = await writeToDatabase(tx, read, now());
+      const finishedAt = now();
+      // a full run also reads headers older than the cursor: the cursor never moves back
+      const newest = [read.newestWriteDate, cursor].filter((value) => value !== null).sort().at(-1) ?? null;
       await tx
         .update(erpSyncRuns)
-        .set({ status: "OK", finishedAt: now(), cursorValue: read.newestWriteDate ?? cursor, rowsUpserted: written.contracts })
+        .set({ status: "OK", finishedAt, cursorValue: newest, rowsUpserted: written.contracts })
         .where(eq(erpSyncRuns.id, run.id));
+      if (options.full) {
+        const value = { at: finishedAt.toISOString(), runId: run.id };
+        const global = and(isNull(settings.siteId), eq(settings.key, FULL_SYNC_SETTING));
+        const [held] = await tx.select({ key: settings.key }).from(settings).where(global);
+        if (held) await tx.update(settings).set({ value, updatedAt: finishedAt }).where(global);
+        else await tx.insert(settings).values({ siteId: null, key: FULL_SYNC_SETTING, value, updatedAt: finishedAt });
+      }
       return written;
     });
     contractStep = { ...counts, skipped: read.skipped };

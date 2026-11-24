@@ -8,16 +8,19 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PlantMap } from "@/features/control-room/plant-map";
 import { type LiveControlRoom, useNow, usePlanDrawing } from "@/features/control-room/use-control-room";
+import { useZoneExplorer, ZoneExplorerLayer } from "@/features/control-room/zone-explorer";
 import { formatClock, zoneCounts, zoneSummary } from "@/lib/control-room";
 import { cn } from "@/lib/utils";
 
-// Beranda for holders of the dashboard module: the live plant map of the control room, read only (a tooltip on
-// hover and focus, no timeline sheet), with the number of trucks per zone under it in the zone colours.
+// Beranda for holders of the dashboard module: the live plant map of the control room with a truck picture and the
+// count on each zone that holds trucks. A zone opens the list of its plates and a plate the truck detail window, as
+// in the control room. The number of trucks per zone stands under the map in the zone colours.
 
 export function HomePlant({ live }: { live: LiveControlRoom }) {
   const state = live.state;
   const plan = usePlanDrawing(state ? state.planImage ?? null : undefined);
   const now = useNow();
+  const explorer = useZoneExplorer();
   const isLive = live.status === "live";
 
   return (
@@ -52,8 +55,8 @@ export function HomePlant({ live }: { live: LiveControlRoom }) {
           <p className="sr-only" aria-live="polite">
             {zoneSummary(state.zones, state.zoneStats, state.kpi.inside)}
           </p>
-          <div className="site-grid overflow-hidden rounded-2xl">
-            <PlantMap state={state} plan={plan} now={now} />
+          <div className="site-grid rounded-2xl">
+            <PlantMap state={state} plan={plan} now={now} onZone={explorer.toggleZone} openZone={explorer.openZone} />
           </div>
           <ul aria-label="Truk per zona" className="mt-3 flex flex-wrap gap-x-1.5 gap-y-1.5 px-1" data-testid="zone-counts">
             {zoneCounts(state.zones, state.zoneStats).map((zone) => (
@@ -67,6 +70,7 @@ export function HomePlant({ live }: { live: LiveControlRoom }) {
               </li>
             ))}
           </ul>
+          <ZoneExplorerLayer explorer={explorer} state={state} now={now} />
         </>
       )}
     </section>

@@ -5,6 +5,8 @@ import { categoryOf, syncOdoo } from "../src/odoo/sync.js";
 import { freshDatabase, TestClock } from "./helpers/app.js";
 import { ODOO_ENV, sampleOdooRecords, startFakeOdoo } from "./helpers/fake-odoo.js";
 
+const odooConfig = (odoo: { url: string }) => ({ url: odoo.url, db: ODOO_ENV.ODOO_DB, uid: Number(ODOO_ENV.ODOO_UID), password: ODOO_ENV.ODOO_PASSWORD });
+
 async function setup() {
   const database = await freshDatabase();
   const odoo = await startFakeOdoo(sampleOdooRecords());
@@ -237,6 +239,31 @@ describe("syncOdoo", () => {
     ]);
     expect(await database.query("select count(*)::int as n from erp_contracts where synced_at = $1", [clock.now()])).toEqual([{ n: 1 }]);
     expect((await runs(database))[2]).toMatchObject({ status: "OK", cursor_value: "2026-11-20 08:30:00", rows_upserted: 1 });
+  });
+
+  it("with full, reads every contract and takes a delivered quantity that changed without its header, and records when", async () => {
+    const { database, sync, odoo, clock } = await setup();
+    await sync();
+    // a delivery posted in Odoo changes the line, not the header's write_date
+    const line = odoo.records["sale.blanket.order.line"]?.find((row) => row.id === 201) as Record<string, unknown>;
+    line.delivered_uom_qty = 160_000;
+    clock.advance(60_000);
+    expect(await sync()).toMatchObject({ contracts: 0 });
+    const done = () => database.query("select qty_done_erp::float8 as qty from erp_contracts where erp_ref = 'sale.blanket.order.line,201'");
+    expect(await done()).toEqual([{ qty: 150_000.5 }]);
+    expect(await database.query("select count(*)::int as n from settings where key = 'odoo_full_sync'")).toEqual([{ n: 0 }]);
+
+    odoo.calls.length = 0;
+    clock.advance(60_000);
+    expect(await syncOdoo(database, new OdooClient(odooConfig(odoo)), clock.now, { full: true })).toMatchObject({ contracts: 1 });
+    expect(odoo.calls.find((call) => call.model === "sale.blanket.order")?.domain).toEqual([]);
+    expect(await done()).toEqual([{ qty: 160_000 }]);
+    const [lastRun] = await database.query<{ id: number }>("select id::int as id from erp_sync_runs where entity = 'CONTRACT' order by id desc limit 1");
+    expect(await database.query("select site_id, value from settings where key = 'odoo_full_sync'")).toEqual([
+      { site_id: null, value: { at: clock.now().toISOString(), runId: lastRun?.id } },
+    ]);
+    // the cursor of a full run is still the newest header seen, so the next normal run asks as before
+    expect((await runs(database)).at(-1)).toMatchObject({ status: "OK", cursor_value: "2026-11-11 03:00:04" });
   });
 
   it("records a failure with the error text and leaves earlier data intact", async () => {

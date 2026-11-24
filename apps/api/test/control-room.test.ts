@@ -1,10 +1,10 @@
 // The control room: where each truck inside the plant is drawn, the figures around the map, the recent step
 // changes, one trip's timeline, the plan drawing, and who may open them.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEMO_ZONE_SHAPES } from "../src/control-room/demo-plan.js";
 import { testApp } from "./helpers/app.js";
 import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
-import { seedBase, seedException, seedTrip, seedWeighing } from "./control-room-fixtures.js";
+import { seedBase, seedException, seedTrip, seedTripPapers, seedWeighing } from "./control-room-fixtures.js";
 
 // the test clock stands at 2026-11-20 03:00 UTC, 10:00 at the plant
 const AT = (time: string) => `2026-11-20T${time}Z`;
@@ -259,6 +259,83 @@ describe("GET /api/control-room/trips/:id", () => {
     ]);
     expect(body.weighings).toEqual([{ stage: 1, kind: "GROSS", kg: 31_250, at: AT("01:30:00.000"), mode: "EXCEPTION", plateCheck: "CONFIRMED", status: "VALID" }]);
     expect(body.exceptions).toEqual([{ type: "QC_HOLD", status: "PENDING", raisedAt: AT("02:10:00.000"), decidedAt: null, decisionCode: null }]);
+  });
+
+  it("answers the truck's papers for the detail window: SPJ, driver, transporter, supplier, products, contracts, card and figures", async () => {
+    const { database, base, get } = await setup();
+    const { tripId } = await seedTrip(database, base, { plate: "ZZ 1060 AA", steps: [{ code: "WEIGH_1", status: "READY", readyAt: AT("02:00:00") }] });
+    await seedTripPapers(database, base, tripId, {
+      transporter: "PT Angkut Contoh",
+      // a revoked SPJ is not the truck's paper any more
+      spj: [{ no: "SPJ/CR/0001", revoked: true }, { no: "SPJ/CR/0002" }],
+      card: { uid: "0A0B0C0D", label: "K-17" },
+      contracts: [
+        { contractNo: "KTR/CONTOH/001", product: "CPO contoh" },
+        { contractNo: "KTR/CONTOH/002", product: "CPO contoh" },
+      ],
+      letter: { grossKg: 30_000, tareKg: 12_000, netKg: 18_000 },
+      weighed: { grossKg: 30_120 },
+    });
+    const response = await get(`/api/control-room/trips/${tripId}`);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().truck).toEqual({
+      regNo: expect.stringMatching(/^REG-CR-\d+$/),
+      spjNo: "SPJ/CR/0002",
+      driverName: expect.stringMatching(/^Supir Contoh \d+$/),
+      transporterName: "PT Angkut Contoh",
+      partnerName: expect.stringMatching(/^PT Contoh Peta \d+$/),
+      partnerRole: "SUPPLIER",
+      vehicleType: "Truk tangki",
+      containerNo: null,
+      cardLabel: "K-17",
+      products: ["CPO contoh"],
+      allocations: [
+        { contractNo: "KTR/CONTOH/001", doNo: null },
+        { contractNo: "KTR/CONTOH/002", doNo: null },
+      ],
+      letter: { grossKg: 30_000, tareKg: 12_000, netKg: 18_000 },
+      weighed: { grossKg: 30_120, tareKg: null, netKg: null },
+    });
+  });
+
+  it("answers the delivery orders and their product for an outgoing truck, the customer as partner", async () => {
+    const { database, base, get } = await setup();
+    const { tripId } = await seedTrip(database, base, { plate: "ZZ 1061 AA", flow: "OUT_BULK", steps: [{ code: "LOADING", status: "IN_PROGRESS", readyAt: AT("02:00:00"), startedAt: AT("02:10:00") }] });
+    await seedTripPapers(database, base, tripId, {
+      card: { uid: "0A0B0C0E", label: null },
+      contracts: [
+        { contractNo: "SO/CONTOH/010", product: "Olein contoh", doNo: "DO/CONTOH/0101" },
+        { contractNo: "SO/CONTOH/011", product: "Stearin contoh", doNo: "DO/CONTOH/0102" },
+      ],
+      weighed: { tareKg: 12_400 },
+    });
+    const truck = (await get(`/api/control-room/trips/${tripId}`)).json().truck;
+    expect(truck).toMatchObject({
+      partnerRole: "CUSTOMER",
+      transporterName: null,
+      spjNo: null,
+      // a card without a printed number is known by its UID
+      cardLabel: "0A0B0C0E",
+      products: ["Olein contoh", "Stearin contoh"],
+      allocations: [
+        { contractNo: "SO/CONTOH/010", doNo: "DO/CONTOH/0101" },
+        { contractNo: "SO/CONTOH/011", doNo: "DO/CONTOH/0102" },
+      ],
+      letter: { grossKg: null, tareKg: null, netKg: null },
+      weighed: { grossKg: null, tareKg: 12_400, netKg: null },
+    });
+  });
+
+  it("answers empty papers for a truck without contracts, SPJ or a card in hand, and reads them in one query", async () => {
+    const { database, base, get } = await setup();
+    const { tripId } = await seedTrip(database, base, { plate: "ZZ 1062 AA" });
+    await seedTripPapers(database, base, tripId, { card: { uid: "0A0B0C0F", label: "K-18", released: true } });
+    const query = vi.spyOn(database, "query");
+    const truck = (await get(`/api/control-room/trips/${tripId}`)).json().truck;
+    expect(truck).toMatchObject({ spjNo: null, cardLabel: null, products: [], allocations: [], transporterName: null });
+    // the trip with its papers, the steps, the weighings and the decision requests: one query each
+    expect(query.mock.calls.filter(([text]) => /trip/i.test(String(text)))).toHaveLength(4);
+    query.mockRestore();
   });
 
   it("answers 404 for an unknown trip", async () => {

@@ -19,6 +19,7 @@ import { registerExceptionRoutes } from "./exceptions/routes.js";
 import { registerAttachmentRoutes } from "./attachments/routes.js";
 import { registerFileRoutes } from "./files/routes.js";
 import { registerGateRoutes } from "./gate/routes.js";
+import { registerHistoryRoutes } from "./history/routes.js";
 import { registerLookupRoutes } from "./lookup/routes.js";
 import { registerProductRoutes } from "./products/routes.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
@@ -134,6 +135,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerTripWorkRoutes(app, context, guards);
   registerExceptionRoutes(app, context, guards);
   registerReportRoutes(app, context, guards);
+  registerHistoryRoutes(app, context, guards);
   registerPlantMasterRoutes(app, context, guards);
   await registerFileRoutes(app, context, guards);
   registerAttachmentRoutes(app, context, guards);

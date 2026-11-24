@@ -2,13 +2,8 @@
 
 import type { ReactNode } from "react";
 
-import {
-  type ControlRoomState,
-  formatClock,
-  formatWait,
-  LONG_WAIT_MINUTES,
-  shortZoneName,
-} from "@/lib/control-room";
+import { type ControlRoomState, formatClock, formatWait } from "@/lib/control-room";
+import { groupTrucksByZone, zoneLabel } from "@/lib/control-room-map";
 import { formatNumber } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -49,50 +44,87 @@ export function KpiStrip({ state, tv = false }: { state: ControlRoomState; tv?: 
   );
 }
 
-export function ZonePanel({ state, tv = false, onSelect }: { state: ControlRoomState; tv?: boolean; onSelect?: (tripId: number) => void }) {
-  const stats = new Map(state.zoneStats.map((stat) => [stat.zone, stat]));
+/** Plates shown per zone on the wall screen before the rest is counted. */
+const TV_PLATES = 4;
+
+/**
+ * Trucks per zone with the one that has waited longest. A row of a zone with trucks opens its plate list; the wall
+ * screen, which cannot be clicked, lists the plates in the row instead.
+ */
+export function ZonePanel({
+  state,
+  now,
+  tv = false,
+  onZone,
+  openZone = null,
+}: {
+  state: ControlRoomState;
+  now: Date;
+  tv?: boolean;
+  onZone?: (code: string, anchor: HTMLElement) => void;
+  openZone?: string | null;
+}) {
+  const groups = groupTrucksByZone(state.zones, state.trucks, now);
   return (
-    <section aria-labelledby="zona-judul" className="shrink-0 rounded-3xl border bg-card p-4 shadow-panel">
+    <section aria-labelledby="zona-judul" className="shrink-0 rounded-3xl border bg-card p-4 shadow-panel" data-testid="zone-panel">
       <h2 id="zona-judul" className={cn("font-semibold", tv ? "text-lg" : "text-sm")}>
         Zona
       </h2>
-      <ul className={cn("mt-2", tv ? "grid grid-cols-2 gap-x-5" : "divide-y")}>
-        {state.zones.map((zone) => {
-          const stat = stats.get(zone.code);
-          const count = stat?.count ?? 0;
-          const longest = stat?.longest ?? null;
-          const trucks = state.trucks.filter((truck) => truck.zone === zone.code);
-          const long = longest !== null && longest.minutes >= LONG_WAIT_MINUTES;
-          return (
-            <li key={zone.code} className={cn("flex items-start gap-3", tv ? "py-1.5" : "py-2")}>
-              <span aria-hidden="true" className="mt-1 size-3 shrink-0 rounded-[3px] ring-1 ring-foreground/15" style={{ background: zone.color ?? "var(--muted)" }} />
-              <div className="min-w-0 flex-1">
-                <p className={cn("flex items-baseline justify-between gap-2", tv ? "text-base" : "text-sm")}>
-                  <span className="truncate font-medium">{shortZoneName(zone)}</span>
-                  <span className={cn("font-mono font-semibold tabular-nums", count === 0 && "text-faint")}>{count}</span>
-                </p>
+      <ul className={cn("mt-2", tv ? "grid grid-cols-2 gap-x-5" : "-mx-2")}>
+        {groups.map((group) => {
+          const longest = group.longest;
+          const body = (
+            <>
+              <span aria-hidden="true" className="mt-1 size-3 shrink-0 rounded-[3px] ring-1 ring-foreground/15" style={{ background: group.color ?? "var(--muted)" }} />
+              <span className="min-w-0 flex-1">
+                <span className={cn("flex items-baseline justify-between gap-2", tv ? "text-base" : "text-sm")}>
+                  <span className="truncate font-medium">{group.name}</span>
+                  <span className={cn("flex items-center gap-1.5 font-mono font-semibold tabular-nums", group.count === 0 && "text-faint")}>
+                    {group.held ? <span aria-hidden="true" className="size-2 rounded-full bg-signal" /> : null}
+                    {group.count}
+                  </span>
+                </span>
                 {longest ? (
-                  <p className={cn("mt-0.5 truncate", tv ? "text-sm" : "text-xs", long ? "text-warning" : "text-muted-foreground")}>
-                    Terlama {longest.plateDisplay ?? "-"}, {formatWait(longest.minutes)}
-                  </p>
+                  <span className={cn("mt-0.5 block truncate", tv ? "text-sm" : "text-xs", longest.long ? "text-warning" : "text-muted-foreground")}>
+                    Terlama {longest.truck.plateDisplay ?? "-"}, {formatWait(longest.minutes)}
+                  </span>
                 ) : null}
-                {!tv && trucks.length > 0 ? (
-                  <div className="mt-1.5 flex flex-wrap gap-1">
-                    {trucks.slice(0, 6).map((truck) => (
-                      <button
-                        key={truck.tripId}
-                        type="button"
-                        onClick={onSelect ? () => onSelect(truck.tripId) : undefined}
-                        className="plate cursor-pointer text-[0.6875rem] transition-colors hover:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                        aria-label={`${truck.plateDisplay ?? "Truk"}: buka garis waktu`}
-                      >
-                        {truck.plateDisplay ?? "?"}
-                      </button>
+                {tv && group.count > 0 ? (
+                  <span className="mt-1.5 flex flex-wrap gap-1" data-testid="tv-zone-plates">
+                    {group.trucks.slice(0, TV_PLATES).map((row) => (
+                      <span key={row.truck.tripId} className={cn("plate text-xs", row.held && "border-signal text-signal-ink")}>
+                        {row.truck.plateDisplay ?? "?"}
+                      </span>
                     ))}
-                    {trucks.length > 6 ? <span className="self-center text-xs text-muted-foreground">+{trucks.length - 6}</span> : null}
-                  </div>
+                    {group.count > TV_PLATES ? <span className="self-center text-sm text-muted-foreground">+{group.count - TV_PLATES}</span> : null}
+                  </span>
                 ) : null}
-              </div>
+              </span>
+            </>
+          );
+          if (tv || !onZone || group.count === 0) {
+            return (
+              <li key={group.code} className={cn("flex items-start gap-3", tv ? "py-1.5" : "px-2 py-2")}>
+                {body}
+              </li>
+            );
+          }
+          return (
+            <li key={group.code}>
+              <button
+                type="button"
+                data-zone-row={group.code}
+                aria-haspopup="dialog"
+                aria-expanded={openZone === group.code}
+                aria-label={`${zoneLabel(group)}. Buka daftar plat.`}
+                onClick={(event) => onZone(group.code, event.currentTarget)}
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-xl px-2 py-2 text-left outline-none transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring",
+                  openZone === group.code && "bg-muted",
+                )}
+              >
+                {body}
+              </button>
             </li>
           );
         })}

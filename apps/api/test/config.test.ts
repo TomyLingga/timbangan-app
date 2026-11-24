@@ -24,7 +24,13 @@ describe("loadConfig", () => {
       bootstrapAdminEmails: [],
       tts: { engine: "off", cacheDir: ".data/tts-cache" },
       files: { dir: ".data/files" },
+      legacyDatabaseUrl: null,
     });
+  });
+
+  it("takes the old database address only as a postgres URL", () => {
+    expect(loadConfig({ ...base, LEGACY_DATABASE_URL: "postgres://reader@legacy.invalid:5432/old" }).legacyDatabaseUrl).toBe("postgres://reader@legacy.invalid:5432/old");
+    expect(() => loadConfig({ ...base, LEGACY_DATABASE_URL: "mysql://legacy.invalid/old" })).toThrow(/LEGACY_DATABASE_URL/);
   });
 
   it("reads numbers from text and treats an empty value as absent", () => {

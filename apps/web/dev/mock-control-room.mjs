@@ -447,6 +447,47 @@ function buildState() {
   };
 }
 
+// Made-up papers per flow for the truck detail window: product, partner and contract prefix.
+const PAPERS = {
+  IN_CPO: { product: "CPO", partner: "PT Pemasok Sawit Contoh", contract: "KTR/BELI/CONTOH" },
+  IN_GOODS: { product: "Bahan penolong contoh", partner: "PT Pemasok Bahan Contoh", contract: "KTR/BELI/CONTOH" },
+  OUT_BULK: { product: "Olein contoh", partner: "PT Pelanggan Curah Contoh", contract: "SO/CONTOH" },
+  OUT_PACKED: { product: "Minyak goreng kemasan contoh", partner: "PT Pelanggan Ritel Contoh", contract: "SO/CONTOH" },
+};
+const TRANSPORTERS = ["PT Angkutan Contoh Jaya", "CV Truk Contoh Abadi", null];
+
+/** The truck block of GET /api/control-room/trips/:id, made up from the trip id. */
+function papers(truck) {
+  const paper = PAPERS[truck.flowCode];
+  const id = truck.tripId;
+  const incoming = truck.direction === "IN";
+  const valid = truck.weighings.filter((item) => item.status === "VALID");
+  const gross = valid.find((item) => item.kind === "GROSS")?.kg ?? null;
+  const tare = valid.find((item) => item.kind === "TARE")?.kg ?? null;
+  const twoContracts = id % 3 === 0;
+  const allocations = [1, ...(twoContracts ? [2] : [])].map((seq) => ({
+    contractNo: `${paper.contract}/${String(id * 2 + seq).padStart(4, "0")}`,
+    doNo: incoming ? null : `DO/CONTOH/${String(id * 2 + seq).padStart(4, "0")}`,
+  }));
+  const letterGross = incoming && truck.flowCode === "IN_CPO" ? 30_000 + (id % 7) * 250 : null;
+  const letterTare = letterGross ? 11_800 + (id % 5) * 100 : null;
+  return {
+    regNo: `REG/CONTOH/${String(id).padStart(4, "0")}`,
+    spjNo: `SPJ/CONTOH/${String(id).padStart(5, "0")}`,
+    driverName: `Supir Contoh ${id}`,
+    transporterName: TRANSPORTERS[id % TRANSPORTERS.length],
+    partnerName: paper.partner,
+    partnerRole: incoming ? "SUPPLIER" : "CUSTOMER",
+    vehicleType: "Truk tangki",
+    containerNo: null,
+    cardLabel: `K-${String((id % 40) + 1).padStart(2, "0")}`,
+    products: [paper.product],
+    allocations,
+    letter: { grossKg: letterGross, tareKg: letterTare, netKg: letterGross && letterTare ? letterGross - letterTare : null },
+    weighed: { grossKg: gross, tareKg: tare, netKg: gross !== null && tare !== null ? gross - tare : null },
+  };
+}
+
 function timeline(tripId) {
   const truck = trucks.find((item) => item.tripId === tripId);
   if (!truck) return null;
@@ -457,6 +498,7 @@ function timeline(tripId) {
   };
   return {
     trip: { id: truck.tripId, tripNo: truck.tripNo, plateDisplay: truck.plateDisplay, direction: truck.direction, flowCode: truck.flowCode, status: "IN_PROCESS", checkedInAt: truck.checkedInAt, completedAt: null },
+    truck: papers(truck),
     steps: truck.steps.map((step) => ({
       code: step.code, name: step.name, status: step.status, result: step.result, readyAt: step.readyAt, startedAt: step.startedAt, finishedAt: step.finishedAt, minutes: minutesOf(step),
     })),

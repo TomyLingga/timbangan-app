@@ -1,11 +1,12 @@
 import { and, asc, count, eq, ilike, ne, type SQL } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
+import { writeAudit } from "../audit.js";
 import { accountOf, type Guards } from "../auth/guard.js";
 import type { Orm } from "../db/client.js";
 import { partners, vehicles, vehicleTareHistory, vehicleTypes } from "../db/schema.js";
-import { duplicate, invalid, notFound } from "../errors.js";
+import { duplicate, invalid, invalidState, notFound } from "../errors.js";
 import { dateText, idNumber, idParams, lettersAndDigits, likeText, limitParam, searchParam, todayAtPlant } from "../http.js";
 
 const listQuery = z.object({ q: searchParam, limit: limitParam });
@@ -164,4 +165,34 @@ export function registerVehicleRoutes(app: FastifyInstance, context: AppContext,
     });
     return { vehicle };
   });
+
+  // A vehicle counts as verified while verified_at is set: registrations then raise no VEHICLE_UNVERIFIED finding,
+  // and the tare check of an outgoing truck compares against its master tare.
+  const setVerified = (verified: boolean) => async (request: FastifyRequest) => {
+    const { id } = idParams.parse(request.params);
+    const actor = accountOf(request).id;
+    const now = context.now();
+    const vehicle = await orm.transaction(async (tx) => {
+      const [current] = await tx.select({ plateDisplay: vehicles.plateDisplay, verifiedAt: vehicles.verifiedAt }).from(vehicles).where(eq(vehicles.id, id)).for("update");
+      if (!current) throw notFound("Kendaraan");
+      if ((current.verifiedAt !== null) === verified) {
+        throw invalidState(verified ? `Kendaraan ${current.plateDisplay} sudah diverifikasi.` : `Kendaraan ${current.plateDisplay} belum diverifikasi.`);
+      }
+      await tx
+        .update(vehicles)
+        .set(verified ? { verifiedBy: actor, verifiedAt: now, updatedAt: now } : { verifiedBy: null, verifiedAt: null, updatedAt: now })
+        .where(eq(vehicles.id, id));
+      await writeAudit(tx, request, now, {
+        action: verified ? "VEHICLE_VERIFIED" : "VEHICLE_UNVERIFIED",
+        entityType: "vehicle",
+        entityId: id,
+        before: { verified: !verified },
+        after: { verified },
+      });
+      return one(tx, id);
+    });
+    return { vehicle };
+  };
+  app.post("/api/vehicles/:id/verify", editors, setVerified(true));
+  app.post("/api/vehicles/:id/unverify", editors, setVerified(false));
 }

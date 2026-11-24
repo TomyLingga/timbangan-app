@@ -207,3 +207,53 @@ describe("GET /api/vehicles", () => {
     expect((await call("GET", "/api/vehicles", null)).statusCode).toBe(401);
   });
 });
+
+describe("POST /api/vehicles/:id/verify and /unverify", () => {
+  /** A vehicle a partner entered (not verified), as a registration makes it. */
+  async function withUnverified() {
+    const context = await setup();
+    const [row] = await context.database.query<{ id: number }>(
+      "insert into vehicles (plate_no, plate_display, vehicle_type_code, owner_partner_id, tare_kg) values ('BK8101XA', 'BK 8101 XA', 'TANGKI', $1, 14000) returning id::int as id",
+      [context.angkut],
+    );
+    const audit = () =>
+      context.database.query("select user_id::int as user_id, action, entity_type, entity_id::int as entity_id, before, after from audit_log where entity_type = 'vehicle' order by id");
+    return { ...context, id: Number(row?.id), audit };
+  }
+
+  it("marks a vehicle verified by the staff member and back, with an audit row each time", async () => {
+    const { call, id, adminId, database, clock, audit } = await withUnverified();
+    const verified = await call("POST", `/api/vehicles/${id}/verify`);
+    expect(verified.statusCode).toBe(200);
+    expect(verified.json().vehicle).toMatchObject({ id, plateNo: "BK8101XA", verified: true });
+    expect(await database.query("select verified_by::int as verified_by, verified_at from vehicles where id = $1", [id])).toEqual([{ verified_by: adminId, verified_at: clock.now() }]);
+    expect((await call("GET", "/api/vehicles?q=8101")).json().items[0]).toMatchObject({ id, verified: true });
+
+    const again = await call("POST", `/api/vehicles/${id}/verify`);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toEqual({ code: "INVALID_STATE", message: "Kendaraan BK 8101 XA sudah diverifikasi." });
+
+    const unverified = await call("POST", `/api/vehicles/${id}/unverify`);
+    expect(unverified.statusCode).toBe(200);
+    expect(unverified.json().vehicle).toMatchObject({ id, verified: false });
+    expect(await database.query("select verified_by, verified_at from vehicles where id = $1", [id])).toEqual([{ verified_by: null, verified_at: null }]);
+    expect((await call("POST", `/api/vehicles/${id}/unverify`)).json().error).toEqual({ code: "INVALID_STATE", message: "Kendaraan BK 8101 XA belum diverifikasi." });
+
+    expect(await audit()).toEqual([
+      { user_id: adminId, action: "VEHICLE_VERIFIED", entity_type: "vehicle", entity_id: id, before: { verified: false }, after: { verified: true } },
+      { user_id: adminId, action: "VEHICLE_UNVERIFIED", entity_type: "vehicle", entity_id: id, before: { verified: true }, after: { verified: false } },
+    ]);
+  });
+
+  it("answers 404 for an unknown vehicle and refuses other staff and partner accounts", async () => {
+    const { call, id, audit } = await withUnverified();
+    expect((await call("POST", "/api/vehicles/999999/verify")).statusCode).toBe(404);
+    for (const username of ["qc", "pos", "angkut"]) {
+      for (const action of ["verify", "unverify"]) {
+        const response = await call("POST", `/api/vehicles/${id}/${action}`, username);
+        expect(response.statusCode, `${username} ${action}`).toBe(403);
+      }
+    }
+    expect(await audit()).toEqual([]);
+  });
+});

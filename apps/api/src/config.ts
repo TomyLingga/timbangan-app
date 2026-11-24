@@ -52,6 +52,8 @@ const envSchema = z.object({
   TTS_THREADS: z.coerce.number("must be a whole number").int("must be a whole number").min(1).max(32).default(4),
   // where uploaded photos are kept; each file is stored under a random key below this folder
   FILE_STORAGE_DIR: z.string().default(".data/files"),
+  // the old weighbridge database, read by `npm run legacy:import` in a read-only session
+  LEGACY_DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "must start with postgres:// or postgresql://").optional(),
 });
 
 export interface OdooConfig {
@@ -97,6 +99,8 @@ export interface Config {
   bootstrapAdminEmails: string[];
   tts: TtsConfig;
   files: { dir: string };
+  /** The old weighbridge database for `npm run legacy:import`; null when not set. */
+  legacyDatabaseUrl: string | null;
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -132,6 +136,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       .filter(Boolean),
     tts: ttsConfig(e),
     files: { dir: e.FILE_STORAGE_DIR },
+    legacyDatabaseUrl: e.LEGACY_DATABASE_URL ?? null,
   };
 }
 

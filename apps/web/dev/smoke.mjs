@@ -586,34 +586,113 @@ async function run(browser) {
   const flowBeforeMap = await stat("GET /api/trips/flow");
   await partnerSignIn(browser, "petugas.lokal");
   check(
-    "Beranda of a dashboard holder shows the live plant map on the plan picture, the trucks per zone and the control room link",
+    "Beranda of a dashboard holder shows the live plant map on the plan picture with a truck picture and count per zone, no plates on it, the trucks per zone and the control room link",
     Boolean(
       await browser.waitFor(`(() => {
         const map = document.querySelector('[data-testid="home-plant"]');
         if (!map) return false;
         const picture = map.querySelector('[data-testid="plan-image"]')?.getAttribute('href') ?? '';
         const zones = map.querySelectorAll('[data-testid="zone-counts"] li').length;
-        const markers = map.querySelectorAll('[data-trip]').length;
+        const badges = [...map.querySelectorAll('button[data-zone-badge]')];
+        const counted = badges.every((badge) => badge.querySelector('svg') && /, \\d+ truk/.test(badge.getAttribute('aria-label')) && badge.innerText.includes(badge.dataset.count));
+        const noPlates = !/ZZ \\d/.test(map.querySelector('[data-testid="plant-map"]').innerText);
         const link = map.querySelector('a[href="/ruang-kontrol"]')?.innerText.includes('Buka ruang kontrol');
-        return picture.startsWith('blob:') && zones === 9 && markers > 0 && link;
+        return picture.startsWith('blob:') && zones === 9 && badges.length > 0 && counted && noPlates && link;
       })()`),
     ) &&
       (await browser.evaluate(`!document.querySelector('[aria-label="Truk per tahap"]') && !document.querySelector('main svg filter')`)) &&
       (await stat("GET /api/trips/flow")) === flowBeforeMap &&
       (await stat("GET /api/control-room/plan-image")) > 0,
   );
-  await browser.evaluate(`document.querySelector('[data-testid="home-plant"] [data-trip]').focus()`);
-  check(
-    "a marker on Beranda shows its tooltip on focus and opens no timeline",
-    Boolean(await browser.waitFor(`document.querySelector('[data-testid="home-plant"] [role="tooltip"]')?.innerText.includes('ZZ')`)) &&
-      (await browser.evaluate(`!document.querySelector('[data-testid="home-plant"] [data-trip]').getAttribute('aria-label').includes('garis waktu')`)),
-  );
+  await controlRoomKeyboard(browser, '[data-testid="home-plant"] button[data-zone-badge]', "Beranda");
   await browser.screenshot("19-beranda-denah-light");
+
+  // 19d. The control room page itself: the Zona panel opens the same list; the wall screen lists plates per zone.
+  await browser.goto(`${WEB}/ruang-kontrol`);
+  await browser.waitFor(`document.querySelectorAll('[data-testid="plant-map"] button[data-zone-badge]').length > 0`);
+  const panelZone = await browser.evaluate(`document.querySelector('[data-testid="zone-panel"] button[data-zone-row]')?.dataset.zoneRow ?? ''`);
+  await browser.click(`[data-testid="zone-panel"] button[data-zone-row="${panelZone}"]`);
+  check(
+    "a row of the Zona panel opens the plates of that zone, longest wait first",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const rows = [...document.querySelectorAll('[data-testid="zone-list"] button[data-trip]')];
+        const minutes = rows.map((row) => row.getAttribute('aria-label'));
+        return rows.length > 0 && rows.length === Number(document.querySelector('[data-zone-badge="${panelZone}"]')?.dataset.count) && minutes.every((label) => label.includes('di zona ini'));
+      })()`),
+    ),
+  );
+  await browser.click("h1");
+  check(
+    "a click outside closes the zone list",
+    Boolean(await browser.waitFor(`!document.querySelector('[data-testid="zone-list"]')`)),
+  );
+  await browser.goto(`${WEB}/layar-kontrol`);
+  check(
+    "the wall screen shows truck pictures and counts without buttons, and the plates per zone in its panel",
+    Boolean(
+      await browser.waitFor(`document.querySelectorAll('[data-testid="plant-map"] [data-zone-badge]').length > 0 &&
+        document.querySelectorAll('[data-testid="plant-map"] button').length === 0 &&
+        document.querySelectorAll('[data-testid="tv-zone-plates"] .plate').length > 0`),
+    ),
+  );
+  await browser.goto(`${WEB}/`);
   await signOut(browser);
 
   await phaseThree(browser);
   await phaseFour(browser);
   await phaseFive(browser);
+}
+
+/**
+ * The plant map by keyboard: Enter on a zone opens its plate list with the focus on the first plate, Enter on the
+ * plate opens the truck detail window, and Escape closes each in turn with the focus going back where it came from.
+ */
+async function controlRoomKeyboard(browser, badgeSelector, where) {
+  const zone = await browser.evaluate(`document.querySelector(${JSON.stringify(badgeSelector)}).dataset.zoneBadge`);
+  await browser.evaluate(`document.querySelector(${JSON.stringify(badgeSelector)}).focus()`);
+  await browser.pressEnter();
+  check(
+    `${where}: Enter on a zone opens its plate list with the focus on the first plate`,
+    Boolean(
+      await browser.waitFor(`(() => {
+        const list = document.querySelector('[data-testid="zone-list"]');
+        const active = document.activeElement;
+        return list && list.getAttribute('role') === 'dialog' && active?.hasAttribute('data-trip') && list.contains(active) &&
+          document.querySelector('[data-zone-badge="${zone}"]').getAttribute('aria-expanded') === 'true';
+      })()`),
+    ),
+  );
+  const plate = await browser.evaluate(`document.activeElement.querySelector('.plate')?.innerText ?? ''`);
+  const tripsBefore = await stat("GET /api/control-room/trips/:id");
+  await browser.pressEnter();
+  check(
+    `${where}: Enter on a plate opens the truck detail window with its papers, figures and steps, focus inside`,
+    Boolean(
+      await browser.waitFor(`(() => {
+        const modal = document.querySelector('[data-testid="truck-modal"]');
+        if (!modal || !modal.querySelector('[data-testid="truck-detail"]')) return false;
+        const text = modal.innerText;
+        return /detail truk/i.test(text) && modal.querySelector('[data-testid="truck-modal-plate"]').innerText === ${JSON.stringify(plate)} &&
+          text.includes('Nomor SPJ') && text.includes('Supir') && text.includes('Kartu') && text.includes('Posisi sekarang') &&
+          Boolean(modal.querySelector('[data-testid="truck-figures"]')) && text.includes('Langkah') && modal.contains(document.activeElement);
+      })()`),
+    ) && (await stat("GET /api/control-room/trips/:id")) > tripsBefore,
+  );
+  await browser.screenshot(`19b-detail-truk-${where.toLowerCase()}`);
+  await browser.pressEscape();
+  check(
+    `${where}: Escape closes the detail window and gives the focus back to the plate row`,
+    Boolean(
+      await browser.waitFor(`!document.querySelector('[data-testid="truck-modal"]') && document.activeElement?.hasAttribute('data-trip') &&
+        document.activeElement.querySelector('.plate')?.innerText === ${JSON.stringify(plate)}`),
+    ),
+  );
+  await browser.pressEscape();
+  check(
+    `${where}: Escape closes the plate list and gives the focus back to the zone`,
+    Boolean(await browser.waitFor(`!document.querySelector('[data-testid="zone-list"]') && document.activeElement?.dataset.zoneBadge === ${JSON.stringify(zone)}`)),
+  );
 }
 
 // --- phase 3: registration, delivery order, SPJ, the post ---------------------
