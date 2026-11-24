@@ -176,6 +176,18 @@ async function run(browser, scheme) {
   await browser.goto(`${ORIGIN}/profil`);
   await browser.waitFor(`!!document.querySelector('[data-testid="screen-profil"]')`);
   await shot(browser, scheme, "22-profil");
+
+  // inbox: Beranda with the unread count, the newest page, then the older page after "Muat yang lebih lama"
+  await browser.goto(`${ORIGIN}/beranda`);
+  await browser.waitFor(`!!document.querySelector('[data-testid="inbox-count"]') && !!document.querySelector('[data-testid="work-row-1"]')`);
+  await shot(browser, scheme, "23-beranda-pemberitahuan");
+  await browser.click("testid:open-inbox");
+  await browser.waitFor(`!!document.querySelector('[data-testid="inbox-item-123"]')`);
+  await shot(browser, scheme, "24-pemberitahuan");
+  await browser.click("testid:inbox-more");
+  await browser.waitFor(`!!document.querySelector('[data-testid="inbox-item-101"]')`);
+  await browser.scrollTo("testid:inbox-item-104");
+  await shot(browser, scheme, "25-pemberitahuan-lama");
 }
 
 async function main() {

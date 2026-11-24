@@ -3,12 +3,12 @@
     "name": "Timbangan Lapangan",
     "slug": "timbangan-lapangan",
     "scheme": "timbangan",
-    "version": "0.1.1",
+    "version": "0.2.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "android": {
       "package": "app.timbangan.lapangan",
-      "versionCode": 2,
+      "versionCode": 3,
       "softwareKeyboardLayoutMode": "resize"
     },
     "web": {
@@ -39,6 +39,7 @@
           "faceIDPermission": "Identitas dicek sebelum keputusan dikirim."
         }
       ],
+      "expo-notifications",
       "expo-build-properties",
       [
         "expo-build-properties",

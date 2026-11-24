@@ -1,5 +1,6 @@
 // Walks the web build against the mock API: sign in, open the QC pass form, fill it, send it while the network
 // is cut, see it wait in the queue, bring the network back, see it sent, and check the mock stored it once.
+// Then the inbox: the unread count on Beranda, paging, opening an entry, and marking everything read.
 //
 //   EXPO_PUBLIC_API_URL=http://127.0.0.1:3210 npx expo export --platform web
 //   node dev/smoke.mjs
@@ -92,6 +93,43 @@ async function main() {
     const gone = await browser.waitFor(`!document.querySelector('[data-testid="work-row-2"]')`);
     if (!gone) throw new Error("the done step is still on the work list");
     pass("the step left the work list");
+
+    // inbox: the count on Beranda, paging, an entry opens its request and is read, then all read
+    const unreadIds = async () => (await (await fetch(`${ORIGIN}/__mock/state`)).json()).unread;
+    const counted = await browser.waitFor(`document.querySelector('[data-testid="inbox-count"]')?.innerText.trim() === "4"`);
+    if (!counted) throw new Error("Beranda does not show 4 unread notifications");
+    pass("Beranda shows the unread count");
+
+    await browser.click("testid:open-inbox");
+    await browser.waitFor(`!!document.querySelector('[data-testid="inbox-item-123"]')`);
+    await browser.hasText("4 belum dibaca");
+    if (await browser.evaluate(`!!document.querySelector('[data-testid="inbox-item-103"]')`)) throw new Error("the first page holds more than 20 entries");
+    pass("Pemberitahuan lists the newest page");
+
+    await browser.click("testid:inbox-more");
+    const older = await browser.waitFor(`!!document.querySelector('[data-testid="inbox-item-101"]')`);
+    if (!older) throw new Error("the older page did not load");
+    if (await browser.evaluate(`!!document.querySelector('[data-testid="inbox-more"]')`)) throw new Error("the load-more button stayed after the last page");
+    pass("the older page loads with before=<id>");
+
+    await browser.click("testid:inbox-item-123");
+    await browser.waitFor(`!!document.querySelector('[data-testid="screen-keputusan-detail"]')`);
+    await browser.hasText("Selisih bruto");
+    const afterOpen = await unreadIds();
+    if (afterOpen.includes(123) || afterOpen.length !== 3) throw new Error(`entry 123 was not marked read: ${JSON.stringify(afterOpen)}`);
+    pass("an entry opens its decision screen and is marked read");
+
+    await browser.click("Kembali");
+    await browser.waitFor(`!!document.querySelector('[data-testid="screen-pemberitahuan"]') && !document.querySelector('[data-testid="inbox-unread-123"]')`);
+    await browser.click("testid:inbox-read-all");
+    const allRead = await browser.waitFor(`!document.querySelector('[data-testid^="inbox-unread-"]') && !document.querySelector('[data-testid="inbox-read-all"]')`);
+    if (!allRead || (await unreadIds()).length !== 0) throw new Error("Tandai semua dibaca did not mark everything read");
+    pass("Tandai semua dibaca marks everything read");
+
+    await browser.click("Kembali");
+    const noCount = await browser.waitFor(`!!document.querySelector('[data-testid="open-inbox"]') && !document.querySelector('[data-testid="inbox-count"]')`);
+    if (!noCount) throw new Error("Beranda still shows an unread count");
+    pass("Beranda shows no count after reading all");
 
     if (browser.consoleErrors.length) throw new Error(`page errors: ${browser.consoleErrors.join(" | ")}`);
     pass("no page errors");

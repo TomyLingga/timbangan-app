@@ -1,11 +1,13 @@
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
+import { useEffect, useRef } from "react";
 import { Pressable, Text, View } from "react-native";
 import { errorMessage } from "../../src/api/messages";
 import type { ExceptionListResponse, ExceptionView } from "../../src/api/types";
 import { canView, seesDecisions } from "../../src/auth/permissions";
 import { typeLabel } from "../../src/decisions/decision";
 import { readyFor, signedKg } from "../../src/lib/format";
+import { useNotifications } from "../../src/state/notifications";
 import { useSession } from "../../src/state/session";
 import { useRemote } from "../../src/state/useRemote";
 import { useTheme } from "../../src/theme/ThemeProvider";
@@ -27,6 +29,15 @@ function Inbox() {
   const { colors } = useTheme();
   const remote = useRemote(() => api.request<ExceptionListResponse>("/api/exceptions", { query: { status: "PENDING", limit: 50 } }), [], { intervalMs: 5_000 });
   const items = (remote.data?.items ?? []).filter((item) => canView(user, item.approverModule));
+  // a push (a new or a closed request) reloads the list at once
+  const { pushVersion } = useNotifications();
+  const { reload } = remote;
+  const seenVersion = useRef(pushVersion);
+  useEffect(() => {
+    if (seenVersion.current === pushVersion) return;
+    seenVersion.current = pushVersion;
+    void reload();
+  }, [pushVersion, reload]);
 
   if (!seesDecisions(user)) {
     return (

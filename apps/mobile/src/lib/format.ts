@@ -44,6 +44,19 @@ export function readyFor(since: string | null, now: Date = new Date()): string {
   return rest === 0 ? `${hours} jam` : `${hours} jam ${rest} menit`;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+/** "14.05" today, "kemarin 14.05", or "21 Nov 14.05", on the plant clock. */
+export function dayTime(value: string | Date, now: Date = new Date()): string {
+  const plantDay = (at: Date) => Math.floor((at.getTime() + PLANT_OFFSET_MS) / 86_400_000);
+  const at = new Date(value);
+  const days = plantDay(now) - plantDay(at);
+  if (days === 0) return clockTime(at);
+  if (days === 1) return `kemarin ${clockTime(at)}`;
+  const shifted = new Date(at.getTime() + PLANT_OFFSET_MS);
+  return `${shifted.getUTCDate()} ${MONTHS[shifted.getUTCMonth()]} ${clockTime(at)}`;
+}
+
 /** "14.05" on the plant clock. */
 export function clockTime(value: string | Date): string {
   const shifted = new Date(new Date(value).getTime() + PLANT_OFFSET_MS);

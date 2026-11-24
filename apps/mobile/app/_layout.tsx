@@ -1,6 +1,7 @@
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { NotificationsProvider } from "../src/state/notifications";
 import { QueueProvider } from "../src/state/queue";
 import { SessionProvider } from "../src/state/session";
 import { ThemeProvider, useTheme } from "../src/theme/ThemeProvider";
@@ -21,7 +22,9 @@ export default function RootLayout() {
       <ThemeProvider>
         <SessionProvider>
           <QueueProvider>
-            <Navigator />
+            <NotificationsProvider>
+              <Navigator />
+            </NotificationsProvider>
           </QueueProvider>
         </SessionProvider>
       </ThemeProvider>

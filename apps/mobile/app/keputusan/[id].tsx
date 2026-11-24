@@ -5,7 +5,7 @@ import { isApiError } from "../../src/api/client";
 import { decisionErrorMessage, errorMessage } from "../../src/api/messages";
 import type { DecisionCode, ExceptionResponse, ExceptionView } from "../../src/api/types";
 import { canDecide } from "../../src/auth/permissions";
-import { decisionBody, decisionChoices, figureRows, plateRows, qcRows, REASON_MAX, reasonRequired, typeLabel, validateDecision } from "../../src/decisions/decision";
+import { decisionBody, decisionChoices, figureRows, plateRows, qcRows, REASON_MAX, reasonRequired, STATUS_TEXT, typeLabel, validateDecision } from "../../src/decisions/decision";
 import { clockTime, readyFor } from "../../src/lib/format";
 import { confirmIdentity } from "../../src/platform/deviceAuth";
 import { useQueue } from "../../src/state/queue";
@@ -26,14 +26,6 @@ export default function DecisionScreen() {
 }
 
 const back = () => (router.canGoBack() ? router.back() : router.replace("/keputusan"));
-
-const STATUS_TEXT: Record<string, string> = {
-  APPROVED: "Disetujui",
-  REJECTED: "Ditolak",
-  RETRY: "Diminta muat ulang",
-  CANCELLED: "Batal (truk turun dari timbangan)",
-  EXPIRED: "Kedaluwarsa",
-};
 
 function Decision() {
   const { id } = useLocalSearchParams<{ id: string }>();

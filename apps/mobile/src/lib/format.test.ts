@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { clockTime, flowLabel, kg, parseDecimal, pct, plateOf, readyFor, signedKg } from "./format";
+import { clockTime, dayTime, flowLabel, kg, parseDecimal, pct, plateOf, readyFor, signedKg } from "./format";
+
+describe("dayTime", () => {
+  // 24 November 2026, 10.00 WIB
+  const now = new Date("2026-11-24T03:00:00.000Z");
+  it("gives the time today, kemarin, or the date before that, on the plant clock", () => {
+    expect(dayTime("2026-11-24T01:05:00.000Z", now)).toBe("08.05");
+    expect(dayTime("2026-11-23T17:30:00.000Z", now)).toBe("00.30");
+    expect(dayTime("2026-11-23T16:59:00.000Z", now)).toBe("kemarin 23.59");
+    expect(dayTime("2026-11-21T07:00:00.000Z", now)).toBe("21 Nov 14.00");
+  });
+});
 
 describe("parseDecimal", () => {
   it("reads a comma or a dot as the decimal mark", () => {

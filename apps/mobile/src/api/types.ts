@@ -377,3 +377,46 @@ export interface DecideBody {
   reason?: string;
   updateMasterTare?: boolean;
 }
+
+// --- notifications -----------------------------------------------------------------------------------------
+
+/** FROM CODE apps/api/src/notifications/service.ts. */
+export type NotificationType = "EXCEPTION_RAISED" | "EXCEPTION_CLOSED" | "DO_SENT";
+
+/** FROM CODE apps/api/src/notifications/routes.ts (deviceBody, deviceView). */
+export interface DeviceBody {
+  platform: "ANDROID" | "IOS" | "WEB";
+  pushToken: string;
+  appVersion?: string | null;
+}
+export interface DeviceResponse {
+  device: { id: number; platform: string; appVersion: string | null; isActive: boolean; lastSeenAt: string };
+}
+
+/** FROM CODE apps/api/src/notifications/routes.ts (inbox). Newest first. */
+export interface NotificationItem {
+  id: number;
+  type: NotificationType | string;
+  severity: "INFO" | "WARNING" | "ALARM" | string;
+  title: string;
+  body: string | null;
+  data: Record<string, unknown> | null;
+  exceptionId: number | null;
+  /** Status of the linked request now; null when the notification has none. */
+  exceptionStatus: ExceptionStatus | string | null;
+  tripId: number | null;
+  createdAt: string;
+  readAt: string | null;
+}
+export interface NotificationListResponse {
+  items: NotificationItem[];
+  unreadCount: number;
+}
+export interface NotificationReadResponse {
+  notification?: NotificationItem;
+  unreadCount: number;
+}
+export interface NotificationReadAllResponse {
+  updated: number;
+  unreadCount: number;
+}

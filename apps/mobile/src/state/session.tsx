@@ -6,6 +6,8 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { Platform } from "react-native";
 import { type ApiClient, createApiClient, isApiError, SIGNED_OUT } from "../api/client";
 import type { Account, MeResponse } from "../api/types";
+import { deviceRegistrar } from "../notifications/push";
+import { deviceToken, pushAvailable } from "../platform/push";
 import { tokenStore } from "../platform/tokens";
 
 const ACCOUNT_KEY = "account-v1";
@@ -117,6 +119,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.setItem(ACCOUNT_KEY, JSON.stringify(answer.user)).catch(() => undefined);
       },
       async logout() {
+        // while the session still works: this phone gets no more pushes for the account (a failure does not stop the sign-out)
+        await deviceRegistrar.unregister(api, pushAvailable ? deviceToken : undefined);
         await api.logout();
         await forget();
       },

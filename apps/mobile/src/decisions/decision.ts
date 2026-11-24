@@ -22,6 +22,15 @@ const TYPE_LABELS: Record<string, string> = {
 };
 export const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
 
+/** What became of a request that no longer waits. */
+export const STATUS_TEXT: Record<string, string> = {
+  APPROVED: "Disetujui",
+  REJECTED: "Ditolak",
+  RETRY: "Diminta muat ulang",
+  CANCELLED: "Batal (truk turun dari timbangan)",
+  EXPIRED: "Kedaluwarsa",
+};
+
 /** The three weight differences need a written reason (DIFFERENCE_TYPES in decide.ts). */
 const REASON_TYPES = ["GROSS_IN", "TARE_OUT", "NET_IN"];
 export const reasonRequired = (type: string) => REASON_TYPES.includes(type);

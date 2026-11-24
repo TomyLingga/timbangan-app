@@ -7,7 +7,8 @@
 //   GET  /__mock/state                     stored form submissions and decisions, for checks
 //
 // Sign in with operator / contoh123 (every field module and both decision modules) or pemantau / contoh123
-// (view only).
+// (view only). operator has 23 notifications in the inbox, 4 of them unread; /__mock/state lists the unread ids
+// and the registered devices.
 
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -177,8 +178,36 @@ function initialState() {
       context: { plateNo: "ZZ0003CTH", disposition: "HOLD", reasonCode: "FFA_OUT", values: { FFA: 5.62, MOISTURE: 0.21, IMPURITIES: 0.02 }, remark: "Sampel kedua menunggu lab" },
     }),
   ];
-  return { steps, seals, exceptions, submissions: new Map(), decisions: [], files: 0, sessions: new Map(), refresh: new Map() };
+  return { steps, seals, exceptions, notifications: initialNotifications(), devices: new Map(), submissions: new Map(), decisions: [], files: 0, sessions: new Map(), refresh: new Map() };
 }
+
+// the inbox of operator (user 1), shaped like apps/api/src/notifications/routes.ts; newest first by id.
+// exceptionStatus of a request still in state.exceptions is read from there when listed.
+const NOTIFICATION_TITLES = { GROSS_IN: "Selisih bruto", TARE_OUT: "Selisih tarra", NET_OUT: "Cek netto keluar", PLATE: "Plat beda", QC_HOLD: "QC ditahan", NET_IN: "Selisih netto" };
+function initialNotifications() {
+  const rows = [];
+  let id = 100;
+  const add = (type, extra) => rows.push({ id: ++id, userId: 1, type, severity: "INFO", data: {}, exceptionId: null, exceptionStatus: null, tripId: null, readAt: null, ...extra });
+  // older, already settled: enough for a second page
+  for (let at = 0; at < 18; at += 1) {
+    const exceptionId = 700 + at;
+    const kind = ["GROSS_IN", "TARE_OUT", "NET_OUT", "PLATE"][at % 4];
+    add("EXCEPTION_RAISED", { severity: "ALARM", title: NOTIFICATION_TITLES[kind], body: `Trip TR-${String(200 + at).padStart(4, "0")}`, exceptionId, exceptionStatus: at % 3 === 0 ? "REJECTED" : "APPROVED", tripId: 300 + at, createdAt: ago(60 * 24 * 3 - at * 60), readAt: ago(60 * 24 * 2) });
+  }
+  add("DO_SENT", { title: "Delivery order baru", body: "DO-2026-0101", data: { deliveryOrderId: 7 }, createdAt: ago(60 * 20), readAt: null });
+  add("EXCEPTION_CLOSED", { title: "Permintaan selesai", body: "Trip TR-0205", exceptionId: 705, exceptionStatus: "APPROVED", tripId: 305, createdAt: ago(60 * 18), readAt: ago(60 * 17) });
+  add("EXCEPTION_RAISED", { severity: "ALARM", title: NOTIFICATION_TITLES.QC_HOLD, body: "Trip TR-0003", exceptionId: 905, tripId: 103, createdAt: ago(20) });
+  add("EXCEPTION_RAISED", { severity: "ALARM", title: NOTIFICATION_TITLES.NET_OUT, body: "Trip TR-0014", exceptionId: 903, tripId: 114, createdAt: ago(3) });
+  add("EXCEPTION_RAISED", { severity: "ALARM", title: NOTIFICATION_TITLES.GROSS_IN, body: "Trip TR-0012", exceptionId: 901, tripId: 112, createdAt: ago(2) });
+  return rows;
+}
+
+function notificationView(row) {
+  const live = row.exceptionId === null ? null : state.exceptions.find((item) => item.id === row.exceptionId);
+  const { userId: _userId, ...rest } = row;
+  return { ...rest, data: { type: row.type, ...row.data, ...(row.exceptionId ? { exceptionId: row.exceptionId } : {}) }, exceptionStatus: live ? live.status : row.exceptionStatus };
+}
+const unreadOf = (user) => state.notifications.filter((row) => row.userId === user.id && row.readAt === null).length;
 
 function exceptionRow(id, type, n, extra) {
   const plateNo = `ZZ${String(n).padStart(4, "0")}CTH`;
@@ -471,6 +500,59 @@ async function api(req, res, url) {
     return send(res, 201, { id: 7000 + state.files });
   }
 
+  // --- devices and inbox (apps/api/src/notifications/routes.ts) ---
+  if (pathname === "/api/devices" && req.method === "POST") {
+    const body = await readJson(req);
+    const platform = body?.platform;
+    const pushToken = typeof body?.pushToken === "string" ? body.pushToken.trim() : "";
+    const fields = [];
+    if (!["ANDROID", "IOS", "WEB"].includes(platform)) fields.push({ field: "platform", message: "Platform harus ANDROID, IOS, atau WEB." });
+    if (!pushToken) fields.push({ field: "pushToken", message: "Token perangkat wajib diisi." });
+    if (fields.length) return fail(res, 400, "VALIDATION", "Data yang dikirim tidak valid.", fields);
+    const known = state.devices.get(pushToken);
+    const device = { id: known?.id ?? state.devices.size + 1, userId: user.id, platform, appVersion: body.appVersion ?? null, isActive: true, lastSeenAt: new Date().toISOString() };
+    state.devices.set(pushToken, device);
+    const { userId: _userId, ...view } = device;
+    return send(res, 200, { device: view });
+  }
+  const deviceToken = /^\/api\/devices\/(.+)$/.exec(pathname);
+  if (deviceToken && req.method === "DELETE") {
+    const device = state.devices.get(decodeURIComponent(deviceToken[1]));
+    if (!device || device.userId !== user.id) return fail(res, 404, "NOT_FOUND", "Perangkat tidak ditemukan.");
+    device.isActive = false;
+    device.lastSeenAt = new Date().toISOString();
+    return send(res, 204);
+  }
+  if (pathname === "/api/notifications" && req.method === "GET") {
+    const unread = ["true", "1"].includes(url.searchParams.get("unread") ?? "");
+    const limit = Math.min(50, Math.max(1, Number(url.searchParams.get("limit") ?? 20) || 20));
+    const before = url.searchParams.get("before") ? Number(url.searchParams.get("before")) : null;
+    const items = state.notifications
+      .filter((row) => row.userId === user.id && (!unread || row.readAt === null) && (before === null || row.id < before))
+      .sort((a, b) => b.id - a.id)
+      .slice(0, limit)
+      .map(notificationView);
+    return send(res, 200, { items, unreadCount: unreadOf(user) });
+  }
+  if (pathname === "/api/notifications/read-all" && req.method === "POST") {
+    const now = new Date().toISOString();
+    let updated = 0;
+    for (const row of state.notifications) {
+      if (row.userId === user.id && row.readAt === null) {
+        row.readAt = now;
+        updated += 1;
+      }
+    }
+    return send(res, 200, { updated, unreadCount: 0 });
+  }
+  const readOne = /^\/api\/notifications\/(\d+)\/read$/.exec(pathname);
+  if (readOne && req.method === "POST") {
+    const row = state.notifications.find((item) => item.id === Number(readOne[1]) && item.userId === user.id);
+    if (!row) return fail(res, 404, "NOT_FOUND", "Pemberitahuan tidak ditemukan.");
+    row.readAt ??= new Date().toISOString();
+    return send(res, 200, { notification: notificationView(row), unreadCount: unreadOf(user) });
+  }
+
   if (pathname === "/api/exceptions" && req.method === "GET") {
     if (!can(user, "approvals", "VIEW") && !can(user, "qc_approvals", "VIEW")) return fail(res, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
     const statuses = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
@@ -519,6 +601,8 @@ const server = createServer(async (req, res) => {
         submissions: [...state.submissions.entries()].map(([clientUuid, item]) => ({ clientUuid, stepId: item.stepId, form: item.form, posts: item.posts, body: item.body })),
         decisions: state.decisions,
         files: state.files,
+        devices: [...state.devices.entries()].map(([pushToken, device]) => ({ pushToken, ...device })),
+        unread: state.notifications.filter((row) => row.readAt === null).map((row) => row.id),
       });
     }
     if (url.pathname.startsWith("/api/")) {

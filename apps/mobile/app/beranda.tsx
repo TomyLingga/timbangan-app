@@ -7,11 +7,12 @@ import { errorMessage } from "../src/api/messages";
 import type { WorkListResponse, WorkRow } from "../src/api/types";
 import { fieldModulesOf, MODULE_LABELS } from "../src/auth/permissions";
 import { flowLabel, plateOf, readyFor } from "../src/lib/format";
+import { useNotifications } from "../src/state/notifications";
 import { useQueue } from "../src/state/queue";
 import { useSession } from "../src/state/session";
 import { useRemote } from "../src/state/useRemote";
 import { useTheme } from "../src/theme/ThemeProvider";
-import { fontSize, radius, space } from "../src/theme/tokens";
+import { fontSize, radius, space, TOUCH } from "../src/theme/tokens";
 import { MainScreen, NetStrip } from "../src/ui/chrome";
 import { SignedIn } from "../src/ui/guard";
 import { Badge, Banner, Button, Input, Loading, Plate, T } from "../src/ui/kit";
@@ -37,6 +38,7 @@ function Beranda() {
   const { api, user } = useSession();
   const { colors } = useTheme();
   const { pendingFor, items: queued } = useQueue();
+  const { unreadCount } = useNotifications();
   const [module, setModule] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const q = useDebounced(search.trim(), 350);
@@ -63,6 +65,7 @@ function Beranda() {
           <T kind="muted">Halo, {user?.fullName ?? ""}</T>
           <T kind="title">Daftar kerja</T>
         </View>
+        <InboxButton count={unreadCount} />
       </View>
       <NetStrip fetchedAt={remote.fetchedAt} stale={remote.stale} />
       {failed > 0 ? (
@@ -110,6 +113,39 @@ function Beranda() {
         renderItem={({ item }) => <WorkRowCard row={item} pending={pendingFor(item.id)} />}
       />
     </MainScreen>
+  );
+}
+
+/** The bell to the inbox, with the number of unread entries. */
+function InboxButton({ count }: { count: number }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={() => router.push("/pemberitahuan")}
+      accessibilityRole="button"
+      accessibilityLabel={count > 0 ? `Pemberitahuan, ${count} belum dibaca` : "Pemberitahuan"}
+      testID="open-inbox"
+      style={({ pressed }) => ({
+        width: TOUCH,
+        height: TOUCH,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: count > 0 ? colors.signal : colors.lineStrong,
+        backgroundColor: pressed ? colors.fill : colors.card,
+        alignItems: "center",
+        justifyContent: "center",
+      })}
+    >
+      <Feather name="bell" size={26} color={colors.foreground} />
+      {count > 0 ? (
+        <View
+          testID="inbox-count"
+          style={{ position: "absolute", top: -4, right: -4, minWidth: 26, height: 26, borderRadius: 13, paddingHorizontal: 6, alignItems: "center", justifyContent: "center", backgroundColor: colors.signal }}
+        >
+          <Text style={{ fontSize: 15, fontWeight: "800", color: colors.signalFg }}>{count > 99 ? "99+" : count}</Text>
+        </View>
+      ) : null}
+    </Pressable>
   );
 }
 
