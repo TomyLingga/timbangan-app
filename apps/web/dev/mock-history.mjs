@@ -4,7 +4,8 @@
 // region code, so no plate belongs to a real vehicle.
 //
 // The rows cover each state, a multi-contract truck (two rows of one group), QC, unloading and loading sheets,
-// seals, decisions with a BA number, and values the import could not read (kept as their original text).
+// seals, decisions with a BA number, values the import could not read (kept as their original text), and incoming
+// trucks whose reference is not a contract pulled from Odoo (contractKnown false; outgoing trucks are always null).
 // MOCK_HISTORY=off makes both routes answer 503, for the error state of the page.
 
 const DAY_MS = 86_400_000;
@@ -126,6 +127,11 @@ function buildRows() {
   // values the import could not read: kept as their original text, the column is null
   Object.assign(rows[6], { docGrossKg: null, weigh2At: null, arrivedAt: null });
   rows[6].details.original = { "registrasi.bruto_from": "40.010 kg", "timbangan.tgl_timbang2": "2026-11-31 25:61", "registrasi.tgl_masuk_truk": "kemarin pagi" };
+  // incoming references that are not in the contract list pulled from Odoo: the second contract of the group
+  // above, and two trucks of their own
+  rows[1].reference = "0109/KONTRAK/REK/XI/2026";
+  rows[7].reference = "0901/SPK-REK/XI/2026";
+  rows[9].reference = "DO-REK-LAIN/0010";
   // a few older rows, outside the default 30 days
   for (const row of rows.slice(60)) {
     row.entryDate = daysAgo(45 + row.id);
@@ -134,6 +140,14 @@ function buildRows() {
 }
 
 const ROWS = buildRows();
+
+/** Contract numbers of the incoming contracts pulled from Odoo, as the API compares them. */
+const KNOWN_CONTRACTS = new Set(Array.from({ length: 9 }, (_, index) => `${String(100 + index).padStart(4, "0")}/KONTRAK/REK/XI/2026`));
+/** As the API answers it: true or false for an incoming reference, null for an outgoing truck or an empty reference. */
+const contractKnown = (row) => {
+  const reference = String(row.reference ?? "").trim().toUpperCase();
+  return row.direction === "IN" && reference ? KNOWN_CONTRACTS.has(reference) : null;
+};
 
 /** Requests for a decision, with the BA they led to; keyed by the legacy id of the truck. */
 const EXCEPTIONS = [
@@ -166,7 +180,7 @@ const LIST_KEYS = [
   "transporter", "partnerName", "mill", "productName", "uom", "reference", "doNo", "poNo", "spbNo", "handoverNo", "docGrossKg", "docTareKg", "docNetKg",
   "grossKg", "tareKg", "netKg", "weigh1At", "weigh2At", "weigh1By", "weigh2By", "groupId", "closeCargo", "flexiBag",
 ];
-const listed = (row) => Object.fromEntries(LIST_KEYS.map((key) => [key, row[key] ?? null]));
+const listed = (row) => ({ ...Object.fromEntries(LIST_KEYS.map((key) => [key, row[key] ?? null])), contractKnown: contractKnown(row) });
 
 const CSV_HEADER = [
   "Cabang", "Id lama", "Nomor tiket", "Arah", "Keadaan", "Tanggal entry", "Masuk", "Keluar", "Plat", "Supir", "SIM", "Transporter", "Partner", "Asal PKS", "Produk",
@@ -201,10 +215,12 @@ export function historyRoutes({ guard, send, fail, invalid, sendCsv, reportPage 
       const direction = params.get("direction") ?? "";
       const state = params.get("state") ?? "";
       const site = (params.get("site") ?? "").trim().toUpperCase();
+      const contract = params.get("contract") ?? "";
       if ((from && !isDate(from)) || (to && !isDate(to))) return invalid(request, response, { from: "Tanggal harus berbentuk YYYY-MM-DD." });
       if (from && to && from > to) return invalid(request, response, { to: "Tanggal akhir tidak boleh sebelum tanggal awal." });
       if (direction && !DIRECTIONS.includes(direction)) return invalid(request, response, { direction: "Arah harus IN, OUT, atau UNKNOWN." });
       if (state && !STATES.includes(state)) return invalid(request, response, { state: "Keadaan tidak dikenal." });
+      if (contract && contract !== "missing") return invalid(request, response, { contract: "Saringan kontrak harus missing." });
       const page = reportPage(url);
       if (!page) return invalid(request, response, { limit: "Limit harus angka mulai dari 1." });
 
@@ -216,7 +232,8 @@ export function historyRoutes({ guard, send, fail, invalid, sendCsv, reportPage 
           (!to || (row.entryDate && row.entryDate <= to)) &&
           (!direction || row.direction === direction) &&
           (!state || row.state === state) &&
-          (!site || row.site === site),
+          (!site || row.site === site) &&
+          (!contract || contractKnown(row) === false),
       ).sort((a, b) => (a.entryDate === b.entryDate ? b.legacyId - a.legacyId : a.entryDate < b.entryDate ? 1 : -1));
 
       if (params.get("format") === "csv") {

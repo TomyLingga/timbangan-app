@@ -19,11 +19,14 @@ import {
   legacyFields,
   LOADING_LABELS,
   MATERIAL_LABELS,
+  NO_CONTRACT_NOTE,
   QC_LABELS,
+  referenceLabel,
   SEAL_COLUMNS,
   sealFacts,
   tripValue,
   UNLOADING_LABELS,
+  withoutContract,
   type LegacyException,
   type LegacyField,
   type LegacyTripDetail,
@@ -229,7 +232,19 @@ function HistoryDetail({ detail }: { detail: LegacyTripDetail }) {
     ["Flexi bag", yes(trip.flexiBag)],
   ]);
   const papers = filled([
-    [trip.direction === "OUT" ? "DO" : "Kontrak", ident(trip.reference)],
+    [
+      referenceLabel(trip),
+      withoutContract(trip) && trip.reference ? (
+        <span className="flex flex-col gap-0.5">
+          {ident(trip.reference)}
+          <span className="text-xs text-muted-foreground" data-testid="history-no-contract">
+            {NO_CONTRACT_NOTE}
+          </span>
+        </span>
+      ) : (
+        ident(trip.reference)
+      ),
+    ],
     // the old "-" placeholder and a copy of the reference say nothing more
     ["Nomor DO", trip.doNo && trip.doNo !== "-" && trip.doNo !== trip.reference ? ident(trip.doNo) : null],
     ["PO", ident(trip.poNo)],
@@ -359,6 +374,7 @@ function HistoryDetail({ detail }: { detail: LegacyTripDetail }) {
               {shares.rows.map(({ trip: member, current }) => (
                 <tr key={member.id} className={cn(current && "font-medium")}>
                   <td className="py-1.5 pr-3">
+                    {withoutContract(member) ? <span className="mr-2 text-xs font-normal text-muted-foreground">{referenceLabel(member)}</span> : null}
                     <span className="ident break-all">{member.reference ?? "-"}</span>
                     {current ? <span className="ml-2 text-xs font-normal text-muted-foreground">baris ini</span> : null}
                   </td>
@@ -374,6 +390,10 @@ function HistoryDetail({ detail }: { detail: LegacyTripDetail }) {
               </tr>
             </tbody>
           </table>
+          {/* said once for the table, and only when the sentence is not already under this truck's own reference */}
+          {!withoutContract(trip) && shares.rows.some((row) => withoutContract(row.trip)) ? (
+            <p className="mt-2 text-xs text-muted-foreground">{NO_CONTRACT_NOTE}</p>
+          ) : null}
         </Section>
       ) : null}
 

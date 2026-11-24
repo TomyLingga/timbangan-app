@@ -16,11 +16,14 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useUrlParam } from "@/hooks/use-url-filter";
 import { formatDate, formatNumber, PLANT_TIME_ZONE } from "@/lib/format";
 import {
+  HISTORY_CONTRACT_FILTERS,
   HISTORY_DIRECTIONS,
   HISTORY_SITES,
   HISTORY_STATES,
   historyPeriod,
   historyStateInfo,
+  NO_CONTRACT_TITLE,
+  withoutContract,
   type LegacyHistoryTotals,
   type LegacyTrip,
 } from "@/lib/legacy-history";
@@ -34,16 +37,26 @@ const plantDay = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: PL
 const kg = (value: number | null) => (value === null ? "-" : `${formatNumber(value)} kg`);
 const DIRECTION_WORDS: Record<string, string> = { IN: "Incoming", OUT: "Outgoing" };
 
-/** Small mark of a row that is one contract of a truck carrying several. */
-function GroupMark() {
+/** Small quiet mark under a cell, explained by its title. */
+function QuietMark({ title, children }: { title: string; children: string }) {
   return (
     <span
-      className="inline-flex h-5 items-center rounded-sm border border-dashed border-line-strong px-1.5 text-[0.6875rem] font-medium whitespace-nowrap text-muted-foreground"
-      title="Satu truk dengan beberapa kontrak. Bruto dan tarra untuk seluruh truk, netto untuk baris ini."
+      className="inline-flex h-5 w-fit items-center rounded-sm border border-dashed border-line-strong px-1.5 text-[0.6875rem] font-medium whitespace-nowrap text-muted-foreground"
+      title={title}
     >
-      multi kontrak
+      {children}
     </span>
   );
+}
+
+/** Small mark of a row that is one contract of a truck carrying several. */
+function GroupMark() {
+  return <QuietMark title="Satu truk dengan beberapa kontrak. Bruto dan tarra untuk seluruh truk, netto untuk baris ini.">multi kontrak</QuietMark>;
+}
+
+/** Small mark of an incoming reference that is not in the Odoo contract list. */
+function NoContractMark() {
+  return <QuietMark title={NO_CONTRACT_TITLE}>tanpa kontrak</QuietMark>;
 }
 
 function columnsFor(open: (row: LegacyTrip) => void): ReadonlyArray<Column<LegacyTrip>> {
@@ -97,8 +110,9 @@ function columnsFor(open: (row: LegacyTrip) => void): ReadonlyArray<Column<Legac
       header: "Kontrak atau DO",
       cellClassName: "max-w-56 whitespace-normal",
       cell: (row) => (
-        <span className="flex flex-col">
+        <span className="flex flex-col items-start">
           <span className="ident text-sm break-all">{row.reference ?? row.doNo ?? "-"}</span>
+          {withoutContract(row) ? <NoContractMark /> : null}
           <span className="text-xs text-muted-foreground">{DIRECTION_WORDS[row.direction] ?? "Arah tidak tercatat"}</span>
         </span>
       ),
@@ -129,6 +143,7 @@ function HistoryPage() {
   const [direction, setDirection] = useUrlParam("direction", "");
   const [state, setState] = useUrlParam("state", "");
   const [site, setSite] = useUrlParam("site", "");
+  const [contract, setContract] = useUrlParam("contract", "");
   const [searchText, setSearchText] = useUrlParam("q", "");
   const [pageParam, setPageParam] = useUrlParam("page", "1");
   const search = useDebouncedValue(searchText.trim(), 300);
@@ -159,9 +174,10 @@ function HistoryPage() {
     direction: direction || undefined,
     state: state || undefined,
     site: site || undefined,
+    contract: contract || undefined,
   };
   const list = useApiQuery(
-    periodError ? null : `history|${search}|${from}|${to}|${direction}|${state}|${site}|${page}`,
+    periodError ? null : `history|${search}|${from}|${to}|${direction}|${state}|${site}|${contract}|${page}`,
     (signal) =>
       api.request<ReportPage<LegacyTrip, LegacyHistoryTotals>>("/api/history/trips", {
         query: { ...filters, limit: REPORT_PAGE_SIZE, offset: pageOffset(page) },
@@ -232,6 +248,15 @@ function HistoryPage() {
         <SelectField label="Arah" name="historyDirection" value={direction} onChange={fresh(setDirection)} emptyLabel="Semua arah" options={HISTORY_DIRECTIONS} className="w-full sm:w-40" />
         <SelectField label="Keadaan" name="historyState" value={state} onChange={fresh(setState)} emptyLabel="Semua keadaan" options={HISTORY_STATES} className="w-full sm:w-48" />
         <SelectField label="Cabang" name="historySite" value={site} onChange={fresh(setSite)} emptyLabel="Semua cabang" options={HISTORY_SITES} className="w-full sm:w-40" />
+        <SelectField
+          label="Kontrak"
+          name="historyContract"
+          value={contract}
+          onChange={fresh(setContract)}
+          emptyLabel="Semua"
+          options={HISTORY_CONTRACT_FILTERS}
+          className="w-full sm:w-52"
+        />
       </div>
 
       <div aria-live="polite" className="empty:hidden">

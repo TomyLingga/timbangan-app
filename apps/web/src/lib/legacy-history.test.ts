@@ -7,8 +7,10 @@ import {
   historyPeriod,
   historyStateInfo,
   legacyFields,
+  referenceLabel,
   sealFacts,
   tripValue,
+  withoutContract,
   type LegacyTrip,
 } from "@/lib/legacy-history";
 
@@ -18,7 +20,7 @@ function trip(overrides: Partial<LegacyTrip> = {}): LegacyTrip {
     arrivedAt: null, leftAt: null, plateText: "ZZ 9001 RK", plateNo: "ZZ9001RK", driverName: "Supir Rekaan", licenceNo: null, transporter: null,
     partnerName: null, mill: null, productName: null, uom: null, reference: "0001/KONTRAK/REK", doNo: null, poNo: null, spbNo: null, handoverNo: null,
     docGrossKg: null, docTareKg: null, docNetKg: null, grossKg: 40000, tareKg: 15000, netKg: 25000, weigh1At: null, weigh2At: null, weigh1By: null,
-    weigh2By: null, groupId: null, closeCargo: null, flexiBag: null,
+    weigh2By: null, groupId: null, closeCargo: null, flexiBag: null, contractKnown: true,
     ...overrides,
   };
 }
@@ -30,6 +32,22 @@ describe("historyStateInfo", () => {
     expect(historyStateInfo("REJECTED_CLEANLINESS")).toEqual({ label: "Ditolak kebersihan", tone: "destructive" });
     expect(historyStateInfo("UNFINISHED")).toEqual({ label: "Tidak selesai", tone: "neutral" });
     expect(historyStateInfo("ODD")).toEqual({ label: "ODD", tone: "neutral" });
+  });
+});
+
+describe("referenceLabel and withoutContract", () => {
+  it("calls an incoming reference a contract only when Odoo knows it, and an outgoing one a DO", () => {
+    expect(referenceLabel(trip())).toBe("Kontrak");
+    expect(referenceLabel(trip({ contractKnown: false }))).toBe("Nomor acuan");
+    expect(referenceLabel(trip({ contractKnown: null, reference: null }))).toBe("Kontrak");
+    expect(referenceLabel(trip({ direction: "OUT", contractKnown: null }))).toBe("DO");
+    expect(referenceLabel(trip({ direction: "OUT", contractKnown: false }))).toBe("DO");
+  });
+
+  it("marks a truck only when the API says its reference is no Odoo contract", () => {
+    expect(withoutContract(trip({ contractKnown: false }))).toBe(true);
+    expect(withoutContract(trip({ contractKnown: true }))).toBe(false);
+    expect(withoutContract(trip({ contractKnown: null }))).toBe(false);
   });
 });
 

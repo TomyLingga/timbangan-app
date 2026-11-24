@@ -1479,6 +1479,12 @@ async function historyAndVerification(browser) {
   );
   check("the history table fits 1440 px without scrolling", await browser.evaluate(`[...document.querySelectorAll('[data-slot="table-container"]')].every((box) => box.offsetParent === null || box.scrollWidth <= box.clientWidth) && ${noHorizontalScroll}`));
   check("a row of a multi-contract truck carries its mark", (await browser.evaluate(rowText("70001"))).includes("multi kontrak"));
+  check(
+    "an incoming reference that is not an Odoo contract carries a quiet mark with its reason, a known one does not",
+    (await browser.evaluate(rowText("70008"))).includes("tanpa kontrak") &&
+      !(await browser.evaluate(rowText("70001"))).includes("tanpa kontrak") &&
+      (await browser.evaluate(`Boolean([...document.querySelectorAll('tbody tr')].find((row) => row.offsetParent !== null && row.innerText.includes('70008'))?.querySelector('[title="Nomor ini tidak ada di daftar kontrak Odoo. Ditampilkan seperti tercatat di aplikasi lama."]'))`)),
+  );
   await browser.screenshot("45-riwayat-dark");
   await browser.click("Berikutnya");
   check("the next page shows the rest and keeps its number in the address", Boolean(await browser.waitFor(`/^51–60 dari 60 baris$/.test(${pagerText}) && ${params("page")} === '2'`)));
@@ -1497,6 +1503,33 @@ async function historyAndVerification(browser) {
   await browser.fill('main input[type="search"]', "");
   await browser.waitFor(`!new URLSearchParams(location.search).has('q') && ${visibleRows} === 50`);
 
+  // the trucks whose reference is not in the Odoo contract list: a filter in the address, the dialog names the
+  // number a reference and says why
+  await browser.fill('select[name="historyContract"]', "missing");
+  check(
+    "the filter Tanpa kontrak di Odoo goes into the address and keeps only the marked rows",
+    Boolean(
+      await browser.waitFor(
+        `${params("contract")} === 'missing' && ${visibleRows} === 3 && [...document.querySelectorAll('tbody tr')].filter((row) => row.offsetParent !== null).every((row) => row.innerText.includes('tanpa kontrak'))`,
+      ),
+    ) && (await browser.evaluate(`document.querySelector('select[name="historyContract"] option[value="missing"]')?.textContent === 'Tanpa kontrak di Odoo'`)),
+  );
+  await browser.goto(`${WEB}/riwayat${await browser.evaluate("location.search")}`);
+  check("a reload keeps the contract filter", Boolean(await browser.waitFor(`${visibleRows} === 3 && document.querySelector('select[name="historyContract"]')?.value === 'missing'`)));
+  await browser.click('tbody [data-history-open="8"]');
+  check(
+    "the dialog of such a truck calls the number Nomor acuan and says it is not in the Odoo contract list",
+    Boolean(
+      await browser.waitFor(
+        `${textOf('[data-testid="history-detail"] dl')}.length > 0 && [...document.querySelectorAll('[data-testid="history-detail"] dt')].some((term) => term.innerText.trim() === 'Nomor acuan') && ![...document.querySelectorAll('[data-testid="history-detail"] dt')].some((term) => term.innerText.trim() === 'Kontrak') && ${textOf('[data-testid="history-no-contract"]')} === 'Nomor ini tidak ada di daftar kontrak Odoo. Bisa jadi nomor DO atau dokumen lain.'`,
+      ),
+    ),
+  );
+  await browser.pressEscape();
+  await browser.waitFor(`!document.querySelector('[data-testid="history-dialog"]')`);
+  await browser.fill('select[name="historyContract"]', "");
+  await browser.waitFor(`!new URLSearchParams(location.search).has('contract') && ${visibleRows} === 50`);
+
   // the dialog of the multi-contract truck: its group, QC, the decision with its BA number, nothing to change
   await browser.colorScheme("light");
   await browser.click('tbody [data-history-open="1"]');
@@ -1505,8 +1538,14 @@ async function historyAndVerification(browser) {
     "a row opens everything about the truck: group, QC, the decision with its BA number",
     Boolean(
       await browser.waitFor(
-        `${dialogText}.includes('Satu truk, beberapa kontrak') && ${dialogText}.includes('0102/KONTRAK/REK/XI/2026') && ${dialogText}.includes('BA-REK/2026/0051') && ${dialogText}.includes('FFA') && ${dialogText}.includes('Kolom lain dari aplikasi lama')`,
+        `${dialogText}.includes('Satu truk, beberapa kontrak') && ${dialogText}.includes('0109/KONTRAK/REK/XI/2026') && ${dialogText}.includes('BA-REK/2026/0051') && ${dialogText}.includes('FFA') && ${dialogText}.includes('Kolom lain dari aplikasi lama')`,
       ),
+    ),
+  );
+  check(
+    "a member of the group without an Odoo contract is labelled Nomor acuan, with the reason said once under the table",
+    await browser.evaluate(
+      `(() => { const rows = [...document.querySelectorAll('[data-testid="history-group"] tbody tr')].map((row) => row.innerText.replace(/\\s+/g, ' ')); const note = [...document.querySelectorAll('[data-testid="history-group"] ~ p')].map((line) => line.innerText); return rows.some((row) => row.includes('Nomor acuan') && row.includes('0109/KONTRAK/REK/XI/2026')) && !rows.some((row) => row.includes('Nomor acuan') && row.includes('0101/KONTRAK/REK/XI/2026')) && note.filter((line) => line.includes('Nomor ini tidak ada di daftar kontrak Odoo.')).length === 1 && !${dialogText}.includes('Nomor ini tidak ada di daftar kontrak Odoo. Ditampilkan'); })()`,
     ),
   );
   check(

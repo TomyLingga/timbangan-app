@@ -49,6 +49,11 @@ export interface LegacyTrip {
   groupId: number | null;
   closeCargo: boolean | null;
   flexiBag: boolean | null;
+  /**
+   * Incoming only: whether the reference is a contract number pulled from Odoo (false: it is not, often a DO or
+   * another paper). Null for an outgoing truck and for a truck without a reference.
+   */
+  contractKnown: boolean | null;
 }
 
 export type LegacyRow = Record<string, unknown>;
@@ -142,6 +147,24 @@ export const HISTORY_SITES: ReadonlyArray<{ value: string; label: string }> = [
   { value: "SBY", label: "SBY" },
   { value: "UNKNOWN", label: "Tanpa cabang" },
 ];
+
+/** The contract filter of the page: `contract=missing` keeps the incoming trucks whose reference is no Odoo contract. */
+export const HISTORY_CONTRACT_FILTERS: ReadonlyArray<{ value: string; label: string }> = [{ value: "missing", label: "Tanpa kontrak di Odoo" }];
+
+/** Shown next to and under a reference that is not in the Odoo contract list. */
+export const NO_CONTRACT_TITLE = "Nomor ini tidak ada di daftar kontrak Odoo. Ditampilkan seperti tercatat di aplikasi lama.";
+export const NO_CONTRACT_NOTE = "Nomor ini tidak ada di daftar kontrak Odoo. Bisa jadi nomor DO atau dokumen lain.";
+
+/** True only when the API says the reference is not a contract pulled from Odoo. */
+export function withoutContract(trip: Pick<LegacyTrip, "contractKnown">): boolean {
+  return trip.contractKnown === false;
+}
+
+/** What the reference of a truck is called: a DO going out, a contract coming in, or only a reference number. */
+export function referenceLabel(trip: Pick<LegacyTrip, "direction" | "contractKnown">): "DO" | "Kontrak" | "Nomor acuan" {
+  if (trip.direction === "OUT") return "DO";
+  return withoutContract(trip) ? "Nomor acuan" : "Kontrak";
+}
 
 export const MATERIAL_LABELS: Readonly<Record<string, string>> = {
   CPO: "CPO",

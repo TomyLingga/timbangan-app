@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { importLegacy } from "../src/legacy/import.js";
 import { testApp } from "./helpers/app.js";
 import { FakeLegacyReader, registration, weighing } from "./helpers/fake-legacy.js";
+import { seedCompany, seedContract, seedProduct } from "./helpers/fixtures.js";
 import { bearer, seedPartner, seedPartnerUser, seedStaff } from "./helpers/users.js";
 
 const OLD = {
@@ -16,8 +17,9 @@ const OLD = {
     // one truck with two contracts
     registration(3, { tgl_entry: "2026-11-22", no_polisi: "BK 9003 XC", origin: "0003/KONTRAK/REK/XI/2026", driver_name: "Supir Ketiga" }),
     registration(4, { tgl_entry: "2026-11-22", no_polisi: "BK 9003 XC", origin: "0004/KONTRAK/REK/XI/2026", driver_name: "Supir Ketiga", parent_id: 3 }),
-    registration(5, { tgl_entry: "2026-11-23", type: "IN", finish: "2", no_polisi: "BK 9005 XE", driver_name: "Supir Kelima" }),
-    registration(6, { tgl_entry: "2026-11-23", type: "IN", finish: "4", no_polisi: "BK 9006 XF", driver_name: "Supir Keenam" }),
+    // a reference that is not a contract pulled from the ERP, and one left empty
+    registration(5, { tgl_entry: "2026-11-23", type: "IN", finish: "2", no_polisi: "BK 9005 XE", driver_name: "Supir Kelima", origin: "777/SPK/LAIN/XI/2026" }),
+    registration(6, { tgl_entry: "2026-11-23", type: "IN", finish: "4", no_polisi: "BK 9006 XF", driver_name: "Supir Keenam", origin: "" }),
   ],
   timbangan: [
     weighing(11, 1, { netto: "25005" }),
@@ -34,6 +36,13 @@ const OLD = {
 async function setup() {
   const context = await testApp();
   await importLegacy(context.database, new FakeLegacyReader(OLD), { only: ["trips", "exceptions"] }, () => new Date("2026-11-24T03:00:00Z"));
+  // contracts pulled from the ERP: the first in another case and with spaces, the third, and an outgoing one
+  // carrying the number of the fourth (another direction, so the fourth stays without a contract)
+  const supplier = await seedCompany(context.database, "PT Sawit Rekaan", { supplier: true });
+  const product = await seedProduct(context.database, "CPO", "CPO");
+  await seedContract(context.database, { no: " 0001/kontrak/rek-a/b-cd/xi/2026 ", partnerId: supplier, productId: product });
+  await seedContract(context.database, { no: "0003/KONTRAK/REK/XI/2026", partnerId: supplier, productId: product });
+  await seedContract(context.database, { no: "0004/KONTRAK/REK/XI/2026", partnerId: supplier, productId: product, direction: "OUT" });
   await seedStaff(context.database, "reader", { reports: "VIEW" });
   await seedStaff(context.database, "other", { gate: "VIEW" });
   await seedPartnerUser(context.database, "partner", await seedPartner(context.database, "PT Contoh Rekaan", { supplier: true, transporter: true }), {
@@ -59,7 +68,7 @@ describe("GET /api/history/trips", () => {
       licenceNo: "SIMREKAAN01", transporter: "PT Angkut Rekaan", partnerName: "PT Sawit Rekaan", mill: "PKS Rekaan", productName: "CPO", uom: "Kg",
       reference: "0001/KONTRAK/REK-A/B-CD/XI/2026", doNo: "-", poNo: null, spbNo: "SPB-REK-1", handoverNo: null, docGrossKg: 40_000, docTareKg: 15_000, docNetKg: 25_000,
       grossKg: 40_010, tareKg: 15_005, netKg: 25_005, weigh1At: "2026-11-20T01:30:00.000Z", weigh2At: "2026-11-20T02:40:00.000Z", weigh1By: "petugas1", weigh2By: "petugas2",
-      groupId: null, closeCargo: false, flexiBag: false,
+      groupId: null, closeCargo: false, flexiBag: false, contractKnown: true,
     });
     expect(body.items[0]).not.toHaveProperty("details");
   });
@@ -95,6 +104,36 @@ describe("GET /api/history/trips", () => {
     expect((await get("/api/history/trips?from=22-11-2026")).statusCode).toBe(400);
   });
 
+  it("says per row whether its incoming reference is a contract pulled from the ERP", async () => {
+    const { get } = await setup();
+    const items: { legacyId: number; contractKnown: boolean | null }[] = (await get("/api/history/trips")).json().items;
+    expect(Object.fromEntries(items.map((item) => [item.legacyId, item.contractKnown]))).toEqual({
+      1: true, // matched in another case and with spaces
+      2: null, // outgoing: its reference is a DO number, never flagged
+      3: true,
+      4: false, // the same number exists only as an outgoing contract
+      5: false,
+      6: null, // no reference
+    });
+  });
+
+  it("filters the incoming trucks without a known contract, together with the other filters", async () => {
+    const { get } = await setup();
+    const ids = async (query: string) => legacyIds((await get(`/api/history/trips?${query}`)).json().items);
+    const missing = (await get("/api/history/trips?contract=missing")).json();
+    expect(legacyIds(missing.items)).toEqual([5, 4]);
+    expect(missing.items.every((item: { contractKnown: boolean | null }) => item.contractKnown === false)).toBe(true);
+    expect(missing).toMatchObject({ total: 2, totals: { trucks: 2, completedTrucks: 1, netKg: 8_000 } });
+    expect(await ids("contract=missing&state=UNFINISHED")).toEqual([5]);
+    expect(await ids("contract=missing&state=COMPLETED")).toEqual([4]);
+    expect(await ids("contract=missing&from=2026-11-22&to=2026-11-22")).toEqual([4]);
+    expect(await ids("contract=missing&q=bk%209005")).toEqual([5]);
+    expect(await ids("contract=missing&q=supir%20rekaan")).toEqual([]);
+    expect(await ids("contract=missing&direction=OUT")).toEqual([]);
+    expect((await get("/api/history/trips?contract=missing&limit=1&offset=1")).json()).toMatchObject({ total: 2, items: [{ legacyId: 4 }] });
+    expect((await get("/api/history/trips?contract=all")).statusCode).toBe(400);
+  });
+
   it("pages with limit and offset, at most 200 rows a page", async () => {
     const { get } = await setup();
     const page = (await get("/api/history/trips?limit=2&offset=2")).json();
@@ -126,20 +165,31 @@ describe("GET /api/history/trips/:id", () => {
     const response = await get(`/api/history/trips/${row?.id}`);
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.trip).toMatchObject({ legacyId: 3, groupId: 3, netKg: 10_000, importedAt: "2026-11-24T03:00:00.000Z", updatedAt: "2026-11-24T03:00:00.000Z" });
+    expect(body.trip).toMatchObject({ legacyId: 3, groupId: 3, netKg: 10_000, contractKnown: true, importedAt: "2026-11-24T03:00:00.000Z", updatedAt: "2026-11-24T03:00:00.000Z" });
     expect(body.trip.details).toMatchObject({ qc: { id: 31, ffa: "3.20" }, flags: { finish: "1" } });
     expect(legacyIds(body.group)).toEqual([4]);
-    expect(body.group[0]).toMatchObject({ netKg: 8_000, reference: "0004/KONTRAK/REK/XI/2026" });
+    expect(body.group[0]).toMatchObject({ netKg: 8_000, reference: "0004/KONTRAK/REK/XI/2026", contractKnown: false });
     expect(body.exceptions).toEqual([
       expect.objectContaining({ source: "APPROVAL", legacyId: 41, type: "NETTO_IN", status: "APPROVED", reportNo: "BA-REK/051", requestedAt: "2026-11-22T02:00:00.000Z", reportAt: "2026-11-22T03:00:00.000Z" }),
     ]);
 
     const [lone] = await database.query<{ id: number }>("select id::int as id from legacy_trips where legacy_id = 1");
-    expect((await get(`/api/history/trips/${lone?.id}`)).json()).toMatchObject({ group: [], exceptions: [] });
+    expect((await get(`/api/history/trips/${lone?.id}`)).json()).toMatchObject({ trip: { contractKnown: true }, group: [], exceptions: [] });
     const missing = await get("/api/history/trips/999999");
     expect(missing.statusCode).toBe(404);
     expect(missing.json().error).toEqual({ code: "NOT_FOUND", message: "Riwayat lama tidak ditemukan." });
     expect((await get("/api/history/trips/abc")).statusCode).toBe(400);
+  });
+
+  it("flags each member of a multi-contract group on its own, and the trucks without a contract or reference", async () => {
+    const { get, database } = await setup();
+    const idOf = async (legacyId: number) => (await database.query<{ id: number }>("select id::int as id from legacy_trips where legacy_id = $1", [legacyId]))[0]?.id;
+    const fourth = (await get(`/api/history/trips/${await idOf(4)}`)).json();
+    expect(fourth.trip).toMatchObject({ legacyId: 4, contractKnown: false });
+    expect(fourth.group).toEqual([expect.objectContaining({ legacyId: 3, contractKnown: true })]);
+    expect((await get(`/api/history/trips/${await idOf(5)}`)).json().trip).toMatchObject({ reference: "777/SPK/LAIN/XI/2026", contractKnown: false });
+    expect((await get(`/api/history/trips/${await idOf(6)}`)).json().trip).toMatchObject({ reference: null, contractKnown: null });
+    expect((await get(`/api/history/trips/${await idOf(2)}`)).json().trip).toMatchObject({ direction: "OUT", contractKnown: null });
   });
 
   it("has no route that changes the archive", async () => {

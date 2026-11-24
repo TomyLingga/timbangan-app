@@ -20,6 +20,7 @@ const listQuery = z.object({
   direction: z.enum(["IN", "OUT", "UNKNOWN"], "Arah harus IN, OUT, atau UNKNOWN.").optional(),
   state: z.enum(["COMPLETED", "REJECTED_QC", "REJECTED_CLEANLINESS", "UNFINISHED"], "Keadaan harus COMPLETED, REJECTED_QC, REJECTED_CLEANLINESS, atau UNFINISHED.").optional(),
   site: z.string("Cabang harus berupa teks.").trim().toUpperCase().max(20, "Cabang terlalu panjang.").optional(),
+  contract: z.enum(["missing"], "Saringan kontrak harus missing.").optional(),
   limit: z.coerce.number(LIMIT_MESSAGE).int(LIMIT_MESSAGE).min(1, LIMIT_MESSAGE).default(PAGE_SIZE).transform((value) => Math.min(value, MAX_PAGE_SIZE)),
   offset: z.coerce.number(OFFSET_MESSAGE).int(OFFSET_MESSAGE).min(0, OFFSET_MESSAGE).default(0),
   format: z.enum(["json", "csv"], "Format harus json atau csv.").default("json"),
@@ -34,6 +35,19 @@ const TRIP_FIELDS = [
   ["doc_tare_kg", "docTareKg"], ["doc_net_kg", "docNetKg"], ["gross_kg", "grossKg"], ["tare_kg", "tareKg"], ["net_kg", "netKg"], ["weigh1_at", "weigh1At"],
   ["weigh2_at", "weigh2At"], ["weigh1_by", "weigh1By"], ["weigh2_by", "weigh2By"], ["group_id", "groupId"], ["close_cargo", "closeCargo"], ["flexi_bag", "flexiBag"],
 ] as const;
+/**
+ * Whether the reference of an incoming truck is a purchase contract pulled from the ERP: true or false, compared
+ * upper-case and trimmed on both sides; null without a reference, and null for every outgoing truck (most outgoing
+ * references in the archive are DO numbers, not sale-contract numbers, so a missing match there says nothing).
+ * The subquery has no outer reference, so PostgreSQL hashes it once per statement.
+ */
+const CONTRACT_KNOWN = `case when legacy_trips.direction = 'IN' and nullif(trim(legacy_trips.reference), '') is not null
+  then upper(trim(legacy_trips.reference)) in (select upper(trim(c.contract_no)) from erp_contracts c where c.direction = 'IN') end as contract_known`;
+/** The rows CONTRACT_KNOWN answers false for; an anti-join on the contract numbers, fast over the whole archive. */
+const CONTRACT_MISSING = `(legacy_trips.direction = 'IN' and nullif(trim(legacy_trips.reference), '') is not null
+  and not exists (select 1 from erp_contracts c where c.direction = 'IN' and upper(trim(c.contract_no)) = upper(trim(legacy_trips.reference))))`;
+/** A listed row as the page receives it: the archive columns and whether its reference is a known contract. */
+const ROW_FIELDS = [...TRIP_FIELDS, ["contract_known", "contractKnown"]] as const;
 const DETAIL_FIELDS = [["imported_at", "importedAt"], ["updated_at", "updatedAt"], ["details", "details"]] as const;
 const EXCEPTION_FIELDS = [
   ["id", "id"], ["site", "site"], ["source", "source"], ["legacy_id", "legacyId"], ["legacy_reg_id", "legacyRegId"], ["type", "type"], ["status", "status"],
@@ -45,6 +59,7 @@ const EXCEPTION_FIELDS = [
 
 /** How a column is selected so both drivers answer the same JavaScript value. */
 function selected(column: string): string {
+  if (column === "contract_known") return CONTRACT_KNOWN;
   if (column === "entry_date") return "to_char(entry_date, 'YYYY-MM-DD') as entry_date";
   if (column === "id" || column === "legacy_id" || column === "group_id" || column === "legacy_reg_id") return `${column}::float8 as ${column}`;
   if (column === "diff_pct" || column === "tolerance_pct") return `${column}::float8 as ${column}`;
@@ -99,6 +114,7 @@ export function registerHistoryRoutes(app: FastifyInstance, context: AppContext,
     if (query.direction) where.push(`direction = ${param(query.direction)}`);
     if (query.state) where.push(`state = ${param(query.state)}`);
     if (query.site) where.push(`site = ${param(query.site)}`);
+    if (query.contract === "missing") where.push(CONTRACT_MISSING);
     const filter = where.length > 0 ? `where ${where.join(" and ")}` : "";
     const order = "order by entry_date desc nulls last, legacy_id desc";
 
@@ -114,7 +130,7 @@ export function registerHistoryRoutes(app: FastifyInstance, context: AppContext,
     }
 
     const page = [...params, query.limit, query.offset];
-    const rows = await database.query(`select ${selectList(TRIP_FIELDS)} from legacy_trips ${filter} ${order} limit $${params.length + 1} offset $${params.length + 2}`, page);
+    const rows = await database.query(`select ${selectList(ROW_FIELDS)} from legacy_trips ${filter} ${order} limit $${params.length + 1} offset $${params.length + 2}`, page);
     // a multi-contract group is one truck; the net counts the trucks that finished
     const [summed] = await database.query<{ total: number; trucks: number; completed: number; net: number | null }>(
       `select count(*)::int as total, count(distinct coalesce(group_id, legacy_id))::int as trucks,
@@ -124,7 +140,7 @@ export function registerHistoryRoutes(app: FastifyInstance, context: AppContext,
       params,
     );
     return {
-      items: rows.map((row) => shaped(row, TRIP_FIELDS)),
+      items: rows.map((row) => shaped(row, ROW_FIELDS)),
       total: Number(summed?.total ?? 0),
       limit: query.limit,
       offset: query.offset,
@@ -134,20 +150,20 @@ export function registerHistoryRoutes(app: FastifyInstance, context: AppContext,
 
   app.get("/api/history/trips/:id", readers, async (request) => {
     const { id } = idParams.parse(request.params);
-    const [row] = await database.query(`select ${selectList([...TRIP_FIELDS, ...DETAIL_FIELDS])} from legacy_trips where id = $1`, [id]);
+    const [row] = await database.query(`select ${selectList([...ROW_FIELDS, ...DETAIL_FIELDS])} from legacy_trips where id = $1`, [id]);
     if (!row) throw notFound("Riwayat lama");
-    const trip = shaped(row, [...TRIP_FIELDS, ...DETAIL_FIELDS]);
+    const trip = shaped(row, [...ROW_FIELDS, ...DETAIL_FIELDS]);
     const group =
       trip.groupId === null
         ? []
-        : await database.query(`select ${selectList(TRIP_FIELDS)} from legacy_trips where site = $1 and group_id = $2 and id <> $3 order by legacy_id`, [trip.site, trip.groupId, id]);
+        : await database.query(`select ${selectList(ROW_FIELDS)} from legacy_trips where site = $1 and group_id = $2 and id <> $3 order by legacy_id`, [trip.site, trip.groupId, id]);
     const exceptions = await database.query(
       `select ${selectList(EXCEPTION_FIELDS)} from legacy_exceptions where legacy_reg_id = $1 order by requested_at nulls last, report_at nulls last, id`,
       [trip.legacyId],
     );
     return {
       trip,
-      group: group.map((member) => shaped(member, TRIP_FIELDS)),
+      group: group.map((member) => shaped(member, ROW_FIELDS)),
       exceptions: exceptions.map((exception) => shaped(exception, EXCEPTION_FIELDS)),
     };
   });
