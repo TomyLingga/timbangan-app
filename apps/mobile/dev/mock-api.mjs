@@ -66,6 +66,8 @@ const PARAMETERS = {
   PEROXIDE: { code: "PEROXIDE", name: "Peroxide Value", unit: "meq/kg", decimals: 2, minValid: 0, maxValid: 50 },
   SMOKE_POINT: { code: "SMOKE_POINT", name: "Smoke Point", unit: "°C", decimals: 0, minValid: 0, maxValid: 300 },
 };
+/** Switched on, as on the real API today (quality_parameters.is_active); the others are neither sent nor accepted. */
+const ACTIVE = ["FFA", "MOISTURE", "IMPURITIES"];
 
 const formParameters = (step) => {
   if (step.stepCode === "QC" && step.truck.flowCode === "IN_CPO") {
@@ -76,21 +78,33 @@ const formParameters = (step) => {
     ];
   }
   if (step.stepCode === "QC_LOADING") {
-    return ["FFA", "MNI", "IV", "LOVIBOND", "MELTING_POINT", "CLOUD_POINT", "SAPONIFIABLE", "PEROXIDE", "SMOKE_POINT"].map((code) => ({
-      ...PARAMETERS[code],
-      required: code === "FFA" || code === "MNI",
-      spec: code === "FFA" ? { min: null, max: 0.1 } : null,
-    }));
+    return ["FFA", "MOISTURE", "IMPURITIES", "MNI", "IV", "LOVIBOND", "MELTING_POINT", "CLOUD_POINT", "SAPONIFIABLE", "PEROXIDE", "SMOKE_POINT"]
+      .filter((code) => ACTIVE.includes(code))
+      .map((code) => ({
+        ...PARAMETERS[code],
+        required: code === "FFA",
+        spec: code === "FFA" ? { min: null, max: 0.1 } : null,
+      }));
   }
   return [];
 };
 
+// shaped like apps/api/src/work/view.ts (tankChoices): `label` says what the tank holds, tanks of the truck's
+// product first; an incoming truck only gets the tanks of its product
 const TANKS = [
-  { id: 1, code: "T-01", name: "Tangki 1" },
-  { id: 2, code: "T-02", name: "Tangki 2" },
-  { id: 3, code: "T-03", name: "Tangki 3" },
-  { id: 4, code: "T-04", name: "Tangki 4" },
+  { id: 1, code: "T-01", name: "Tangki 1", label: "CPO", productId: CPO.id },
+  { id: 2, code: "T-02", name: "Tangki 2", label: "CPO", productId: CPO.id },
+  { id: 3, code: "T-03", name: "Tangki 3", label: "Olein", productId: OLEIN.id },
+  { id: 4, code: "T-04", name: "Tangki 4", label: "Stearin", productId: null },
 ];
+const tankChoices = (step) => {
+  const judged = TANKS.flatMap(({ productId, ...tank }) => {
+    const fits = productId === step.truck.product?.id;
+    if (!fits && (step.truck.direction === "IN" || tank.label === "CPO")) return [];
+    return [{ ...tank, fitsProduct: fits }];
+  });
+  return [...judged.filter((tank) => tank.fitsProduct), ...judged.filter((tank) => !tank.fitsProduct)];
+};
 
 const MODULE_OF = { SEAL_CHECK: "security_check", QC: "qc", UNLOADING: "unloading", RESEAL: "sealing", CLEANLINESS: "qc", QC_LOADING: "qc", LOADING: "loading", SEALING: "sealing" };
 const STEP_NAMES = {
@@ -265,7 +279,7 @@ function formData(step) {
             { id: 72, sealNo: "SG-200102", kind: "LOCIS" },
           ]
         : [],
-    tanks: ["UNLOADING", "QC_LOADING"].includes(step.stepCode) ? TANKS : [],
+    tanks: ["UNLOADING", "QC_LOADING"].includes(step.stepCode) ? tankChoices(step) : [],
     parameters: formParameters(step),
     sealsInPlace:
       step.stepCode === "SEALING" && step.attempt > 1 ? [{ id: 81, sealId: 480, sealNo: "L-000080", kind: "LOCIS", position: null, appliedAt: ago(50) }] : [],
@@ -293,6 +307,7 @@ function plausibility(values) {
   for (const [code, value] of Object.entries(values ?? {})) {
     const parameter = PARAMETERS[code];
     if (!parameter) fields.push({ field: `values.${code}`, message: `Parameter ${code} tidak dikenal.` });
+    else if (!ACTIVE.includes(code)) fields.push({ field: `values.${code}`, message: `${parameter.name} belum dipakai.` });
     else if (typeof value !== "number" || value < parameter.minValid || value > parameter.maxValid) {
       fields.push({ field: `values.${code}`, message: `${parameter.name} harus antara ${parameter.minValid} dan ${parameter.maxValid}.` });
     }

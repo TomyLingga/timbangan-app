@@ -2,7 +2,7 @@
 // renderer draws all forms), validation with Indonesian messages, the request body, and the summary sheet.
 // Pure: no React Native imports.
 
-import type { FormData, FormParameter, WorkRow } from "../api/types";
+import type { FormData, FormParameter, TankChoice, WorkRow } from "../api/types";
 import { decimal, parseDecimal } from "../lib/format";
 
 export interface SealPick {
@@ -209,6 +209,38 @@ export function parameterSummary(values: FormValues, parameters: FormParameter[]
       tone: off ? ("warn" as const) : undefined,
     }];
   });
+}
+
+// --- tanks ---
+
+/** Shown next to a tank that does not hold the truck's product (the API still accepts it). */
+export const OTHER_PRODUCT = "produk lain";
+
+export interface TankOption {
+  value: string;
+  code: string;
+  /** What the tank holds, when the API knows it. */
+  label: string | null;
+  /** False for a tank of another product. */
+  fits: boolean;
+}
+
+/** The tanks as the picker shows them, in the order the API gives (tanks of the truck's product first). */
+export const tankOptions = (tanks: TankChoice[]): TankOption[] =>
+  tanks.map((tank) => ({ value: String(tank.id), code: tank.code, label: tank.label?.trim() ? tank.label.trim() : null, fits: tank.fitsProduct }));
+
+/** One line for a chosen tank: "T-01 · CPO", with "produk lain" when it is not of the truck's product. */
+export function tankText(tanks: TankChoice[], id: string | null): string {
+  const tank = tankOptions(tanks).find((option) => option.value === id);
+  if (!tank) return "–";
+  return [tank.code, tank.label, tank.fits ? null : OTHER_PRODUCT].filter((part): part is string => !!part).join(" · ");
+}
+
+/** A tank is required and must be one the API offers now (a form sent back by the server may hold an old choice). */
+export function validateTank(values: FormValues, key: string, tanks: TankChoice[], required: string, errors: Errors): void {
+  const id = choice(values, key);
+  if (!id) errors[key] = required;
+  else if (!tanks.some((tank) => String(tank.id) === id)) errors[key] = "Tangki ini tidak ada di daftar. Pilih lagi.";
 }
 
 // --- seals from stock ---

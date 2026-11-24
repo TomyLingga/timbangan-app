@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { FormData, FormParameter, WorkRow } from "../api/types";
+import type { FormData, FormParameter, TankChoice, WorkRow } from "../api/types";
 import { qcReceivingForm, resealForm, sealCheckForm, unloadingForm } from "./incoming";
 import { cleanlinessForm, loadingFinishForm, loadingStartForm, qcLoadingForm, sealingForm } from "./outgoing";
 import { formFor } from "./registry";
-import type { FormContext, FormValues } from "./shared";
+import { type FormContext, type FormValues, tankOptions, tankText } from "./shared";
 
 const UUID = "00000000-0000-4000-8000-0000000000aa";
 const NOW = new Date("2026-11-21T07:30:00Z");
@@ -46,9 +46,15 @@ function context(stepCode: string, flowCode: string, form: Partial<FormData> = {
       },
       ...step,
     },
-    form: { letter: null, declaredSeals: [], tanks: [{ id: 4, code: "T-01", name: "Tangki 1" }, { id: 5, code: "T-02", name: "Tangki 2" }], parameters: [], sealsInPlace: [], history: [], ...form },
+    form: { letter: null, declaredSeals: [], tanks: TANKS, parameters: [], sealsInPlace: [], history: [], ...form },
   };
 }
+
+// as apps/api/src/work/view.ts (tankChoices) sends them: tanks of the truck's product first
+const TANKS: TankChoice[] = [
+  { id: 4, code: "T-01", name: "Tangki 1", label: "CPO", fitsProduct: true },
+  { id: 5, code: "T-02", name: "Tangki 2", label: "Olein", fitsProduct: false },
+];
 
 const fill = (base: FormValues, changes: FormValues): FormValues => ({ ...base, ...changes });
 
@@ -127,6 +133,31 @@ describe("QC pass CPO", () => {
   });
 });
 
+describe("QC pass CPO with fewer parameters", () => {
+  it("does not ask for a parameter the API did not send", () => {
+    const ctx = context("QC", "IN_CPO", { parameters: [param("FFA", "FFA", true)] });
+    const values = fill(qcReceivingForm.initial(ctx), { "value.FFA": "3", disposition: "OK" });
+    expect(qcReceivingForm.fields(values, ctx).filter((field) => field.kind === "number").map((field) => field.key)).toEqual(["value.FFA"]);
+    expect(qcReceivingForm.validate(values, ctx)).toEqual({});
+    expect(qcReceivingForm.body(values, ctx, UUID)).toEqual({ clientUuid: UUID, values: { FFA: 3 }, disposition: "OK" });
+  });
+});
+
+describe("tank choices", () => {
+  it("keeps the order of the API and marks a tank of another product", () => {
+    expect(tankOptions(TANKS)).toEqual([
+      { value: "4", code: "T-01", label: "CPO", fits: true },
+      { value: "5", code: "T-02", label: "Olein", fits: false },
+    ]);
+  });
+  it("copes with a tank without label", () => {
+    const tanks: TankChoice[] = [{ id: 8, code: "T-08", name: "Tangki 8", label: null, fitsProduct: true }];
+    expect(tankOptions(tanks)[0]?.label).toBeNull();
+    expect(tankText(tanks, "8")).toBe("T-08");
+    expect(tankText(tanks, null)).toBe("–");
+  });
+});
+
 describe("stock seals (reseal and sealing)", () => {
   const ctx = context("RESEAL", "IN_CPO");
   it("requires seal 1 and refuses the same seal twice", () => {
@@ -189,6 +220,23 @@ describe("unloading", () => {
       tankEmpty: true,
     });
   });
+  it("matches the body the API accepted and names the tank in the summary", () => {
+    const values = fill(unloadingForm.initial(ctx), { ...complete, wire: "TIDAK" });
+    expect(unloadingForm.body(values, ctx, UUID)).toEqual({
+      clientUuid: UUID,
+      tankId: 4,
+      doorNo: 3,
+      wood: false,
+      wire: false,
+      plastic: false,
+      handbrakeOn: true,
+      engineOn: false,
+      manholeOpen: true,
+      dischargeValveActive: true,
+      tankEmpty: true,
+    });
+    expect(unloadingForm.summary(values, ctx)[0]).toEqual({ label: "Tanki", value: "T-01 · CPO" });
+  });
   it("hands the photos to the queue", () => {
     const photos = [{ uri: "file:///p1.jpg", width: 1600, height: 1200 }];
     expect(unloadingForm.photos?.(fill(unloadingForm.initial(ctx), { photos }))).toEqual(photos);
@@ -220,20 +268,41 @@ describe("cleanliness", () => {
 });
 
 describe("QC loading", () => {
-  const parameters = [param("FFA", "FFA", true), param("MNI", "M dan I", true, 0, 5, 3), param("IV", "IV", false, 0, 200)];
+  // the active parameters of apps/api/src/work/view.ts today: FFA required, moisture and impurities optional
+  const parameters = [param("FFA", "FFA", true), param("MOISTURE", "Moisture", false, 0, 5, 3), param("IMPURITIES", "Impurities", false, 0, 5, 3)];
   const ctx = context("QC_LOADING", "OUT_BULK", { parameters });
   it("needs the tank, and a different blend tank when blending", () => {
-    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", "value.MNI": "0,1", tankId: "4", blend: "YES", blendTankId: "4" });
+    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", "value.MOISTURE": "0,05", tankId: "4", blend: "YES", blendTankId: "4" });
     expect(qcLoadingForm.validate(values, ctx)).toEqual({ blendTankId: "Tangki blend harus berbeda dari tangki utama." });
-    const done = fill(values, { blendTankId: "5", "value.IV": "52,4" });
+    const done = fill(values, { blendTankId: "5", "value.IMPURITIES": "0,02" });
     expect(qcLoadingForm.validate(done, ctx)).toEqual({});
-    expect(qcLoadingForm.body(done, ctx, UUID)).toEqual({ clientUuid: UUID, values: { FFA: 0.05, MNI: 0.1, IV: 52.4 }, tankId: 4, blendTankId: 5 });
+    expect(qcLoadingForm.body(done, ctx, UUID)).toEqual({ clientUuid: UUID, values: { FFA: 0.05, MOISTURE: 0.05, IMPURITIES: 0.02 }, tankId: 4, blendTankId: 5 });
   });
-  it("uses the old labels for the required figures", () => {
+  it("sends the same shape as the API accepted: FFA and moisture with one tank", () => {
+    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", "value.MOISTURE": "0,05", tankId: "4" });
+    expect(qcLoadingForm.validate(values, ctx)).toEqual({});
+    expect(qcLoadingForm.body(values, ctx, UUID)).toEqual({ clientUuid: UUID, values: { FFA: 0.05, MOISTURE: 0.05 }, tankId: 4 });
+  });
+  it("uses the old label for FFA and requires only what the API marks required", () => {
     const errors = qcLoadingForm.validate(qcLoadingForm.initial(ctx), ctx);
-    expect(errors["value.FFA"]).toBe("Free Fatty Acid wajib diisi.");
-    expect(errors["value.MNI"]).toBe("M dan I wajib diisi.");
-    expect(errors.tankId).toBe("Tangki wajib dipilih.");
+    expect(errors).toEqual({ "value.FFA": "Free Fatty Acid wajib diisi.", tankId: "Tangki wajib dipilih." });
+  });
+  it("shows only the parameters the API sent and never sends another code", () => {
+    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", "value.MNI": "0,1", "value.IV": "52", tankId: "4" });
+    const keys = qcLoadingForm.fields(values, ctx).filter((field) => field.kind === "number").map((field) => field.key);
+    expect(keys).toEqual(["value.FFA", "value.MOISTURE", "value.IMPURITIES"]);
+    expect(qcLoadingForm.validate(values, ctx)).toEqual({});
+    expect(qcLoadingForm.body(values, ctx, UUID).values).toEqual({ FFA: 0.05 });
+  });
+  it("names the tank with what it holds and marks a tank of another product", () => {
+    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", tankId: "5", blend: "YES", blendTankId: "4" });
+    const rows = qcLoadingForm.summary(values, ctx);
+    expect(rows.find((row) => row.label === "Tanki")?.value).toBe("T-02 · Olein · produk lain");
+    expect(rows.find((row) => row.label === "Blend Tanki")?.value).toBe("Ya, T-01 · CPO");
+  });
+  it("asks again for a tank that is no longer offered", () => {
+    const values = fill(qcLoadingForm.initial(ctx), { "value.FFA": "0,05", tankId: "99" });
+    expect(qcLoadingForm.validate(values, ctx)).toEqual({ tankId: "Tangki ini tidak ada di daftar. Pilih lagi." });
   });
 });
 

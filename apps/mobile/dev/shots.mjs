@@ -15,6 +15,8 @@ const taken = [];
 
 const network = (online) => fetch(`${ORIGIN}/__mock/network`, { method: "POST", body: JSON.stringify({ online }) });
 const radio = (field, label) => `[data-testid="field-${field}"] [role="radio"][aria-label="${label}"]`;
+// a tank row is labelled "<code>, <what it holds>[, produk lain]"
+const tank = (field, code) => `[data-testid="field-${field}"] [role="radio"][aria-label^="${code},"]`;
 
 async function shot(browser, scheme, name) {
   const file = await browser.screenshot(`${scheme}-${name}`);
@@ -86,7 +88,7 @@ async function run(browser, scheme) {
 
   // unloading: tank-empty tick left open
   await openStep(browser, 4, "form-unloading");
-  await browser.click(radio("tankId", "T-02"));
+  await browser.click(tank("tankId", "T-02"));
   await browser.click(radio("doorNo", "3"));
   for (const [field, label] of [["wood", "Tidak Ada"], ["wire", "Tidak Ada"], ["plastic", "Ada"], ["handbrake", "On"], ["engine", "Off"], ["manhole", "Terbuka"], ["valve", "Aktif"]]) {
     await browser.click(radio(field, label));
@@ -96,21 +98,20 @@ async function run(browser, scheme) {
 
   // cleanliness (bulk): Nozzle Odor left open
   await openStep(browser, 6, "form-cleanliness");
-  for (const field of ["containerClean", "noPuddles", "noForeignMatter", "noPestNajis", "wallsClean", "noOdour", "flashLight", "nozzleVisual", "disposition"]) {
+  for (const field of ["containerClean", "noLiquid", "noForeignObject", "noPestOrNajis", "wallsCleanDryNoLeak", "noOdor", "flashLight", "nozzleVisual", "disposition"]) {
     await browser.click(radio(field, "OK"));
   }
   await browser.click(radio("nozzleNo", "Nozzle 2"));
-  await checkAndShow(browser, "nozzleOdour");
+  await checkAndShow(browser, "nozzleOdor");
   await shot(browser, scheme, "10-form-cek-kebersihan");
 
   // QC loading: the blend tank equals the main tank
   await openStep(browser, 7, "form-qc-loading");
   await browser.fill("testid:input-value.FFA", "0,05");
-  await browser.fill("testid:input-value.MNI", "0,08");
-  await browser.fill("testid:input-value.IV", "56,2");
-  await browser.click(radio("tankId", "T-01"));
+  await browser.fill("testid:input-value.MOISTURE", "0,05");
+  await browser.click(tank("tankId", "T-03"));
   await browser.click(radio("blend", "Ya"));
-  await browser.click(radio("blendTankId", "T-01"));
+  await browser.click(tank("blendTankId", "T-03"));
   await checkAndShow(browser, "blendTankId");
   await shot(browser, scheme, "11-form-qc-loading");
 
@@ -135,7 +136,7 @@ async function run(browser, scheme) {
 
   // a form sent without network: waiting in the queue
   await openStep(browser, 11, "form-cleanliness");
-  for (const field of ["containerClean", "noPuddles", "noForeignMatter", "noPestNajis", "wallsClean", "noOdour", "disposition"]) {
+  for (const field of ["containerClean", "noLiquid", "noForeignObject", "noPestOrNajis", "wallsCleanDryNoLeak", "noOdor", "disposition"]) {
     await browser.click(radio(field, "OK"));
   }
   await browser.click("testid:form-check");

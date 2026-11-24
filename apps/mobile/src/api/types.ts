@@ -1,8 +1,7 @@
 // Every shape the app exchanges with the API, in one module so it can be aligned with apps/api in one place.
 //
 // Source of each shape:
-//   FROM CODE  read from apps/api/src (file named next to the type), as it was on 21 November 2026.
-//   GUESSED    the route does not exist yet; shaped from docs/fase-5-rancangan.md section 4 and the old forms.
+//   FROM CODE  read from apps/api/src (file named next to the type), checked again on 24 November 2026.
 // Dates travel as ISO strings.
 
 // --- errors ------------------------------------------------------------------------------------------------
@@ -58,9 +57,8 @@ export interface MeResponse {
 }
 
 /**
- * POST /api/auth/login with `client: "mobile"`.
- * FROM CODE for username and password (apps/api/src/auth/routes.ts); GUESSED: `client` and `refreshToken` in the
- * answer (the route does not read `client` yet and puts the refresh token in a cookie).
+ * FROM CODE apps/api/src/auth/routes.ts: POST /api/auth/login with `client: "android" | "ios"`; a phone session
+ * gets its refresh token in the answer body (apps/api/src/auth/sessions.ts), not in a cookie.
  */
 export interface LoginRequest {
   username: string;
@@ -122,7 +120,10 @@ export interface WorkListResponse {
   items: WorkRow[];
 }
 
-/** FROM CODE apps/api/src/work/view.ts (FormParameter). */
+/**
+ * FROM CODE apps/api/src/work/view.ts (FormParameter). The API sends only the parameters that are switched on
+ * (quality_parameters.is_active) and refuses a value of any other, so a form shows exactly this list.
+ */
 export interface FormParameter {
   code: string;
   name: string;
@@ -134,10 +135,17 @@ export interface FormParameter {
   spec: { min: number | null; max: number | null } | null;
 }
 
+/**
+ * FROM CODE apps/api/src/work/view.ts (tankChoices): the tanks of the truck's product first (`fitsProduct`), then,
+ * for an outgoing truck, other tanks the API also accepts. `label` says what the tank holds (its Odoo label, else
+ * the name of its product).
+ */
 export interface TankChoice {
   id: number;
   code: string;
   name: string;
+  label: string | null;
+  fitsProduct: boolean;
 }
 
 /** A seal on the truck that this plant put there (FROM CODE view.ts sealsInPlace). */
@@ -212,10 +220,13 @@ export interface SealCheckBody {
 
 export type ReceivingReason = "FFA_OUT" | "MI_OUT" | "FFA_MI_OUT";
 
-/** FROM CODE apps/api/src/work/incoming.ts (qcReceivingBody), route `qc-receiving`. */
+/**
+ * FROM CODE apps/api/src/work/incoming.ts (qcReceivingBody), route `qc-receiving`. `values` is keyed by the codes of
+ * `form.parameters`; the API refuses a code that is not switched on.
+ */
 export interface QcReceivingBody {
   clientUuid: string;
-  values: { FFA: number; MOISTURE: number; IMPURITIES?: number };
+  values: Record<string, number>;
   disposition: "OK" | "HOLD" | "NOT_OK";
   reasonCode?: ReceivingReason;
   remark?: string;
@@ -224,7 +235,8 @@ export interface QcReceivingBody {
 /** FROM CODE apps/api/src/work/incoming.ts (resealBody), route `reseal`. */
 export interface ResealBody {
   clientUuid: string;
-  seals: { sealId: number }[];
+  /** 1 to 4 stock seals; `position` is optional and the app does not ask for it. */
+  seals: { sealId: number; position?: string }[];
   remark?: string;
 }
 
@@ -260,7 +272,11 @@ export interface CleanlinessBody {
   conclusion?: string;
 }
 
-/** GUESSED: route `qc-loading`. Values keyed by quality parameter code (FFA, MNI, IV, ...). */
+/**
+ * FROM CODE apps/api/src/work/outgoing.ts (qcLoadingBody), route `qc-loading`. `values` is keyed by the codes of
+ * `form.parameters` (for now FFA, MOISTURE, IMPURITIES); the API refuses a code that is not switched on. The answer
+ * carries `certificateNo`.
+ */
 export interface QcLoadingBody {
   clientUuid: string;
   values: Record<string, number>;
@@ -269,16 +285,21 @@ export interface QcLoadingBody {
   remark?: string;
 }
 
-/** GUESSED: route `loading/start`. `startedAt` is the phone's time, because a queued start can arrive late. */
+/**
+ * FROM CODE apps/api/src/work/outgoing.ts (loadingStartBody), route `loading/start`. `startedAt` is optional for the
+ * API (server time when absent); the app sends the phone's time because a queued start can arrive late. The API
+ * refuses a time in the future.
+ */
 export interface LoadingStartBody {
   clientUuid: string;
-  startedAt: string;
+  startedAt?: string;
 }
 
-/** FROM CODE: route `loading/finish`. */
+/** FROM CODE apps/api/src/work/outgoing.ts (loadingFinishBody), route `loading/finish`. Both times are optional for the API. The answer carries `deliveryNoteNo`. */
 export interface LoadingFinishBody {
   clientUuid: string;
-  finishedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
   temperatureC: number;
   qualityOk: boolean;
   handbrakeOn: boolean;
@@ -286,11 +307,14 @@ export interface LoadingFinishBody {
   remark?: string;
 }
 
-/** GUESSED: route `sealing`. `removed` marks seals of an earlier loading as opened (after "tambah"/"kurangi muatan"). */
+/**
+ * FROM CODE apps/api/src/work/outgoing.ts (sealingBody), route `sealing`. `removed` marks seals of an earlier loading
+ * as opened (after "tambah"/"kurangi muatan"); every seal still in place must be in it.
+ */
 export interface SealingBody {
   clientUuid: string;
-  seals: { sealId: number }[];
-  removed: { tripSealId: number; reason: string }[];
+  seals: { sealId: number; position?: string }[];
+  removed?: { tripSealId: number; reason: string }[];
   remark?: string;
   photoFileIds?: number[];
 }

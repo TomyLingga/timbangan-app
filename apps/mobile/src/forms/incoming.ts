@@ -24,10 +24,12 @@ import {
   requireChoices,
   type SealCheckRow,
   sealSummary,
+  tankText,
   text,
   toneOf,
   validateParameters,
   validateStockSeals,
+  validateTank,
 } from "./shared";
 
 // --- cek segel ---
@@ -132,10 +134,10 @@ export const qcReceivingForm: FormDefinition = {
   },
   body: (values, ctx, clientUuid): QcReceivingBody & Record<string, unknown> => {
     const disposition = (choice(values, "disposition") ?? "OK") as QcReceivingBody["disposition"];
-    const figures = parameterValues(values, ctx.form.parameters);
     return {
       clientUuid,
-      values: figures as QcReceivingBody["values"],
+      // only the parameters the API sent: it refuses any other code
+      values: parameterValues(values, ctx.form.parameters),
       disposition,
       ...(disposition !== "OK" ? { reasonCode: choice(values, "reasonCode") as QcReceivingBody["reasonCode"] } : {}),
       ...remarkOf(values),
@@ -219,9 +221,9 @@ export const unloadingForm: FormDefinition = {
     { kind: "photos", key: "photos", label: "Foto (paling banyak 3)", max: 3 },
     remarkField("Keterangan", "Keterangan (tidak wajib)"),
   ],
-  validate: (values) => {
+  validate: (values, ctx) => {
     const errors: Errors = {};
-    if (!choice(values, "tankId")) errors.tankId = "Tangki wajib dipilih.";
+    validateTank(values, "tankId", ctx.form.tanks, "Tangki wajib dipilih.", errors);
     requireChoices(values, ["doorNo", ...UNLOADING_CHOICES.map(([key]) => key)], errors);
     if (!flag(values, "tankEmpty")) errors.tankEmpty = "Centang bila tangki truk sudah kosong. Bongkar baru bisa disimpan setelah itu.";
     if (listOf<Photo>(values, "photos").length > 3) errors.photos = "Paling banyak 3 foto.";
@@ -242,7 +244,7 @@ export const unloadingForm: FormDefinition = {
     ...remarkOf(values),
   }),
   summary: (values, ctx) => [
-    { label: "Tanki", value: ctx.form.tanks.find((tank) => String(tank.id) === choice(values, "tankId"))?.code ?? "–" },
+    { label: "Tanki", value: tankText(ctx.form.tanks, choice(values, "tankId")) },
     { label: "No Pintu", value: choice(values, "doorNo") ?? "–" },
     ...UNLOADING_CHOICES.map(([key, label, options]) => ({ label, value: labelOf(options, choice(values, key)), tone: toneOf(options, choice(values, key)) })),
     { label: "Tangki truk kosong", value: flag(values, "tankEmpty") ? "Ya" : "Belum", tone: flag(values, "tankEmpty") ? ("ok" as const) : ("bad" as const) },

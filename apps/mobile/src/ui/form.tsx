@@ -6,7 +6,7 @@ import { Image, Pressable, Text, View } from "react-native";
 import type { AvailableSealsResponse } from "../api/types";
 import { errorMessage } from "../api/messages";
 import { SEAL_STATE } from "../forms/incoming";
-import type { Errors, Field, FieldValue, FormContext, FormValues, OldSealRow, Photo, SealCheckRow, SealPick } from "../forms/shared";
+import { type Errors, type Field, type FieldValue, type FormContext, type FormValues, type OldSealRow, OTHER_PRODUCT, type Photo, type SealCheckRow, type SealPick, type TankOption, tankOptions } from "../forms/shared";
 import { clockTime } from "../lib/format";
 import { takePhoto } from "../platform/photo";
 import { useSession } from "../state/session";
@@ -85,13 +85,7 @@ function FieldView({ field, value, error, ctx, onChange }: { field: Field; value
               Minta admin menambah tangki di master.
             </Banner>
           ) : (
-            <Choices
-              options={ctx.form.tanks.map((tank) => ({ value: String(tank.id), label: tank.code }))}
-              value={typeof value === "string" ? value : null}
-              onChange={onChange}
-              columns={3}
-              invalid={!!error}
-            />
+            <TankPicker options={tankOptions(ctx.form.tanks)} value={typeof value === "string" ? value : null} onChange={onChange} invalid={!!error} />
           )}
         </FieldBox>
       );
@@ -108,6 +102,48 @@ function FieldView({ field, value, error, ctx, onChange }: { field: Field; value
     default:
       return null;
   }
+}
+
+/** One row per tank: code, what it holds, and a quiet "produk lain" for a tank of another product. */
+function TankPicker({ options, value, onChange, invalid }: { options: TankOption[]; value: string | null; onChange(value: string): void; invalid: boolean }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ gap: space.sm }}>
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            onPress={() => onChange(option.value)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+            accessibilityLabel={[option.code, option.label, option.fits ? null : OTHER_PRODUCT].filter(Boolean).join(", ")}
+            style={({ pressed }) => ({
+              minHeight: TOUCH,
+              flexDirection: "row",
+              alignItems: "center",
+              gap: space.md,
+              paddingHorizontal: space.md,
+              paddingVertical: space.sm,
+              borderRadius: radius.md,
+              borderWidth: selected ? 2 : 1,
+              borderColor: selected ? colors.primary : invalid ? colors.danger : colors.lineStrong,
+              backgroundColor: selected ? colors.primarySubtle : pressed ? colors.fill : colors.surface,
+            })}
+          >
+            <Text style={{ fontFamily: mono, fontSize: 19, fontWeight: "800", color: selected ? colors.primaryInk : colors.foreground }}>{option.code}</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: fontSize.body, fontWeight: "600", color: selected ? colors.primaryInk : colors.foreground }} numberOfLines={2}>
+                {option.label ?? "–"}
+              </Text>
+              {option.fits ? null : <Text style={{ fontSize: fontSize.small, color: colors.muted }}>{OTHER_PRODUCT}</Text>}
+            </View>
+            {selected ? <Feather name="check" size={22} color={colors.primaryInk} /> : null}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 function Tick({ label, required, checked, error, onChange, testID }: { label: string; required: boolean; checked: boolean; error?: string; onChange(value: boolean): void; testID: string }) {

@@ -1,6 +1,5 @@
 // The outgoing forms: cleanliness check, QC loading, loading (start and stop), sealing. Fields and labels from
-// docs/fase-5-rancangan.md sections 2 and 3 and the old forms. The API routes do not exist yet: the bodies are
-// the GUESSED shapes in src/api/types.ts.
+// docs/fase-5-rancangan.md sections 2 and 3 and the old forms; bodies as apps/api/src/work/outgoing.ts takes them.
 
 import type { CleanlinessBody, CleanlinessItemKey, LoadingFinishBody, LoadingStartBody, QcLoadingBody, SealingBody } from "../api/types";
 import { clockTime, decimal, parseDecimal } from "../lib/format";
@@ -26,10 +25,12 @@ import {
   remarkSummary,
   requireChoices,
   sealSummary,
+  tankText,
   text,
   toneOf,
   validateParameters,
   validateStockSeals,
+  validateTank,
 } from "./shared";
 
 // --- cek kebersihan ---
@@ -129,8 +130,6 @@ export const YES_NO = [
   { value: "YES", label: "Ya" },
 ];
 
-const tankCode = (ctx: Parameters<FormDefinition["summary"]>[1], id: string | null) => ctx.form.tanks.find((tank) => String(tank.id) === id)?.code ?? "–";
-
 export const qcLoadingForm: FormDefinition = {
   route: "qc-loading",
   title: "QC loading",
@@ -154,16 +153,17 @@ export const qcLoadingForm: FormDefinition = {
   validate: (values, ctx) => {
     const errors: Errors = {};
     validateParameters(values, ctx.form.parameters, errors, QC_LOADING_LABELS);
-    if (!choice(values, "tankId")) errors.tankId = "Tangki wajib dipilih.";
+    validateTank(values, "tankId", ctx.form.tanks, "Tangki wajib dipilih.", errors);
     requireChoices(values, ["blend"], errors);
     if (choice(values, "blend") === "YES") {
-      if (!choice(values, "blendTankId")) errors.blendTankId = "Tangki blend wajib dipilih.";
-      else if (choice(values, "blendTankId") === choice(values, "tankId")) errors.blendTankId = "Tangki blend harus berbeda dari tangki utama.";
+      validateTank(values, "blendTankId", ctx.form.tanks, "Tangki blend wajib dipilih.", errors);
+      if (!errors.blendTankId && choice(values, "blendTankId") === choice(values, "tankId")) errors.blendTankId = "Tangki blend harus berbeda dari tangki utama.";
     }
     return errors;
   },
   body: (values, ctx, clientUuid): QcLoadingBody & Record<string, unknown> => ({
     clientUuid,
+    // only the parameters the API sent: it refuses any other code
     values: parameterValues(values, ctx.form.parameters),
     tankId: Number(choice(values, "tankId")),
     ...(choice(values, "blend") === "YES" ? { blendTankId: Number(choice(values, "blendTankId")) } : {}),
@@ -171,8 +171,8 @@ export const qcLoadingForm: FormDefinition = {
   }),
   summary: (values, ctx) => [
     ...parameterSummary(values, ctx.form.parameters, QC_LOADING_LABELS),
-    { label: "Tanki", value: tankCode(ctx, choice(values, "tankId")) },
-    { label: "Blend Tanki", value: choice(values, "blend") === "YES" ? `Ya, ${tankCode(ctx, choice(values, "blendTankId"))}` : "Tidak" },
+    { label: "Tanki", value: tankText(ctx.form.tanks, choice(values, "tankId")) },
+    { label: "Blend Tanki", value: choice(values, "blend") === "YES" ? `Ya, ${tankText(ctx.form.tanks, choice(values, "blendTankId"))}` : "Tidak" },
     ...remarkSummary(values, "Keterangan"),
   ],
 };
@@ -190,7 +190,6 @@ export const loadingStartForm: FormDefinition = {
   summary: (_values, ctx) => [{ label: "Waktu Mulai", value: clockTime(ctx.now) }],
 };
 
-/** GUESSED plausibility range of the loading temperature; the API has no parameter row for it. */
 // the API refuses a loading temperature outside 0 to 150 °C (apps/api/src/work/outgoing.ts)
 export const TEMPERATURE_RANGE = { min: 0, max: 150 };
 export const QUALITY = [
