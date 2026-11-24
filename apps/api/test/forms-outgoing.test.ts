@@ -256,6 +256,37 @@ describe("loading", () => {
     expect(await ctx.database.query("select status from trip_steps where id = $1", [id])).toEqual([{ status: "READY" }]);
   });
 
+  it("QC loading does not require FFA while FFA is switched off, and refuses it then", async () => {
+    const ctx = await fieldApp();
+    const truck = await atCleanliness(ctx);
+    await ctx.forceReady(truck.tripId, "QC_LOADING");
+    const id = await ctx.stepId(truck.tripId, "QC_LOADING");
+    await ctx.database.query("update quality_parameters set is_active = false where code = 'FFA'");
+    expect(fields(await ctx.form(id, "qc-loading", qcLoadingBody(ctx), "qcop"))).toEqual([{ field: "values.FFA", message: "FFA belum dipakai." }]);
+    const response = await ctx.form(id, "qc-loading", qcLoadingBody(ctx, { values: { MOISTURE: 0.1 } }), "qcop");
+    expect(response.statusCode, response.body).toBe(200);
+  });
+
+  it("takes a time up to 5 minutes ahead of the server as now, for a phone whose clock runs fast", async () => {
+    const ctx = await fieldApp();
+    const truck = await atLoading(ctx);
+    const id = await ctx.stepId(truck.tripId, "LOADING");
+    // the test clock stands at 03:00
+    expect(fields(await ctx.form(id, "loading/start", { startedAt: "2026-11-20T03:05:00.001Z" }, "muat"))).toEqual([
+      { field: "startedAt", message: "Waktu mulai tidak boleh di masa depan." },
+    ]);
+    const started = await ctx.form(id, "loading/start", { startedAt: "2026-11-20T03:04:00.000Z" }, "muat");
+    expect(started.statusCode, started.body).toBe(200);
+    expect(await ctx.database.query("select started_at = '2026-11-20T03:00:00Z'::timestamptz as at_now from trip_steps where id = $1", [id])).toEqual([{ at_now: true }]);
+
+    expect(fields(await ctx.form(id, "loading/finish", finishBody({ finishedAt: "2026-11-20T03:06:00.000Z" }), "muat"))).toEqual([
+      { field: "finishedAt", message: "Waktu selesai tidak boleh di masa depan." },
+    ]);
+    const done = await ctx.form(id, "loading/finish", finishBody({ finishedAt: "2026-11-20T03:05:00.000Z" }), "muat");
+    expect(done.statusCode, done.body).toBe(200);
+    expect(done.json()).toMatchObject({ step: { status: "DONE", startedAt: "2026-11-20T03:00:00.000Z", finishedAt: "2026-11-20T03:00:00.000Z" } });
+  });
+
   it("creates the loading row of packed goods without a tank", async () => {
     const ctx = await fieldApp();
     const truck = await atCleanliness(ctx, { product: "packed", dos: [800] });

@@ -11,6 +11,7 @@ import { TRIP_STATUSES } from "../db/schema.js";
 import type { SqlRunner } from "../db/client.js";
 import { invalid, notFound } from "../errors.js";
 import { idNumber, idParams, lettersAndDigits, searchParam } from "../http.js";
+import { destinationsOfTrips, withDistance } from "./destinations.js";
 import { distanceKm } from "./geo.js";
 import { gpsSettings, onTheRoad, ROAD_ORDER, SqlParams } from "./trips.js";
 
@@ -179,6 +180,10 @@ export function registerGpsReadRoutes(app: FastifyInstance, context: AppContext,
        order by v.plate_no, v.id limit ${limit} offset ${offset}`,
       params.values,
     );
+    const destinations = await destinationsOfTrips(
+      orm,
+      rows.flatMap((row) => (row.trip_id === null ? [] : [Number(row.trip_id)])),
+    );
     return {
       items: rows.map((row) => {
         const last = pointView(row);
@@ -204,6 +209,7 @@ export function registerGpsReadRoutes(app: FastifyInstance, context: AppContext,
                   partner: { id: Number(row.partner_id), name: row.partner_name },
                   doNos: split(row.do_nos),
                   contractNos: split(row.contract_nos),
+                  destinations: withDistance(destinations.get(Number(row.trip_id)) ?? [], last),
                 },
           distanceToPlantKm: settings.plant ? Math.round(distanceKm(settings.plant, last) * 10) / 10 : null,
         };
@@ -266,9 +272,20 @@ export function registerGpsReadRoutes(app: FastifyInstance, context: AppContext,
     );
     if (!row?.allowed) throw notFound("Trip");
     const pointParams = new SqlParams();
+    const track = await thinnedTrack(database, `p.trip_id = ${pointParams.add(tripId, "bigint")}`, pointParams);
+    // the distance is measured from the last point of this trip, the newest point the reader may see
+    const last = track.points.at(-1) ?? null;
+    const destinations = (await destinationsOfTrips(orm, [tripId])).get(tripId) ?? [];
     return {
-      trip: { id: tripId, tripNo: row.trip_no, plateDisplay: row.plate_display, direction: row.direction, status: row.status },
-      ...(await thinnedTrack(database, `p.trip_id = ${pointParams.add(tripId, "bigint")}`, pointParams)),
+      trip: {
+        id: tripId,
+        tripNo: row.trip_no,
+        plateDisplay: row.plate_display,
+        direction: row.direction,
+        status: row.status,
+        destinations: withDistance(destinations, last),
+      },
+      ...track,
     };
   });
 }

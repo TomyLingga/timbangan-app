@@ -490,6 +490,17 @@ describe("validateDeliveryOrder and deliveryOrderPayload", () => {
     });
   });
 
+  it("takes the destination pin as optional: none, both parts, or an error on the missing one", () => {
+    expect(validateDeliveryOrder({ ...filled, destLat: "-10,5", destLon: "85.25" })).toEqual({});
+    expect(validateDeliveryOrder({ ...filled, destLat: "-10.5" })).toEqual({ destLon: "Isi bujur juga, atau kosongkan keduanya." });
+    expect(validateDeliveryOrder({ ...filled, destLat: "99", destLon: "85" })).toEqual({ destLat: "Lintang harus angka dari -90 sampai 90." });
+    expect(deliveryOrderPayload({ ...filled, destLat: "-10,5", destLon: "85.25" }, "create").destLocation).toEqual({ lat: -10.5, lon: 85.25 });
+    expect("destLocation" in deliveryOrderPayload(filled, "create")).toBe(false);
+    // a draft without a pin clears the one it had
+    expect(deliveryOrderPayload(filled, "draft").destLocation).toBeNull();
+    expect("destLocation" in deliveryOrderPayload({ ...filled, destLat: "-10.5", destLon: "85.25" }, "limited")).toBe(false);
+  });
+
   it("sends only the fields that stay editable once the order has left draft", () => {
     expect(deliveryOrderPayload({ ...filled, deliveryUntil: "2026-11-30", truckCount: "", remark: "" }, "limited")).toEqual({
       deliveryUntil: "2026-11-30",

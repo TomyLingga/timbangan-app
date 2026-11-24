@@ -9,7 +9,8 @@ import {
   appliedSealsInPlace,
   applySeals,
   attachPhotos,
-  checkPlausible,
+  checkFormValues,
+  fieldTime,
   clientUuidField,
   closeStep,
   type FormSpec,
@@ -105,9 +106,10 @@ const qcLoadingBody = z
     clientUuid: clientUuidField,
     values: z.object(
       {
-        FFA: valueField("FFA"),
+        // FFA is required while it is switched on (checkFormValues), as the work view offers it
+        FFA: valueField("FFA").optional(),
         ...Object.fromEntries(LOADING_OPTIONAL.map((code) => [code, valueField(code).optional()])),
-      } as { FFA: z.ZodNumber } & Record<(typeof LOADING_OPTIONAL)[number], z.ZodOptional<z.ZodNumber>>,
+      } as { FFA: z.ZodOptional<z.ZodNumber> } & Record<(typeof LOADING_OPTIONAL)[number], z.ZodOptional<z.ZodNumber>>,
       "Angka mutu wajib diisi.",
     ),
     tankId: tankIdField("Tangki"),
@@ -126,7 +128,7 @@ export const qcLoadingForm: FormSpec<z.infer<typeof qcLoadingBody>> = {
   stepCodes: ["QC_LOADING"],
   run: async (run, body) => {
     const { tx, step, account, now } = run;
-    const values = await checkPlausible(tx, body.values as Record<string, number | undefined>);
+    const values = await checkFormValues(tx, step.flowCode, "QC_LOADING", body.values as Record<string, number | undefined>);
     const tank = await tankFor(tx, step, body.tankId, "tankId");
     const blend = body.blendTankId === undefined ? null : await tankFor(tx, step, body.blendTankId, "blendTankId");
     const certificateNo = await issueDocumentNo(tx, "COA", step.trip.siteId, now);
@@ -169,8 +171,7 @@ export const loadingStartForm: FormSpec<z.infer<typeof loadingStartBody>> = {
   stepCodes: ["LOADING"],
   run: async (run, body) => {
     const { tx, step, account, now } = run;
-    const startedAt = body.startedAt ? new Date(body.startedAt) : now;
-    if (startedAt > now) throw invalid("startedAt", "Waktu mulai tidak boleh di masa depan.");
+    const startedAt = fieldTime(body.startedAt, now, "startedAt", "Waktu mulai") ?? now;
     await tx.update(tripSteps).set({ status: "IN_PROGRESS", startedAt, performedBy: account.id }).where(eq(tripSteps.id, step.row.id));
     return { audit: { startedAt } };
   },
@@ -195,10 +196,8 @@ export const loadingFinishForm: FormSpec<z.infer<typeof loadingFinishBody>> = {
   notReadyMessage: (step) => (step.row.status === "READY" ? "Muat belum dimulai. Kirim waktu mulai atau tekan Mulai dulu." : "Langkah ini belum siap atau sudah selesai."),
   run: async (run, body) => {
     const { tx, step, account, now } = run;
-    const startedAt = body.startedAt ? new Date(body.startedAt) : (step.row.startedAt ?? now);
-    const finishedAt = body.finishedAt ? new Date(body.finishedAt) : now;
-    if (startedAt > now) throw invalid("startedAt", "Waktu mulai tidak boleh di masa depan.");
-    if (finishedAt > now) throw invalid("finishedAt", "Waktu selesai tidak boleh di masa depan.");
+    const startedAt = fieldTime(body.startedAt, now, "startedAt", "Waktu mulai") ?? step.row.startedAt ?? now;
+    const finishedAt = fieldTime(body.finishedAt, now, "finishedAt", "Waktu selesai") ?? now;
     if (finishedAt < startedAt) throw invalid("finishedAt", "Waktu selesai tidak boleh sebelum waktu mulai.");
 
     // the rows QC loading prepared; a repeated loading takes the tanks of the round before; packed goods have none

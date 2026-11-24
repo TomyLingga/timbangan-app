@@ -75,7 +75,7 @@ describe("GET /api/gps/vehicles", () => {
       minutesSince: 40,
       trip: {
         id: t2, tripNo: expect.stringMatching(/^TRIP-GPS-/), spjNo: expect.stringMatching(/^SPJ-GPS-/), direction: "OUT", status: "COMPLETED",
-        partner: { id: companies.customer1, name: "PT Pembeli Contoh Satu" }, doNos: [expect.stringMatching(/^DO-GPS-/)], contractNos: [expect.stringMatching(/^KTR-GPS-/)],
+        partner: { id: companies.customer1, name: "PT Pembeli Contoh Satu" }, doNos: [expect.stringMatching(/^DO-GPS-/)], contractNos: [expect.stringMatching(/^KTR-GPS-/)], destinations: [],
       },
       distanceToPlantKm: null,
     });
@@ -234,5 +234,83 @@ describe("retention", () => {
     expect(await database.query("select count(*)::int as n from vehicle_positions where at < $1::timestamptz", [new Date(clock.now().getTime() - 90 * DAY).toISOString()])).toEqual([{ n: 0 }]);
     expect(await database.query("select count(*)::int as n from vehicle_last_positions where vehicle_id = $1", [v5])).toEqual([{ n: 1 }]);
     expect(await database.query("select device_id from gps_unknown_devices")).toEqual([{ device_id: "BARU" }]);
+  });
+});
+
+describe("destinations of an outgoing trip", () => {
+  type Db = Awaited<ReturnType<typeof setup>>["database"];
+  /** The DO of the trip's first allocation. */
+  const firstDo = async (database: Db, tripId: number) =>
+    Number(
+      (
+        await database.query<{ id: number }>(
+          "select ra.delivery_order_id::float8 as id from trip_allocations ta join registration_allocations ra on ra.id = ta.registration_allocation_id where ta.trip_id = $1 order by ta.seq limit 1",
+          [tripId],
+        )
+      )[0]?.id,
+    );
+
+  /** Adds a DO line to the trip at `seq`, copied from `fromDo` with another number, name and pin. */
+  async function addLine(database: Db, tripId: number, fromDo: number, seq: number, doNo: string, pin: { lat: number; lon: number } | null) {
+    const [order] = await database.query<{ id: number }>(
+      `insert into delivery_orders (site_id, do_no, do_date, contract_id, contract_no, partner_id, product_id, qty, delivery_from, transporter_id, status, created_by,
+                                    dest_name, dest_regency, dest_lat, dest_lon)
+       select site_id, $2, do_date, contract_id, contract_no, partner_id, product_id, qty, delivery_from, transporter_id, status, created_by,
+              $3, $4, $5::float8, $6::float8
+       from delivery_orders where id = $1 returning id::float8 as id`,
+      [fromDo, doNo, `Gudang ${doNo}`, "Kab. Contoh Lain", pin?.lat ?? null, pin?.lon ?? null],
+    );
+    const [line] = await database.query<{ id: number }>(
+      `insert into registration_allocations (registration_id, seq, delivery_order_id, contract_no, do_no)
+       select t.registration_id, $2, $3, $5, $4 from trips t where t.id = $1 returning id::float8 as id`,
+      [tripId, seq, Number(order?.id), doNo, "KTR-GPS-LAIN"],
+    );
+    await database.query("insert into trip_allocations (trip_id, registration_allocation_id, seq) values ($1, $2, $3)", [tripId, Number(line?.id), seq]);
+    return Number(order?.id);
+  }
+
+  it("lists one entry per pinned DO in allocation order, with the distance from the last point", async () => {
+    const { database, list, track, t1, t2 } = await setup();
+    const first = await firstDo(database, t2);
+    await database.query("update delivery_orders set dest_lat = $1, dest_lon = $2 where id = $3", [SEA.lat, SEA.lon, first]);
+    // added in the opposite order of their seq: the answer follows the allocations, not the rows
+    const third = await addLine(database, t2, first, 3, "DO-GPS-KETIGA", { lat: SEA.lat, lon: SEA.lon + 100 / 109.6 });
+    await addLine(database, t2, first, 4, "DO-GPS-TANPA-PIN", null);
+    const second = await addLine(database, t2, first, 2, "DO-GPS-KEDUA", { lat: SEA.lat, lon: SEA.lon + 40 / 109.6 });
+
+    for (const user of ["lihat", "beli1", "angkut2"]) {
+      const items = (await list(user)).items as unknown as { trip: { id: number; destinations: Record<string, unknown>[] } | null }[];
+      const item = items.find((entry) => entry.trip?.id === t2);
+      expect(item?.trip?.destinations, user).toEqual([
+        { deliveryOrderId: first, doNo: expect.stringMatching(/^DO-GPS-\d+$/), name: "Gudang Contoh", regency: "Kab. Contoh", lat: SEA.lat, lon: SEA.lon, distanceKm: expect.closeTo(40, 0) },
+        { deliveryOrderId: second, doNo: "DO-GPS-KEDUA", name: "Gudang DO-GPS-KEDUA", regency: "Kab. Contoh Lain", lat: SEA.lat, lon: expect.closeTo(SEA.lon + 40 / 109.6, 6), distanceKm: 0 },
+        { deliveryOrderId: third, doNo: "DO-GPS-KETIGA", name: "Gudang DO-GPS-KETIGA", regency: "Kab. Contoh Lain", lat: SEA.lat, lon: expect.closeTo(SEA.lon + 100 / 109.6, 6), distanceKm: expect.closeTo(60, 0) },
+      ]);
+      // one decimal
+      for (const entry of item?.trip?.destinations ?? []) expect(Math.round((entry.distanceKm as number) * 10) / 10).toBe(entry.distanceKm);
+    }
+    // an incoming trip has none
+    const incoming = ((await list("lihat")).items as unknown as { trip: { id: number; destinations: unknown[] } | null }[]).find((entry) => entry.trip?.id === t1);
+    expect(incoming?.trip?.destinations).toEqual([]);
+
+    const body = (await track("beli1", `/api/gps/trips/${t2}/track`)).json();
+    expect(body.trip.destinations.map((entry: { doNo: string; distanceKm: number }) => [entry.doNo, Math.round(entry.distanceKm)])).toEqual([
+      [expect.stringMatching(/^DO-GPS-\d+$/), 40],
+      ["DO-GPS-KEDUA", 0],
+      ["DO-GPS-KETIGA", 60],
+    ]);
+    // a partner that may not see the trip learns nothing of it
+    expect((await track("beli2", `/api/gps/trips/${t2}/track`)).statusCode).toBe(404);
+  });
+
+  it("has no distance before the trip has a point, and is empty without a pin", async () => {
+    const { database, vehicle, trip, track, companies } = await setup();
+    const truck = await vehicle("ZZ 3109 GA", companies.transporter1);
+    const fresh = await trip({ direction: "OUT", partnerId: companies.customer1, vehicleId: truck, status: "ISSUED" });
+    expect((await track("lihat", `/api/gps/trips/${fresh}/track`)).json().trip.destinations).toEqual([]);
+    await database.query("update delivery_orders set dest_lat = $1, dest_lon = $2 where id = $3", [SEA.lat, SEA.lon, await firstDo(database, fresh)]);
+    const body = (await track("lihat", `/api/gps/trips/${fresh}/track`)).json();
+    expect(body.points).toEqual([]);
+    expect(body.trip.destinations).toEqual([expect.objectContaining({ lat: SEA.lat, lon: SEA.lon, distanceKm: null })]);
   });
 });

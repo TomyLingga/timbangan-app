@@ -4,8 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import type { LayerGroup, Map as LeafletMap, Marker } from "leaflet";
 
 import { TruckPicture } from "@/features/control-room/truck-picture";
+import { placeIcon } from "@/features/tracking/location-picker";
 import { MapCanvas, OVERVIEW, type LeafletModule } from "@/features/tracking/map-canvas";
-import { STATE_LABELS, truckState, type GpsVehicleItem, type TrackPoint, type TruckState } from "@/lib/gps";
+import { destinationText, fitPoints, STATE_LABELS, truckState, type GpsVehicleItem, type TrackPoint, type TripDestination, type TruckState } from "@/lib/gps";
 import { cn } from "@/lib/utils";
 
 // The small sign in the corner of a marker. The shape says the state, so it never rests on colour alone: an arrow
@@ -49,6 +50,7 @@ interface Layers {
   L: LeafletModule;
   markers: Map<string, Marker>;
   track: LayerGroup;
+  places: LayerGroup;
 }
 
 /**
@@ -61,6 +63,7 @@ export function TruckMap({
   now,
   selectedId,
   track,
+  destinations = null,
   onSelect,
   className,
 }: {
@@ -69,6 +72,8 @@ export function TruckMap({
   selectedId: string | null;
   /** The selected truck's track; null while there is none to draw. */
   track: readonly TrackPoint[] | null;
+  /** The pinned destinations of the selected truck's trip. */
+  destinations?: readonly TripDestination[] | null;
   onSelect: (vehicleId: string) => void;
   className?: string;
 }) {
@@ -148,13 +153,29 @@ export function TruckMap({
     if (first) L.circleMarker(first, { className: "gps-track-start", radius: 5, weight: 2.5, fillOpacity: 1, interactive: false }).addTo(group);
   }, [ready, track]);
 
-  // the view: every truck at first, then the selected truck with its track
+  // where the selected truck is going: one pin per destination, its name as the tooltip
+  useEffect(() => {
+    const layers = leaflet.current;
+    if (!ready || !layers) return;
+    const { L, places: group } = layers;
+    group.clearLayers();
+    for (const place of destinations ?? []) {
+      const title = `Tujuan ${destinationText(place)}`;
+      const marker = L.marker([place.lat, place.lon], { icon: placeIcon(L, "destination"), keyboard: false, title, alt: title, zIndexOffset: 500 }).addTo(group);
+      marker.bindTooltip(destinationText(place), { direction: "top", offset: [0, -30], className: "gps-destination-tip" });
+      const element = marker.getElement();
+      if (element) element.dataset.deliveryOrderId = String(place.deliveryOrderId);
+    }
+  }, [ready, destinations]);
+
+  // the view: every truck at first, then the selected truck with its track and its destinations
   const selectedRow = selectedId ? (items.find((row) => String(row.vehicle.id) === selectedId) ?? null) : null;
+  const placeCount = destinations?.length ?? 0;
   // a trip whose truck is not in the list can still bring its track
   const fitKey = selectedRow
-    ? `truck|${selectedId}|${track ? "track" : "-"}`
+    ? `truck|${selectedId}|${track ? "track" : "-"}|${placeCount}`
     : track && track.length > 0
-      ? `track|${track.length > 0}`
+      ? `track|${track.length > 0}|${placeCount}`
       : selectedId
         ? "none"
         : `all|${items.length > 0}`;
@@ -165,17 +186,17 @@ export function TruckMap({
     if (fitKey === "none") return;
     lastFit.current = fitKey;
     if (selectedRow) {
-      const points: [number, number][] = [[selectedRow.last.lat, selectedRow.last.lon], ...(track ?? []).map((point) => [point.lat, point.lon] as [number, number])];
+      const points = fitPoints(selectedRow.last, track, destinations);
       if (points.length > 1) map.fitBounds(L.latLngBounds(points), { padding: [48, 48], maxZoom: 15 });
       else map.setView(points[0] as [number, number], Math.max(map.getZoom(), 14));
     } else if (track && track.length > 0) {
-      map.fitBounds(L.latLngBounds(track.map((point) => [point.lat, point.lon] as [number, number])), { padding: [48, 48], maxZoom: 15 });
+      map.fitBounds(L.latLngBounds(fitPoints(null, track, destinations)), { padding: [48, 48], maxZoom: 15 });
     } else if (items.length > 0) {
       map.fitBounds(L.latLngBounds(items.map((row) => [row.last.lat, row.last.lon] as [number, number])), { padding: [56, 56], maxZoom: 12 });
     } else {
       map.setView(OVERVIEW.center, OVERVIEW.zoom);
     }
-  }, [ready, fitKey, selectedRow, track, items]);
+  }, [ready, fitKey, selectedRow, track, destinations, items]);
 
   return (
     <div className={cn("relative", className)}>
@@ -183,7 +204,7 @@ export function TruckMap({
         label="Peta truk"
         className="h-full w-full"
         onReady={(map, L) => {
-          leaflet.current = { map, L, markers: new Map(), track: L.layerGroup().addTo(map) };
+          leaflet.current = { map, L, markers: new Map(), track: L.layerGroup().addTo(map), places: L.layerGroup().addTo(map) };
           setReady(true);
         }}
       />

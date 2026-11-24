@@ -12,6 +12,7 @@ describe("loadConfig", () => {
     expect(config).toEqual({
       port: 3100,
       host: "127.0.0.1",
+      trustProxy: false,
       databaseUrl: "pglite://memory",
       jwtSecret: "x".repeat(32),
       webOrigin: "http://localhost:3000",
@@ -26,6 +27,14 @@ describe("loadConfig", () => {
       files: { dir: ".data/files" },
       legacyDatabaseUrl: null,
     });
+  });
+
+  it("reads TRUST_PROXY as true or false, off by default", () => {
+    expect(loadConfig({ ...base, TRUST_PROXY: "true" }).trustProxy).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY: "1" }).trustProxy).toBe(true);
+    expect(loadConfig({ ...base, TRUST_PROXY: "false" }).trustProxy).toBe(false);
+    expect(loadConfig({ ...base, TRUST_PROXY: "" }).trustProxy).toBe(false);
+    expect(() => loadConfig({ ...base, TRUST_PROXY: "yes" })).toThrow(/TRUST_PROXY/);
   });
 
   it("takes the old database address only as a postgres URL", () => {

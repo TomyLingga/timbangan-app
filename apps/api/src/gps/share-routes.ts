@@ -9,6 +9,7 @@ import { writeAudit } from "../audit.js";
 import type { SqlRunner } from "../db/client.js";
 import { AppError, invalidState, notFound, violatedUnique } from "../errors.js";
 import { idNumber, PLANT_TIME_ZONE } from "../http.js";
+import { destinationsOfTrips } from "./destinations.js";
 import { RateLimiter } from "./geo.js";
 import { noRefusal, pointFields, screen, storeForVehicle, total } from "./ingest.js";
 import { rateLimited } from "./intake-routes.js";
@@ -140,8 +141,10 @@ export function registerGpsShareRoutes(app: FastifyInstance, context: AppContext
     const { token } = tokenParams.parse(request.params);
     const { customerDays } = await gpsSettings(orm);
     const trip = await sharedTrip(token, context.now(), customerDays);
-    // nothing else of the trip: the page is open to whoever holds the paper
-    return { plateDisplay: trip.plateDisplay, ...sharingWindow(trip, customerDays) };
+    // nothing else of the trip: the page is open to whoever holds the paper. The pinned destinations let the driver
+    // open the place in a maps app; once sharing is closed they are not given any more.
+    const destinations = trip.open ? ((await destinationsOfTrips(orm, [trip.tripId])).get(trip.tripId) ?? []) : [];
+    return { plateDisplay: trip.plateDisplay, ...sharingWindow(trip, customerDays), destinations };
   });
 
   app.post("/api/gps/share/:token/positions", { bodyLimit: PHONE_BODY_LIMIT }, async (request) => {

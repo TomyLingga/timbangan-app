@@ -7,6 +7,7 @@
 import { formatNumber } from "@/lib/format";
 import { driverPayload, validateDriver, validateVehicle, type DriverValues } from "@/lib/forms";
 import { cardUidError, normalizeCardUid } from "@/lib/gate-input";
+import { checkLocation } from "@/lib/location";
 import { plateDisplay, plateError, plateKey } from "@/lib/plate";
 import { wholeKg } from "@/lib/quantity";
 import type { Contract, DeliveryOrder, DeliveryOrderDestination, Direction, LookupDriver, LookupVehicle, PartnerRef, QualityParameter, Registration, Trip, VehicleType } from "@/lib/types";
@@ -561,6 +562,9 @@ export interface DeliveryOrderValues {
   destDistrict: string;
   destRegency: string;
   destProvince: string;
+  /** The optional map pin of the destination, as typed; both empty: no pin. */
+  destLat: string;
+  destLon: string;
   deliveryFrom: string;
   deliveryUntil: string;
   transportTerms: string;
@@ -584,6 +588,8 @@ export const EMPTY_DELIVERY_ORDER: DeliveryOrderValues = {
   destDistrict: "",
   destRegency: "",
   destProvince: "",
+  destLat: "",
+  destLon: "",
   deliveryFrom: "",
   deliveryUntil: "",
   transportTerms: "",
@@ -603,6 +609,9 @@ export function validateDeliveryOrder(values: DeliveryOrderValues): FormErrors {
   if (qty === null || qty <= 0) errors.qty = "Isi quantity lebih dari nol.";
   if (!text(values.destName)) errors.destName = "Isi nama tujuan.";
   if (!text(values.destRegency)) errors.destRegency = "Isi kabupaten atau kota tujuan.";
+  const pin = checkLocation({ lat: values.destLat, lon: values.destLon });
+  if (pin.errors.lat) errors.destLat = pin.errors.lat;
+  if (pin.errors.lon) errors.destLon = pin.errors.lon;
   if (!values.deliveryFrom) errors.deliveryFrom = "Isi tanggal mulai kirim.";
   if (values.deliveryFrom && values.deliveryUntil && values.deliveryUntil < values.deliveryFrom) {
     errors.deliveryUntil = "Tanggal akhir tidak boleh sebelum tanggal mulai.";
@@ -646,6 +655,7 @@ export function deliveryOrderPayload(
     destDistrict: textOrNull(values.destDistrict),
     destRegency: textOrNull(values.destRegency),
     destProvince: textOrNull(values.destProvince),
+    destLocation: checkLocation({ lat: values.destLat, lon: values.destLon }).location,
     deliveryFrom: values.deliveryFrom || null,
     deliveryUntil: values.deliveryUntil || null,
     transportTerms: textOrNull(values.transportTerms),

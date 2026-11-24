@@ -29,12 +29,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
+import { LocationPicker } from "@/features/tracking/location-picker";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useUrlFilter } from "@/hooks/use-url-filter";
 import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
+import { coordinateText } from "@/lib/location";
 import { saveErrorMessage, transitionErrorMessage } from "@/lib/messages";
 import {
   canAcceptDeliveryOrder,
@@ -186,6 +188,8 @@ function toValues(order: DeliveryOrder): DeliveryOrderValues {
     destDistrict: order.destination?.district ?? "",
     destRegency: order.destination?.regency ?? "",
     destProvince: order.destination?.province ?? "",
+    destLat: coordinateText(order.destination?.location?.lat),
+    destLon: coordinateText(order.destination?.location?.lon),
     deliveryFrom: order.deliveryFrom ?? "",
     deliveryUntil: order.deliveryUntil ?? "",
     transportTerms: order.transportTerms ?? "",
@@ -237,7 +241,10 @@ function DeliveryOrderFormSheet({
     if (outcome.ok) {
       onSaved(outcome.value.deliveryOrder, order === null);
     } else {
-      form.setErrors(refusedFields<DeliveryOrderValues>(outcome.error));
+      // the API names the pin's parts destLocation.lat and destLocation.lon
+      const refused = refusedFields<Record<string, string>>(outcome.error);
+      const pinRefused = Object.entries(refused).find(([field]) => field.startsWith("destLocation"))?.[1];
+      form.setErrors({ ...refused, ...(pinRefused ? { destLat: pinRefused, destLon: pinRefused } : {}) } as typeof form.errors);
       setFormError(saveErrorMessage(outcome.error, "Nomor DO ini sudah dipakai."));
     }
   }
@@ -399,6 +406,24 @@ function DeliveryOrderFormSheet({
               value={form.values.destProvince}
               onChange={(value) => form.set("destProvince", value)}
               error={form.errors.destProvince}
+            />
+          </fieldset>
+          <fieldset className="flex min-w-0 flex-col gap-3 rounded-md border p-3" data-testid="do-pin">
+            <legend className="px-1 text-sm font-medium">
+              Pin lokasi tujuan <span className="font-normal text-muted-foreground">(opsional)</span>
+            </legend>
+            <p className="text-xs text-muted-foreground">Dipakai di Lacak kendaraan untuk menunjukkan tujuan truk dan jaraknya. DO tetap bisa dikirim tanpa pin.</p>
+            <LocationPicker
+              value={{ lat: form.values.destLat, lon: form.values.destLon }}
+              errors={{ lat: form.errors.destLat, lon: form.errors.destLon }}
+              onChange={(point) => {
+                form.set("destLat", point.lat);
+                form.set("destLon", point.lon);
+              }}
+              names={{ lat: "destLat", lon: "destLon" }}
+              kind="destination"
+              mapLabel="Peta pin lokasi tujuan"
+              hint="Geser peta sampai tanda silang tepat di tujuan."
             />
           </fieldset>
           <TextField

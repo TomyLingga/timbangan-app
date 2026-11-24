@@ -60,13 +60,39 @@ describe("POST /api/auth/login", () => {
     });
   });
 
-  it("marks the cookie secure unless the request host is localhost or 127.0.0.1", async () => {
-    const { app, database } = await testApp();
+  it("marks the cookie secure when WEB_ORIGIN is https, whatever the request host", async () => {
+    const cookieOf = async (env: Record<string, string>, host: string) => {
+      const { app, database } = await testApp(env);
+      await seedStaff(database, "admin");
+      return (await login(app, "admin", PASSWORD, { host })).cookies.find((item) => item.name === "refresh_token");
+    };
+    const secured = await cookieOf({ WEB_ORIGIN: "https://timbangan.example.test" }, "timbangan.example.test");
+    expect(secured?.secure).toBe(true);
+    expect(secured).toMatchObject({ path: "/api/auth", httpOnly: true, sameSite: "Lax" });
+    expect((await cookieOf({ WEB_ORIGIN: "https://timbangan.example.test" }, "localhost:3100"))?.secure).toBe(true);
+  });
+
+  it("stores the forwarded client address only when TRUST_PROXY is on", async () => {
+    const addressOf = async (env: Record<string, string>, forwarded = "203.0.113.40") => {
+      const { app, database } = await testApp(env);
+      await seedStaff(database, "admin");
+      // the proxy at 127.0.0.1 (the inject default) forwards a client of the LAN
+      const response = await login(app, "admin", PASSWORD, { "x-forwarded-for": forwarded });
+      expect(response.statusCode, response.body).toBe(200);
+      return (await database.query<{ ip: string }>("select host(ip) as ip from auth_sessions"))[0]?.ip;
+    };
+    expect(await addressOf({})).toBe("127.0.0.1");
+    expect(await addressOf({ TRUST_PROXY: "true" })).toBe("203.0.113.40");
+    // only the address the one proxy appended counts, not what the client wrote before it
+    expect(await addressOf({ TRUST_PROXY: "true" }, "198.51.100.9, 203.0.113.40")).toBe("203.0.113.40");
+  });
+
+  it("does not mark the cookie secure when WEB_ORIGIN is plain http, so a LAN served over http keeps the session", async () => {
+    const { app, database } = await testApp({ WEB_ORIGIN: "http://server-timbang" });
     await seedStaff(database, "admin");
-    const secureOf = async (host: string) => (await login(app, "admin", PASSWORD, { host })).cookies.find((item) => item.name === "refresh_token")?.secure;
-    expect(await secureOf("timbangan.example.test")).toBe(true);
-    expect(await secureOf("localhost:3100")).toBeUndefined();
-    expect(await secureOf("127.0.0.1:3100")).toBeUndefined();
+    const cookie = (await login(app, "admin", PASSWORD, { host: "server-timbang" })).cookies.find((item) => item.name === "refresh_token");
+    expect(cookie?.secure).toBeUndefined();
+    expect(cookie).toMatchObject({ path: "/api/auth", httpOnly: true, sameSite: "Lax", maxAge: 30 * 86_400 });
   });
 
   it("answers 401 with one message for a wrong password, an unknown user, an inactive account and an account without a password", async () => {

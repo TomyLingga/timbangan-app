@@ -17,6 +17,8 @@ const envSchema = z.object({
   // 0 lets the operating system pick a free port
   PORT: z.coerce.number("must be a port number").int("must be a port number").min(0).max(65535).default(3100),
   HOST: z.string().default("127.0.0.1"),
+  // behind one reverse proxy: take the client address (and host and protocol) from its X-Forwarded-* headers
+  TRUST_PROXY: z.enum(["true", "false", "1", "0"], "must be true or false").default("false"),
   DATABASE_URL: z
     .string("is required")
     .regex(/^(pglite|postgres|postgresql):\/\//, "must start with pglite://, postgres:// or postgresql://"),
@@ -84,6 +86,8 @@ export type TtsConfig =
 export interface Config {
   port: number;
   host: string;
+  /** True behind one reverse proxy: request.ip is the address that proxy forwarded, not the proxy's own. */
+  trustProxy: boolean;
   databaseUrl: string;
   jwtSecret: string;
   webOrigin: string;
@@ -115,6 +119,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   return {
     port: e.PORT,
     host: e.HOST,
+    trustProxy: e.TRUST_PROXY === "true" || e.TRUST_PROXY === "1",
     databaseUrl: e.DATABASE_URL,
     jwtSecret: e.JWT_SECRET,
     webOrigin: e.WEB_ORIGIN,

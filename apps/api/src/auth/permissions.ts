@@ -88,6 +88,24 @@ export async function grantEverything(orm: Orm, userId: number, now: Date): Prom
 }
 
 /**
+ * Gives every active module to the portal accounts of the bootstrap admin emails that exist already, at API start.
+ * Sign-in does the same, but a long-lived session would otherwise miss a module a later migration added. A portal
+ * account is named by its email, or `<email>#sso` when a local account held that name first (see the SSO route);
+ * local accounts are never touched. Answers the ids it granted to; nothing happens for an empty list.
+ */
+export async function grantBootstrapAdmins(orm: Orm, emails: string[], now: Date): Promise<number[]> {
+  const names = emails.map((email) => email.trim().toLowerCase()).filter((email) => email !== "").flatMap((email) => [email, `${email}#sso`]);
+  if (names.length === 0) return [];
+  const accounts = await orm
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.kind, "INTERNAL"), eq(users.isActive, true), sql`${users.ssoSubject} is not null`, inArray(sql`lower(${users.username})`, names)))
+    .orderBy(asc(users.id));
+  for (const account of accounts) await grantEverything(orm, account.id, now);
+  return accounts.map((account) => account.id);
+}
+
+/**
  * What a new partner account gets, from the kinds of its company (supplier, transporter, customer). Every partner
  * account may follow the trucks that concern it (gps VIEW); the GPS routes decide which trucks those are.
  */

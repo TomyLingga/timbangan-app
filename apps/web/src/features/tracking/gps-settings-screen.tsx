@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { KeyRound, MapPin, Plus, Power, RadioTower, Send, Unplug } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
@@ -13,7 +13,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/features/auth/auth-provider";
 import { KeyDialog } from "@/features/tracking/key-dialog";
 import { TrackingTabs } from "@/features/tracking/parts";
-import { PlantPicker } from "@/features/tracking/plant-picker";
+import { LocationPicker } from "@/features/tracking/location-picker";
 import { TrackerSheet } from "@/features/tracking/tracker-sheet";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useAction } from "@/hooks/use-form";
@@ -323,10 +323,6 @@ function SettingsForm({ settings, onSaved }: { settings: GpsSettings; onSaved: (
     setSaved(false);
   };
   const checked = validateGpsSettings(values);
-  const pin = checked.payload?.plantLocation ?? null;
-  const pinLat = pin?.lat ?? null;
-  const pinLon = pin?.lon ?? null;
-  const location = useMemo(() => (pinLat !== null && pinLon !== null ? { lat: pinLat, lon: pinLon } : null), [pinLat, pinLon]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -347,16 +343,17 @@ function SettingsForm({ settings, onSaved }: { settings: GpsSettings; onSaved: (
         <div className="flex flex-col gap-4">
           <h3 className="text-sm font-semibold">Lokasi pabrik</h3>
           <p className="-mt-2 text-sm text-muted-foreground">Dipakai untuk jarak truk ke pabrik di peta. Kosongkan keduanya bila belum mau dipakai.</p>
-          <div className="grid grid-cols-2 gap-3">
-            <TextField label="Lintang" name="plantLat" inputMode="decimal" value={values.lat} onChange={(value) => set("lat", value)} error={errors.lat} placeholder="-10,5" optional />
-            <TextField label="Bujur" name="plantLon" inputMode="decimal" value={values.lon} onChange={(value) => set("lon", value)} error={errors.lon} placeholder="85,25" optional />
-          </div>
-          <PlantPicker
-            location={location}
-            onPick={(point) => {
-              set("lat", String(point.lat));
-              set("lon", String(point.lon));
+          <LocationPicker
+            value={{ lat: values.lat, lon: values.lon }}
+            errors={{ lat: errors.lat, lon: errors.lon }}
+            onChange={(point) => {
+              set("lat", point.lat);
+              set("lon", point.lon);
             }}
+            names={{ lat: "plantLat", lon: "plantLon" }}
+            kind="plant"
+            mapLabel="Peta lokasi pabrik"
+            hint="Geser peta sampai tanda silang tepat di pabrik."
           />
         </div>
         <div className="flex flex-col gap-4">

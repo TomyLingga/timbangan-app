@@ -8,7 +8,11 @@ export const REFRESH_COOKIE = "refresh_token";
 const COOKIE_PATH = "/api/auth";
 const DAY_S = 24 * 3600;
 
-const isLocalHost = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1";
+/**
+ * The refresh cookie is Secure when the web app is served over https (WEB_ORIGIN). A browser drops a Secure cookie
+ * that came over plain http, so on a LAN served as http://server-name it must not be Secure.
+ */
+export const secureCookieFor = (webOrigin: string) => webOrigin.toLowerCase().startsWith("https://");
 
 /**
  * Starts a session for the user: stores the hash of a new refresh token, sends the token as an httpOnly
@@ -48,7 +52,7 @@ export async function issueSession(
     path: COOKIE_PATH,
     httpOnly: true,
     sameSite: "lax",
-    secure: !isLocalHost(request.hostname),
+    secure: secureCookieFor(context.config.webOrigin),
     maxAge,
   });
   return { accessToken };

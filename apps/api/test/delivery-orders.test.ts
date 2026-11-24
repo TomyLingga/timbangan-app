@@ -40,7 +40,7 @@ describe("POST /api/delivery-orders", () => {
       qty: 120000,
       uom: "kg",
       tolerancePct: 0.25,
-      destination: { id: null, name: "Gudang Contoh", address: "Jl. Contoh 1", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" },
+      destination: { id: null, name: "Gudang Contoh", address: "Jl. Contoh 1", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh", location: null },
       deliveryFrom: "2026-11-20",
       deliveryUntil: "2026-11-30",
       transportTerms: "FRANCO",

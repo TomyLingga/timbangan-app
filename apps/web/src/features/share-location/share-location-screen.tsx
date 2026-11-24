@@ -12,7 +12,8 @@ import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { useLocationShare } from "@/features/share-location/use-location-share";
 import { isApiError } from "@/lib/api-client";
 import { formatDateTime, formatNumber } from "@/lib/format";
-import { accuracyText, agoText, shareScreen, type ShareLink } from "@/lib/gps";
+import { accuracyText, agoText, destinationText, shareScreen, type ShareLink } from "@/lib/gps";
+import { googleMapsUrl } from "@/lib/location";
 import { api } from "@/lib/session";
 import { cn } from "@/lib/utils";
 
@@ -112,6 +113,21 @@ export function ShareLocationScreen() {
                     pabrik, pemilik truk, dan mitra yang mengirim atau menerima muatan ini.
                   </p>
                   <p className="font-medium">Berlaku: {link.data?.until}</p>
+                  {(link.data?.destinations ?? []).map((place) => (
+                    <p key={String(place.deliveryOrderId)} className="flex flex-wrap items-baseline gap-x-2" data-testid="share-destination">
+                      <span>
+                        Tujuan: <span className="font-medium">{destinationText(place)}</span>
+                      </span>
+                      <a
+                        href={googleMapsUrl(place)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex min-h-10 items-center font-medium text-primary-ink underline underline-offset-4"
+                      >
+                        Buka di peta
+                      </a>
+                    </p>
+                  ))}
                 </div>
               ) : null}
             </section>

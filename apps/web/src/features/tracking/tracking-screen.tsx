@@ -19,6 +19,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import {
   accuracyText,
   agoText,
+  destinationText,
   directionText,
   distanceText,
   filterByState,
@@ -107,6 +108,15 @@ function TruckPanel({
         <Fact label="Ketelitian">{accuracyText(last.accuracyM)}</Fact>
         <Fact label="Sumber">{sourceText(last.sourceKind)}</Fact>
         {distance ? <Fact label="Jarak ke pabrik">{distance}</Fact> : null}
+        {(trip?.destinations ?? []).map((place, index, all) => (
+          <div key={String(place.deliveryOrderId)} className="col-span-2 grid grid-cols-2 gap-x-4" data-testid="gps-destination-row">
+            <Fact label={all.length > 1 ? `Tujuan ${index + 1}` : "Tujuan"}>
+              {destinationText(place)}
+              {all.length > 1 ? <span className="ident block text-xs text-muted-foreground">{place.doNo}</span> : null}
+            </Fact>
+            <Fact label="Jarak ke tujuan">{distanceText(place.distanceKm ?? null) ?? "-"}</Fact>
+          </div>
+        ))}
         {row.vehicle.owner ? <Fact label="Pemilik">{row.vehicle.owner.name}</Fact> : null}
       </dl>
       <p className="mt-4 border-t pt-3 text-xs text-muted-foreground" data-testid="gps-track-text">
@@ -308,10 +318,12 @@ export function TrackingScreen() {
             now={now}
             selectedId={selectedId}
             track={trackData?.points ?? null}
+            destinations={selected ? (selected.trip?.destinations ?? null) : (trackData?.trip?.destinations ?? null)}
             onSelect={(id) => setSelection({ vehicle: id, trip: null })}
             className="h-[52dvh] min-h-72 overflow-hidden rounded-2xl border shadow-panel lg:h-[calc(100dvh-22rem)] lg:min-h-112"
           />
-          <div className="flex min-w-0 flex-col gap-3 lg:max-h-[calc(100dvh-22rem)] lg:min-h-112">
+          {/* a tall panel (several destinations) scrolls the column, so the list below it keeps room */}
+          <div className="flex min-w-0 flex-col gap-3 lg:max-h-[calc(100dvh-22rem)] lg:min-h-112 lg:overflow-y-auto">
             {list.hasError ? <Notice tone="warning">Posisi terbaru belum bisa dimuat. Yang tampil adalah data sebelumnya.</Notice> : null}
             {selected ? (
               <TruckPanel row={selected} now={now} trackText={trackText} onClose={() => setSelection(NO_SELECTION)} />
@@ -333,7 +345,7 @@ export function TrackingScreen() {
             ) : (
               <>
                 <ResultCount shown={shown.length} total={filter === "" ? list.data.total : shown.length} noun="truk" />
-                <ul aria-label="Daftar truk" className={cn("flex flex-col gap-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1", list.isStale && "opacity-70")}>
+                <ul aria-label="Daftar truk" className={cn("flex flex-col gap-2 lg:min-h-40 lg:flex-1 lg:overflow-y-auto lg:pr-1", list.isStale && "opacity-70")}>
                   {shown.map((row) => (
                     <TruckRow key={String(row.vehicle.id)} row={row} now={now} selected={String(row.vehicle.id) === selectedId} onSelect={() => choose(row)} />
                   ))}

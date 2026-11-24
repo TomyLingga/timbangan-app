@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ListPlus, MapPinned } from "lucide-react";
+import { ArrowLeft, ExternalLink, ListPlus, MapPinned } from "lucide-react";
 
 import { AttachmentList } from "@/components/attachments";
 import { DataList, type Column } from "@/components/data-list";
@@ -11,10 +11,12 @@ import { AccessDenied, ListEmpty, ListError, ListSkeleton } from "@/components/p
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
+import { PlaceMap } from "@/features/tracking/location-picker";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { canChangeDoFiles, MAX_DO_FILES } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { positionLink } from "@/lib/gps";
+import { googleMapsUrl, locationText } from "@/lib/location";
 import { canCreateOutgoing, canTrackVehicles, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { deliveryOrderStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
@@ -181,6 +183,38 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
           {order.remark ? <Fact label="Catatan">{order.remark}</Fact> : null}
         </dl>
       </section>
+
+      {order.destination?.location ? (
+        <section aria-labelledby="do-pin" className="rounded-2xl border bg-card p-4 sm:p-5" data-testid="do-pin-view">
+          <h2 id="do-pin" className="text-sm font-semibold">
+            Pin lokasi tujuan
+          </h2>
+          <PlaceMap
+            point={order.destination.location}
+            kind="destination"
+            label={`Peta tujuan ${order.destination.name ?? order.doNo}`}
+            title={order.destination.name ?? undefined}
+            className="mt-3 h-52 sm:h-64"
+          />
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm">
+              <span className="text-muted-foreground">Koordinat </span>
+              <span className="ident" data-testid="do-pin-coordinates">
+                {locationText(order.destination.location)}
+              </span>
+            </p>
+            <a
+              href={googleMapsUrl(order.destination.location)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-10 items-center gap-1.5 text-sm font-medium text-primary-ink underline-offset-4 hover:underline"
+            >
+              Buka di Google Maps
+              <ExternalLink className="size-3.5" aria-hidden="true" />
+            </a>
+          </div>
+        </section>
+      ) : null}
 
       <section aria-labelledby="do-files" className="rounded-2xl border bg-card p-4 sm:p-5">
         <h2 id="do-files" className="text-sm font-semibold">

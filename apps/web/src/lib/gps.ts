@@ -1,6 +1,7 @@
 // GPS positions of trucks outside the plant (apps/api src/gps, docs/fase-8-gps.md): the shapes the routes answer,
 // what a truck's last point says about it, the wording of the tracking page, and the send queue of the driver's page.
 
+import { checkLocation, type LatLon } from "@/lib/location";
 import type { Direction, PartnerRef } from "@/lib/types";
 
 // --- shapes of apps/api src/gps/read-routes.ts and master-routes.ts --------------------------------------------------
@@ -17,6 +18,17 @@ export interface GpsPoint {
   sourceKind: PositionSource | string;
 }
 
+/** A pinned destination of the trip's delivery order; distanceKm from the truck's last point, null without one. */
+export interface TripDestination {
+  deliveryOrderId: string | number;
+  doNo: string;
+  name: string | null;
+  regency: string | null;
+  lat: number;
+  lon: number;
+  distanceKm?: number | null;
+}
+
 export interface GpsTrip {
   id: string | number;
   tripNo: string | null;
@@ -26,6 +38,8 @@ export interface GpsTrip {
   partner: PartnerRef;
   doNos: string[];
   contractNos: string[];
+  /** One entry per pinned DO in allocation order; absent from an API before migration 0013. */
+  destinations?: TripDestination[];
 }
 
 /** One row of GET /api/gps/vehicles. */
@@ -57,7 +71,7 @@ export interface GpsTrack {
   points: TrackPoint[];
   total: number;
   thinned: boolean;
-  trip?: { id: string | number; tripNo: string | null; plateDisplay: string | null; direction: string; status: string };
+  trip?: { id: string | number; tripNo: string | null; plateDisplay: string | null; direction: string; status: string; destinations?: TripDestination[] };
   vehicle?: { id: string | number; plateDisplay: string };
 }
 
@@ -104,6 +118,8 @@ export interface ShareLink {
   open: boolean;
   until: string;
   untilAt: string | null;
+  /** The pinned destinations, without a distance; empty once sharing is closed. */
+  destinations?: TripDestination[];
 }
 
 // --- what the last point says --------------------------------------------------------------------------------------
@@ -195,6 +211,20 @@ export const directionText = (direction: string | null | undefined) => (directio
 /** "TRIP-1 · Incoming · PT Contoh", the trip in one short line. */
 export function tripLine(trip: GpsTrip): string {
   return [trip.tripNo ?? trip.spjNo ?? "Belum check-in", directionText(trip.direction), trip.partner?.name].filter(Boolean).join(" · ");
+}
+
+/** "Gudang Contoh, Kab. Contoh": a destination in one short line. */
+export function destinationText(destination: Pick<TripDestination, "name" | "regency" | "doNo">): string {
+  return [destination.name, destination.regency].filter((part) => part && part.trim()).join(", ") || destination.doNo;
+}
+
+/**
+ * The points the map view fits when a truck is selected: the truck, its track and its destinations. Empty parts are
+ * left out; the truck comes first, so a single point is the truck itself.
+ */
+export function fitPoints(truck: LatLon | null, track: readonly LatLon[] | null, destinations: readonly LatLon[] | null): [number, number][] {
+  const points: LatLon[] = [...(truck ? [truck] : []), ...(track ?? []), ...(destinations ?? [])];
+  return points.filter((point) => Number.isFinite(point.lat) && Number.isFinite(point.lon)).map((point) => [point.lat, point.lon]);
 }
 
 // --- the track of a selected truck ---------------------------------------------------------------------------------
@@ -396,12 +426,6 @@ export interface GpsSettingsValues {
   customerDaysAfterExit: string;
 }
 
-const numberFrom = (text: string): number | null => {
-  const cleaned = text.trim().replace(",", ".");
-  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null;
-  return Number(cleaned);
-};
-
 const wholeFrom = (text: string, min: number, max: number): number | null => {
   const value = /^\d+$/.test(text.trim()) ? Number(text.trim()) : null;
   return value !== null && value >= min && value <= max ? value : null;
@@ -412,19 +436,9 @@ export function validateGpsSettings(values: GpsSettingsValues): {
   errors: Partial<Record<keyof GpsSettingsValues, string>>;
   payload: GpsSettings | null;
 } {
-  const errors: Partial<Record<keyof GpsSettingsValues, string>> = {};
-  let plantLocation: GpsSettings["plantLocation"] = null;
-  const latEmpty = values.lat.trim() === "";
-  const lonEmpty = values.lon.trim() === "";
-  if (!latEmpty || !lonEmpty) {
-    const lat = numberFrom(values.lat);
-    const lon = numberFrom(values.lon);
-    if (latEmpty) errors.lat = "Isi lintang juga, atau kosongkan keduanya.";
-    else if (lat === null || lat < -90 || lat > 90) errors.lat = "Lintang harus angka dari -90 sampai 90.";
-    if (lonEmpty) errors.lon = "Isi bujur juga, atau kosongkan keduanya.";
-    else if (lon === null || lon < -180 || lon > 180) errors.lon = "Bujur harus angka dari -180 sampai 180.";
-    if (lat !== null && lon !== null) plantLocation = { lat, lon };
-  }
+  const pin = checkLocation({ lat: values.lat, lon: values.lon });
+  const errors: Partial<Record<keyof GpsSettingsValues, string>> = { ...pin.errors };
+  const plantLocation: GpsSettings["plantLocation"] = pin.location;
   const retentionDays = wholeFrom(values.retentionDays, 7, 730);
   if (retentionDays === null) errors.retentionDays = "Isi angka bulat dari 7 sampai 730.";
   const customerDaysAfterExit = wholeFrom(values.customerDaysAfterExit, 0, 30);

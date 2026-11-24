@@ -654,6 +654,7 @@ const typedDestination = (order) => ({
   district: order.destDistrict ?? null,
   regency: order.destRegency ?? null,
   province: order.destProvince ?? null,
+  location: order.destLocation ?? null,
 });
 
 /** A seeded DO keeps the copy of its customer's first destination, the way migration 0008 copied it. */
@@ -703,6 +704,8 @@ seedOrder("0046/CONTOH/OLEIN/XI/2026", {
   truckCountBy: "ADMIN",
   sentAt: daysAgoIso(2),
   acceptedAt: daysAgoIso(1),
+  // the map pin of the destination (apps/api migration 0013), in the open sea like every mock position
+  destLocation: { lat: -10.68, lon: 85.52 },
 });
 
 // --- registrations, trips, SPJ
@@ -1670,6 +1673,9 @@ function seedWeighingSample() {
 
   // PLATE: the camera read another plate at the second weighing
   const third = seed("v-2", "d-5", "OUT", "WEIGH_2");
+  // it loads for the accepted DO with a destination pin, so Lacak kendaraan shows where it goes
+  const pinned = deliveryOrders.find((order) => order.destLocation);
+  if (pinned && third.registration.allocations[0]) third.registration.allocations[0].deliveryOrderId = pinned.id;
   saveWeighing(third.trip, { stage: 1, weightKg: 9100, at: minutesAgo(70) });
   raiseException(third.trip, { type: "PLATE", stage: 2, plateRead: "ZZ0002CTN", liveWeightKg: 38960, raisedAt: minutesAgo(0.5) });
 
@@ -2241,6 +2247,16 @@ function applyOrder(order, body, creating) {
   }
   // the destination is typed on the DO (apps/api migration 0008): name and regency for a draft
   for (const name of DEST_FIELDS) if (has(name)) next[name] = optionalText(body[name]);
+  // the optional map pin (apps/api migration 0013): { lat, lon } or null
+  if (has("destLocation")) {
+    const pin = body.destLocation;
+    if (pin === null || pin === undefined) next.destLocation = null;
+    else {
+      if (typeof pin?.lat !== "number" || pin.lat < -90 || pin.lat > 90) fields["destLocation.lat"] = "Lintang pin harus angka antara -90 dan 90.";
+      if (typeof pin?.lon !== "number" || pin.lon < -180 || pin.lon > 180) fields["destLocation.lon"] = "Bujur pin harus angka antara -180 dan 180.";
+      next.destLocation = { lat: pin?.lat, lon: pin?.lon };
+    }
+  }
   for (const [name, message] of [["destName", "Nama tujuan wajib diisi."], ["destRegency", "Kabupaten atau kota tujuan wajib diisi."]]) {
     if (!(name in next ? next[name] : creating ? null : order[name])) fields[name] = message;
   }

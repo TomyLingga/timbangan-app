@@ -20,7 +20,7 @@ describe("typed destination of a delivery order", () => {
     const { call, base } = await setup();
     const created = await call("POST", "/api/delivery-orders", "logistics", { ...base, destName: " Gudang Pembeli ", destRegency: "Kab. Contoh" });
     expect(created.statusCode, created.body).toBe(201);
-    expect(created.json().deliveryOrder.destination).toEqual({ id: null, name: "Gudang Pembeli", address: null, district: null, regency: "Kab. Contoh", province: null });
+    expect(created.json().deliveryOrder.destination).toEqual({ id: null, name: "Gudang Pembeli", address: null, district: null, regency: "Kab. Contoh", province: null, location: null });
 
     const missing = await call("POST", "/api/delivery-orders", "logistics", { ...base, destAddress: "Jl. Contoh 9" });
     expect(missing.statusCode).toBe(400);
@@ -48,7 +48,7 @@ describe("typed destination of a delivery order", () => {
     expect((await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destName: "  " })).statusCode).toBe(400);
     const sent = await call("POST", `/api/delivery-orders/${id}/send`, "logistics", {});
     expect(sent.statusCode, sent.body).toBe(200);
-    expect(sent.json().deliveryOrder.destination).toEqual({ id: null, ...{ name: "Gudang Pembeli", address: "Jl. Contoh 9", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" } });
+    expect(sent.json().deliveryOrder.destination).toEqual({ id: null, ...{ name: "Gudang Pembeli", address: "Jl. Contoh 9", district: "Kec. Contoh", regency: "Kab. Contoh", province: "Prov. Contoh" }, location: null });
     const late = await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destAddress: "Jl. Lain" });
     expect(late.statusCode).toBe(409);
     expect(late.json().error.code).toBe("INVALID_STATE");
@@ -62,7 +62,72 @@ describe("typed destination of a delivery order", () => {
     const { call, base } = await setup();
     const created = await call("POST", "/api/delivery-orders", "logistics", { ...base, ...DESTINATION, destinationId: 999_999 });
     expect(created.statusCode, created.body).toBe(201);
-    expect(created.json().deliveryOrder.destination).toEqual({ id: null, name: DESTINATION.destName, address: DESTINATION.destAddress, district: DESTINATION.destDistrict, regency: DESTINATION.destRegency, province: DESTINATION.destProvince });
+    expect(created.json().deliveryOrder.destination).toEqual({ id: null, name: DESTINATION.destName, address: DESTINATION.destAddress, district: DESTINATION.destDistrict, regency: DESTINATION.destRegency, province: DESTINATION.destProvince, location: null });
+  });
+});
+
+// open sea, far from any real place
+const PIN = { lat: -10.5, lon: 85.25 };
+
+describe("map pin of the destination", () => {
+  it("is optional, set and cleared on a draft, and locked with the typed parts once the DO is sent", async () => {
+    const { call, base } = await setup();
+    const plain = await call("POST", "/api/delivery-orders", "logistics", { ...base, ...DESTINATION });
+    expect(plain.statusCode, plain.body).toBe(201);
+    expect(plain.json().deliveryOrder.destination.location).toBeNull();
+
+    const created = await call("POST", "/api/delivery-orders", "logistics", { ...base, ...DESTINATION, destLocation: PIN });
+    expect(created.statusCode, created.body).toBe(201);
+    const id = created.json().deliveryOrder.id;
+    expect(created.json().deliveryOrder.destination.location).toEqual(PIN);
+    expect((await call("GET", `/api/delivery-orders/${id}`, "logistics")).json().deliveryOrder.destination.location).toEqual(PIN);
+
+    // a change of another field keeps the pin
+    expect((await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { remark: "Catatan" })).json().deliveryOrder.destination.location).toEqual(PIN);
+    const moved = await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destLocation: { lat: -10.75, lon: 85.5 } });
+    expect(moved.statusCode, moved.body).toBe(200);
+    expect(moved.json().deliveryOrder.destination.location).toEqual({ lat: -10.75, lon: 85.5 });
+    const cleared = await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destLocation: null });
+    expect(cleared.json().deliveryOrder.destination.location).toBeNull();
+    expect((await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destLocation: PIN })).statusCode).toBe(200);
+
+    // a DO is sent without a pin as well as with one
+    expect((await call("POST", `/api/delivery-orders/${plain.json().deliveryOrder.id}/send`, "logistics", {})).statusCode).toBe(200);
+    expect((await call("POST", `/api/delivery-orders/${id}/send`, "logistics", {})).statusCode).toBe(200);
+    const late = await call("PATCH", `/api/delivery-orders/${id}`, "logistics", { destLocation: null });
+    expect(late.statusCode).toBe(409);
+    expect(late.json().error.code).toBe("INVALID_STATE");
+    // the transporter sees the pin
+    expect((await call("GET", `/api/delivery-orders/${id}`, "angkut1")).json().deliveryOrder.destination.location).toEqual(PIN);
+  });
+
+  it("refuses a pin outside the earth's ranges or with a part missing", async () => {
+    const { call, base } = await setup();
+    const send = (destLocation: unknown) => call("POST", "/api/delivery-orders", "logistics", { ...base, ...DESTINATION, destLocation });
+    const fieldsOf = async (destLocation: unknown) => {
+      const response = await send(destLocation);
+      expect(response.statusCode).toBe(400);
+      return response.json().error.fields;
+    };
+    expect(await fieldsOf({ lat: 91, lon: 10 })).toEqual([{ field: "destLocation.lat", message: "Lintang pin harus angka antara -90 dan 90." }]);
+    expect(await fieldsOf({ lat: 10, lon: -180.5 })).toEqual([{ field: "destLocation.lon", message: "Bujur pin harus angka antara -180 dan 180." }]);
+    expect(await fieldsOf({ lat: 10 })).toEqual([{ field: "destLocation.lon", message: "Bujur pin harus angka antara -180 dan 180." }]);
+    expect(await fieldsOf({ lat: "3.5", lon: 10 })).toEqual([{ field: "destLocation.lat", message: "Lintang pin harus angka antara -90 dan 90." }]);
+    expect(await fieldsOf("3.5, 98.6")).toEqual([{ field: "destLocation", message: "Pin lokasi tujuan harus berisi lintang dan bujur." }]);
+    // the edges are allowed
+    expect((await send({ lat: -90, lon: 180 })).statusCode).toBe(201);
+  });
+
+  it("the database keeps both parts set or both empty, inside the ranges (migration 0013)", async () => {
+    const { call, base, database } = await setup();
+    const id = (await call("POST", "/api/delivery-orders", "logistics", { ...base, ...DESTINATION })).json().deliveryOrder.id;
+    const update = (lat: number | null, lon: number | null) => database.query("update delivery_orders set dest_lat = $1, dest_lon = $2 where id = $3", [lat, lon, id]);
+    await expect(update(1, null)).rejects.toThrow(/delivery_orders_dest_pin_check/);
+    await expect(update(null, 1)).rejects.toThrow(/delivery_orders_dest_pin_check/);
+    await expect(update(90.5, 1)).rejects.toThrow(/delivery_orders_dest_pin_check/);
+    await expect(update(1, 181)).rejects.toThrow(/delivery_orders_dest_pin_check/);
+    await update(PIN.lat, PIN.lon);
+    await update(null, null);
   });
 });
 

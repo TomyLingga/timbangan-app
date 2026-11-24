@@ -1,6 +1,7 @@
 // Entry point: `npm run dev` and `npm start`. Both load .env through Node's --env-file-if-exists.
 import type { FastifyInstance } from "fastify";
 import { type AppOptions, buildApp } from "./app.js";
+import { grantBootstrapAdmins } from "./auth/permissions.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { createDb } from "./db/client.js";
 import { migrate } from "./db/migrate.js";
@@ -17,6 +18,14 @@ export async function startServer(
     if (config.databaseUrl === "pglite://memory") await migrate(database);
     const app = await buildApp({ config, database, logger: options.logger ?? { level: "info" }, warmSpeech: true, gpsRetention: true });
     app.addHook("onClose", () => database.close());
+    // modules added by a migration since the bootstrap admins last signed in reach them now; a failure here is
+    // logged and does not stop the API
+    try {
+      const granted = await grantBootstrapAdmins(database.db, config.bootstrapAdminEmails, new Date());
+      if (granted.length > 0) app.log.info({ accounts: granted.length }, "Bootstrap admins hold every active module");
+    } catch (error) {
+      app.log.warn({ err: error }, "Could not grant the active modules to the bootstrap admins");
+    }
     const address = await app.listen({ port: config.port, host: config.host });
     return { app, address };
   } catch (error) {

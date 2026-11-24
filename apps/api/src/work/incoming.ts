@@ -8,7 +8,7 @@ import { advance, outcomeOf, rejectTrip } from "../weighing/steps.js";
 import {
   applySeals,
   attachPhotos,
-  checkPlausible,
+  checkFormValues,
   clientUuidField,
   closeStep,
   type FormSpec,
@@ -86,7 +86,11 @@ const RECEIVING_REASONS = ["FFA_OUT", "MI_OUT", "FFA_MI_OUT"] as const;
 const qcReceivingBody = z
   .object({
     clientUuid: clientUuidField,
-    values: z.object({ FFA: valueField("FFA"), MOISTURE: valueField("MOISTURE"), IMPURITIES: valueField("IMPURITIES").optional() }, "Angka mutu wajib diisi."),
+    // which figures are required follows the active parameters (checkFormValues), as the work view offers them
+    values: z.object(
+      { FFA: valueField("FFA").optional(), MOISTURE: valueField("MOISTURE").optional(), IMPURITIES: valueField("IMPURITIES").optional() },
+      "Angka mutu wajib diisi.",
+    ),
     disposition: z.enum(["OK", "HOLD", "NOT_OK"], "Disposisi harus OK, HOLD, atau NOT_OK."),
     reasonCode: z.enum(RECEIVING_REASONS, `Keterangan harus salah satu dari ${RECEIVING_REASONS.join(", ")}.`).optional(),
     remark: remarkField,
@@ -106,7 +110,7 @@ export const qcReceivingForm: FormSpec<z.infer<typeof qcReceivingBody>> = {
   flows: ["IN_CPO"],
   run: async (run, body) => {
     const { tx, step, account, now } = run;
-    const values = await checkPlausible(tx, body.values);
+    const values = await checkFormValues(tx, step.flowCode, "QC", body.values);
     const ok = body.disposition === "OK";
     const [check] = await tx
       .insert(qualityChecks)

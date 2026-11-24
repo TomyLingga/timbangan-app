@@ -1,5 +1,6 @@
 // Delivery orders (DO): written by the logistics admin, sent to one transporter, accepted by it, closed. The
 // destination is typed on the DO (dest_* columns): name and regency for a draft, all five parts before it is sent.
+// A map pin (dest_lat, dest_lon) is optional and changes in the same states as the typed parts.
 import { and, count, desc, eq, ilike, inArray, ne, or, type SQL, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { alias } from "drizzle-orm/pg-core";
@@ -22,6 +23,13 @@ const STATUSES = ["DRAFT", "SENT", "ACCEPTED", "CLOSED", "CANCELLED"] as const;
 const optionalText = (label: string, max: number) => z.string(`${label} harus berupa teks.`).trim().max(max, `${label} terlalu panjang.`).nullable().optional();
 const QTY_MESSAGE = "Quantity harus angka lebih dari 0.";
 const TRUCKS_MESSAGE = "Jumlah truk harus antara 1 dan 500.";
+const LAT_MESSAGE = "Lintang pin harus angka antara -90 dan 90.";
+const LON_MESSAGE = "Bujur pin harus angka antara -180 dan 180.";
+/** The optional map pin of the destination; null clears it. */
+const destLocation = z.object(
+  { lat: z.number(LAT_MESSAGE).min(-90, LAT_MESSAGE).max(90, LAT_MESSAGE), lon: z.number(LON_MESSAGE).min(-180, LON_MESSAGE).max(180, LON_MESSAGE) },
+  "Pin lokasi tujuan harus berisi lintang dan bujur.",
+);
 const truckCount = z.number(TRUCKS_MESSAGE).int(TRUCKS_MESSAGE).min(1, TRUCKS_MESSAGE).max(500, TRUCKS_MESSAGE);
 const fields = {
   doNo: z.string("Nomor DO harus berupa teks.").trim().min(1, "Nomor DO tidak boleh kosong.").max(60, "Nomor DO terlalu panjang.").optional(),
@@ -38,6 +46,7 @@ const fields = {
   destDistrict: optionalText("Kecamatan tujuan", 100),
   destRegency: optionalText("Kabupaten atau kota tujuan", 100),
   destProvince: optionalText("Provinsi tujuan", 100),
+  destLocation: destLocation.nullable().optional(),
   deliveryFrom: dateText("Tanggal mulai kirim"),
   deliveryUntil: dateText("Tanggal akhir kirim").nullable().optional(),
   transportTerms: optionalText("Syarat angkut", 50),
@@ -114,6 +123,7 @@ export async function listDeliveryOrders(orm: Orm, where: SQL | undefined, limit
       district: order.destDistrict,
       regency: order.destRegency,
       province: order.destProvince,
+      location: order.destLat !== null && order.destLon !== null ? { lat: order.destLat, lon: order.destLon } : null,
     },
     deliveryFrom: order.deliveryFrom,
     deliveryUntil: order.deliveryUntil,
@@ -193,6 +203,8 @@ async function resolve(orm: Orm, input: Values) {
     destDistrict: typed(input.destDistrict),
     destRegency: typed(input.destRegency),
     destProvince: typed(input.destProvince),
+    destLat: input.destLocation?.lat ?? null,
+    destLon: input.destLocation?.lon ?? null,
     deliveryFrom: input.deliveryFrom,
     deliveryUntil: input.deliveryUntil ?? null,
     transportTerms: input.transportTerms ?? null,
@@ -337,6 +349,7 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
           destDistrict: current.destDistrict,
           destRegency: current.destRegency,
           destProvince: current.destProvince,
+          destLocation: current.destLat !== null && current.destLon !== null ? { lat: current.destLat, lon: current.destLon } : null,
           deliveryFrom: current.deliveryFrom,
           deliveryUntil: current.deliveryUntil,
           transportTerms: current.transportTerms,

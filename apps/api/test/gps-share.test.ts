@@ -108,7 +108,7 @@ describe("GET /api/gps/share/:token", () => {
     const { token } = await issued();
     const response = await share(token as string);
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ plateDisplay: "ZZ 2101 GA", open: true, until: "Sampai truk selesai dan keluar dari pabrik.", untilAt: null });
+    expect(response.json()).toEqual({ plateDisplay: "ZZ 2101 GA", open: true, until: "Sampai truk selesai dan keluar dari pabrik.", untilAt: null, destinations: [] });
   });
 
   it("follows the trip: open until closed, outgoing until the customer window after exit", async () => {
@@ -143,8 +143,26 @@ describe("GET /api/gps/share/:token", () => {
       const token = await tokenOf(tripId);
       const response = await share(token as string);
       expect(response.statusCode, name).toBe(200);
-      expect(response.json(), name).toEqual({ plateDisplay: plate, ...expected });
+      expect(response.json(), name).toEqual({ plateDisplay: plate, ...expected, destinations: [] });
     }
+  });
+
+  it("gives the pinned destinations of an outgoing trip without a distance, while sharing is open", async () => {
+    const { trip, vehicle, companies, share, tokenOf, database } = await setup();
+    const tripId = await trip({ direction: "OUT", partnerId: companies.customer1, vehicleId: await vehicle("ZZ 2301 GA"), status: "ISSUED" });
+    await database.query("insert into trip_share_links (trip_id) values ($1)", [tripId]);
+    const token = (await tokenOf(tripId)) as string;
+    const [order] = await database.query<{ id: number; do_no: string }>(
+      "select d.id::float8 as id, d.do_no from trip_allocations ta join registration_allocations ra on ra.id = ta.registration_allocation_id join delivery_orders d on d.id = ra.delivery_order_id where ta.trip_id = $1",
+      [tripId],
+    );
+    await database.query("update delivery_orders set dest_lat = $1, dest_lon = $2 where id = $3", [SEA.lat, SEA.lon, order?.id]);
+    expect((await share(token)).json().destinations).toEqual([
+      { deliveryOrderId: Number(order?.id), doNo: order?.do_no, name: "Gudang Contoh", regency: "Kab. Contoh", lat: SEA.lat, lon: SEA.lon },
+    ]);
+    // the trip left the window: sharing is closed and the place is not given any more
+    await database.query("update trips set status = 'COMPLETED', outcome = 'OK', exited_at = '2026-11-16T03:00:00Z', completed_at = '2026-11-16T03:00:00Z' where id = $1", [tripId]);
+    expect((await share(token)).json()).toMatchObject({ open: false, destinations: [] });
   });
 
   it("answers 404 for a token that does not exist", async () => {

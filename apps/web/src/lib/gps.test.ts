@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   accuracyText,
   agoText,
+  destinationText,
   distanceText,
+  fitPoints,
   filterByState,
   findSelected,
   parseSelection,
@@ -339,5 +341,28 @@ describe("trackerExample", () => {
     const body = JSON.parse(example.body) as { points: Array<Record<string, unknown>> };
     expect(body.points[0]).toMatchObject({ deviceId: "ALAT-CONTOH-01", lat: -10.5, lon: 85.25 });
     expect(Object.keys(body.points[0] ?? {})).toEqual(["deviceId", "at", "lat", "lon", "speedKph", "headingDeg", "accuracyM"]);
+  });
+});
+
+describe("destinations", () => {
+  it("names a destination by its name and regency, else by its DO number", () => {
+    expect(destinationText({ name: "Gudang Contoh", regency: "Kab. Contoh", doNo: "001/DO" })).toBe("Gudang Contoh, Kab. Contoh");
+    expect(destinationText({ name: "Gudang Contoh", regency: null, doNo: "001/DO" })).toBe("Gudang Contoh");
+    expect(destinationText({ name: " ", regency: null, doNo: "001/DO" })).toBe("001/DO");
+  });
+
+  it("fits the truck first, then its track and its destinations", () => {
+    const truck = { lat: -10.5, lon: 85.25 };
+    const track = [{ lat: -10.6, lon: 85.1 }, truck];
+    const places = [{ lat: -11, lon: 86 }];
+    expect(fitPoints(truck, track, places)).toEqual([
+      [-10.5, 85.25],
+      [-10.6, 85.1],
+      [-10.5, 85.25],
+      [-11, 86],
+    ]);
+    expect(fitPoints(truck, null, null)).toEqual([[-10.5, 85.25]]);
+    expect(fitPoints(null, [], places)).toEqual([[-11, 86]]);
+    expect(fitPoints(truck, null, [{ lat: Number.NaN, lon: 1 }])).toEqual([[-10.5, 85.25]]);
   });
 });

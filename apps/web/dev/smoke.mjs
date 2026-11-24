@@ -83,10 +83,11 @@ async function signOut(browser) {
 }
 
 async function run(browser) {
-  // SMOKE_ONLY=gps runs only the GPS checks (42 to 47), against a fresh mock.
+  // SMOKE_ONLY=gps runs only the GPS checks (42 to 48), against a fresh mock.
   if (process.env.SMOKE_ONLY === "gps") {
     await gpsTracking(browser);
     await driverSharing(browser);
+    await destinationPins(browser);
     return;
   }
   // 1. Server HTML of the sign-in page.
@@ -653,6 +654,7 @@ async function run(browser) {
   await historyAndVerification(browser);
   await gpsTracking(browser);
   await driverSharing(browser);
+  await destinationPins(browser);
 }
 
 /**
@@ -1827,6 +1829,97 @@ async function gpsTracking(browser) {
   check("/lacak/pengaturan refuses a partner account", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")));
   await browser.goto(`${WEB}/`);
   await signOut(browser);
+}
+
+/** Pastes `text` into an input the way a browser does: a paste event the page may take over. */
+const pasteInto = (selector, text) => `(() => {
+  const input = document.querySelector(${JSON.stringify(selector)});
+  input.focus();
+  const data = new DataTransfer();
+  data.setData('text/plain', ${JSON.stringify(text)});
+  return input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+})()`;
+
+async function destinationPins(browser) {
+  // 48. The destination pin of a DO: typed or pasted in the DO form, shown on the DO page with a Google Maps link,
+  // on Lacak kendaraan for the truck that carries the DO, and on the driver's page.
+  await browser.viewport(1440, 900);
+  await staffSignIn(browser, "super.contoh");
+  await browser.goto(`${WEB}/delivery-order`);
+  await browser.waitFor(`${visibleRows} > 0`);
+  await browser.click("DO baru");
+  await pickOption(browser, inSheet('input[name="contractLookup"]'), "0047/CONTOH");
+  await browser.fill(inSheet('input[name="destName"]'), "Gudang Pin Uji");
+  await browser.fill(inSheet('input[name="destRegency"]'), "Kab. Pin Uji");
+  await browser.fill(inSheet('input[name="qty"]'), "12000");
+  check("the DO form has an optional part for the destination pin with a map", (await browser.evaluate(textOf('[data-testid="do-pin"]'))).includes("Pin lokasi tujuan (opsional)") && Boolean(await browser.waitFor(`document.querySelector('[data-testid="do-pin"] .gps-map')`)));
+  const lat = inSheet('input[name="destLat"]');
+  const lon = inSheet('input[name="destLon"]');
+  const pinValues = `document.querySelector(${JSON.stringify(lat)}).value + ' | ' + document.querySelector(${JSON.stringify(lon)}).value`;
+  const pasteTaken = await browser.evaluate(pasteInto(lat, "-10.7, 85.6"));
+  check("pasting a Google Maps pair into the latitude field fills both fields", pasteTaken === false && (await browser.waitFor(`${pinValues} === '-10.7 | 85.6' ? ${pinValues} : ''`)) === "-10.7 | 85.6", await browser.evaluate(pinValues));
+  check("the pin is drawn on the map once both fields hold a point", Boolean(await browser.waitFor(`document.querySelector('[data-testid="do-pin"] .gps-destination')`)));
+  await browser.click("Hapus pin");
+  check("Hapus pin empties both fields and takes the pin off the map", Boolean(await browser.waitFor(`${pinValues} === ' | ' && !document.querySelector('[data-testid="do-pin"] .gps-destination')`)));
+  await browser.fill(lat, "-10.7");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("a pin with only a latitude is refused next to the longitude", Boolean(await browser.hasText("Isi bujur juga, atau kosongkan keduanya.")));
+  await browser.click("Pakai titik tengah peta");
+  check("Pakai titik tengah peta fills both fields of the pin", Boolean(await browser.waitFor(`/^-?\\d/.test(document.querySelector(${JSON.stringify(lat)}).value) && /^-?\\d/.test(document.querySelector(${JSON.stringify(lon)}).value)`)));
+  await browser.evaluate(pasteInto(lon, "(-10.7, 85.6)"));
+  await browser.waitFor(`${pinValues} === '-10.7 | 85.6'`);
+  await browser.click(inSheet('button[type="submit"]'));
+  const created = (await browser.waitFor(`[...document.querySelectorAll('p')].find((p) => p.innerText.includes('dibuat sebagai draf'))?.innerText`)) ?? "";
+  const doNo = /DO (\S+) dibuat/.exec(created)?.[1] ?? "";
+  const token = await apiSession("super.contoh");
+  const found = (await (await fetch(`${API}/api/delivery-orders?q=${encodeURIComponent(doNo)}`, { headers: { authorization: `Bearer ${token}` } })).json()).items?.[0];
+  check("the DO is saved with its pin", JSON.stringify(found?.destination?.location) === JSON.stringify({ lat: -10.7, lon: 85.6 }), JSON.stringify(found?.destination));
+
+  await browser.goto(`${WEB}/delivery-order/${encodeURIComponent(String(found?.id))}`);
+  const view = '[data-testid="do-pin-view"]';
+  check("the DO page shows the pin on a small map with its coordinates", Boolean(await browser.waitFor(`document.querySelector('${view} .gps-destination') && ${textOf('[data-testid="do-pin-coordinates"]')} === '-10.7, 85.6'`)));
+  check(
+    "Buka di Google Maps opens the place in a new tab without passing the page on",
+    (await browser.evaluate(`(() => { const a = [...document.querySelectorAll('${view} a')].find((link) => link.innerText.includes('Buka di Google Maps')); return a ? [a.href, a.target, a.rel].join(' ') : ''; })()`)) ===
+      "https://www.google.com/maps?q=-10.7,85.6 _blank noopener noreferrer",
+  );
+  check("nothing on the DO page was fetched from Google", !(await browser.evaluate(`performance.getEntriesByType('resource').some((entry) => entry.name.includes('google'))`)));
+
+  // the truck on the outgoing trip of the pinned DO
+  await browser.goto(`${WEB}/lacak?vehicle=v-2`);
+  const panel = textOf('[data-testid="gps-panel"]');
+  check(
+    "the selected truck's panel names its destination and the distance to it",
+    Boolean(await browser.waitFor(`${panel}.includes('Tujuan') && ${panel}.includes('Jarak ke tujuan') && ${panel}.includes('km')`)),
+    await browser.evaluate(panel),
+  );
+  check(
+    "the destination has its own marker on the map, inside the view with the truck",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const map = document.querySelector('.gps-map').getBoundingClientRect();
+        const pin = document.querySelector('.gps-map .gps-destination')?.getBoundingClientRect();
+        const truck = document.querySelector('.gps-marker[data-vehicle-id="v-2"]')?.getBoundingClientRect();
+        const inside = (box) => box && box.left >= map.left && box.right <= map.right && box.top >= map.top && box.bottom <= map.bottom;
+        return inside(pin) && inside(truck) && !document.querySelector('.gps-map .gps-destination .gps-marker-truck');
+      })()`),
+    ),
+  );
+  const trip = await (await fetch(`${API}/api/gps/vehicles`, { headers: { authorization: `Bearer ${token}` } })).json();
+  const tripId = trip.items.find((item) => item.vehicle.id === "v-2")?.trip?.id;
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+
+  // the driver of that truck can open the place in a maps app
+  await browser.viewport(390, 844, true);
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-${tripId}`);
+  check(
+    "the driver's page names the destination with a Buka di peta link",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="share-destination"]')}.includes('Tujuan:') && document.querySelector('[data-testid="share-destination"] a')?.href.startsWith('https://www.google.com/maps?q=')`)),
+    await browser.evaluate(shareDetail),
+  );
+  check("the driver's page with a destination has no horizontal scroll at 390 px", await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
+  await browser.viewport(1440, 900);
 }
 
 /** Where the driver's page is and which of its screens shows, for a failed check. */

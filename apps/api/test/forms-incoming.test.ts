@@ -189,6 +189,26 @@ describe("qc-receiving", () => {
     expect(await ctx.count("select count(*)::int as n from quality_checks where trip_id = $1", [truck.tripId])).toBe(0);
   });
 
+  it("requires only the active parameters the form marks as required, and still refuses a switched-off one", async () => {
+    const ctx = await fieldApp();
+    const truck = await atQc(ctx);
+    const id = await ctx.stepId(truck.tripId, "QC");
+    await ctx.database.query("update quality_parameters set is_active = false where code = 'MOISTURE'");
+    const send = (body: Body) => ctx.form(id, "qc-receiving", body, "qcop");
+    // the work view no longer offers moisture
+    const work = await ctx.call("GET", `/api/work/steps/${id}`, "qcop");
+    expect(work.statusCode, work.body).toBe(200);
+    expect(JSON.stringify(work.json())).not.toContain('"MOISTURE"');
+
+    expect(fields(await send(qcBody({ values: { FFA: 3, MOISTURE: 0.1 } })))).toEqual([{ field: "values.MOISTURE", message: "Moisture (kadar air) belum dipakai." }]);
+    expect(fields(await send(qcBody({ values: { IMPURITIES: 0.02 } })))).toEqual([{ field: "values.FFA", message: "FFA wajib diisi." }]);
+    const response = await send(qcBody({ values: { FFA: 3 } }));
+    expect(response.statusCode, response.body).toBe(200);
+    expect(await ctx.database.query("select parameter_code from quality_values v join quality_checks c on c.id = v.quality_check_id where c.trip_id = $1", [truck.tripId])).toEqual([
+      { parameter_code: "FFA" },
+    ]);
+  });
+
   it("HOLD keeps the truck at QC and asks the QC supervisors for a decision", async () => {
     const ctx = await fieldApp();
     const truck = await atQc(ctx);

@@ -30,7 +30,7 @@ import { INSIDE_STATUSES } from "../trips/view.js";
 import { loadSteps, readyStep } from "../weighing/steps.js";
 import { loadWeighTrip } from "../weighing/view.js";
 import { productsByIds, tankIsLabelled, tankUse } from "../plant-masters/tank-products.js";
-import { tripProducts } from "./view.js";
+import { formParameters, tripProducts } from "./view.js";
 
 /** A form step with what the rules need about its trip. */
 export interface FormStep {
@@ -288,16 +288,56 @@ export async function appliedSealsInPlace(orm: Orm, tripId: number) {
     .orderBy(asc(tripSeals.id));
 }
 
+/** How far a phone clock may run ahead of the server: a field-step time up to this much later than now counts as now. */
+export const CLOCK_AHEAD_MS = 5 * 60_000;
+
+/**
+ * A time a phone sent for a field step. A phone whose clock runs a little fast cannot fix it, so a time up to
+ * CLOCK_AHEAD_MS ahead of the server is taken as the server's now; a later one is refused.
+ */
+export function fieldTime(text: string | undefined, now: Date, field: string, label: string): Date | undefined {
+  if (text === undefined) return undefined;
+  const at = new Date(text);
+  if (at.getTime() <= now.getTime()) return at;
+  if (at.getTime() - now.getTime() <= CLOCK_AHEAD_MS) return now;
+  throw invalid(field, `${label} tidak boleh di masa depan.`);
+}
+
 /** A quality figure of a form: required or optional, never below zero. */
 export const valueField = (code: string) =>
   z.number({ error: (issue) => (issue.input === undefined ? `${code} wajib diisi.` : `${code} harus angka.`) }).min(0, `${code} tidak boleh negatif.`);
 
-/** Refuses figures outside the plausibility range of their parameter, field by field. */
-export async function checkPlausible(orm: Orm, values: Record<string, number | undefined>): Promise<[string, number][]> {
-  const given = Object.entries(values).filter((entry): entry is [string, number] => entry[1] !== undefined);
-  if (given.length === 0) return [];
-  const rows = await orm.select().from(qualityParameters).where(inArray(qualityParameters.code, given.map(([code]) => code)));
+/**
+ * Checks the quality figures of a form. The parameters the form marks as required (formParameters) must be given
+ * while they are switched on; a parameter switched off is not on the form and is not required. Every figure given
+ * must be of an active parameter and inside its plausibility range. All problems are answered at once.
+ */
+export async function checkFormValues(orm: Orm, flowCode: string, stepCode: string, values: Record<string, number | undefined>): Promise<[string, number][]> {
+  const required = formParameters(flowCode, stepCode)
+    .filter((item) => item.required)
+    .map((item) => item.code);
   const problems: { field: string; message: string }[] = [];
+  if (required.length > 0) {
+    const active = await orm
+      .select({ code: qualityParameters.code })
+      .from(qualityParameters)
+      .where(and(inArray(qualityParameters.code, required), eq(qualityParameters.isActive, true)));
+    for (const code of required) {
+      if (active.some((row) => row.code === code) && values[code] === undefined) problems.push({ field: `values.${code}`, message: `${code} wajib diisi.` });
+    }
+  }
+  return checkPlausible(orm, values, problems);
+}
+
+/** Refuses figures outside the plausibility range of their parameter, field by field, after the problems given. */
+export async function checkPlausible(orm: Orm, values: Record<string, number | undefined>, earlier: { field: string; message: string }[] = []): Promise<[string, number][]> {
+  const given = Object.entries(values).filter((entry): entry is [string, number] => entry[1] !== undefined);
+  const problems = [...earlier];
+  if (given.length === 0) {
+    if (problems.length) throw new AppError(400, "VALIDATION", "Data yang dikirim tidak valid.", problems);
+    return [];
+  }
+  const rows = await orm.select().from(qualityParameters).where(inArray(qualityParameters.code, given.map(([code]) => code)));
   for (const [code, value] of given) {
     const row = rows.find((item) => item.code === code);
     if (!row) problems.push({ field: `values.${code}`, message: `Parameter ${code} tidak dikenal.` });

@@ -301,6 +301,8 @@ export interface DeliveryOrderDestination {
   district: string | null;
   regency: string | null;
   province: string | null;
+  /** The optional map pin (API migration 0013); absent from an older API. */
+  location?: { lat: number; lon: number } | null;
 }
 
 export interface DeliveryOrder {

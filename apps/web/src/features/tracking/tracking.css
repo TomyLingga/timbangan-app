@@ -163,6 +163,49 @@
   margin: -14px 0 0 -14px;
   color: var(--foreground);
 }
+/* A destination of a delivery order: a dark teardrop pin with a flag, tip on the point. It is drawn in the
+   foreground ink, so it stays readable on both themes and never looks like a truck (a light box with a picture). */
+.gps-destination {
+  background: none;
+  border: 0;
+}
+.gps-destination-pin {
+  position: absolute;
+  left: 2px;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg);
+  border: 2px solid var(--card);
+  background: var(--foreground);
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 35%, transparent), var(--elevation-1);
+}
+.gps-destination-glyph {
+  display: flex;
+  transform: rotate(45deg);
+  color: var(--background);
+}
+.gps-destination-glyph svg {
+  width: 13px;
+  height: 13px;
+}
+
+.gps-map .gps-destination-tip {
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: var(--elevation-1);
+  font-size: 12px;
+  font-weight: 600;
+}
+.gps-map .gps-destination-tip::before {
+  border-top-color: var(--line-strong);
+}
+
 .gps-plant {
   background: none;
   border: 0;

@@ -4,7 +4,8 @@
 //   NEXT_PUBLIC_API_URL=http://localhost:3110 npm run build
 //   node dev/gps-shots.mjs [output directory]
 //
-// The default output directory is ../../.data/ui-pilot (git-ignored); every file name starts with "gps-". Unlike
+// The default output directory is ../../.data/ui-pilot (git-ignored); every file name starts with "gps-", except the
+// destination pin screens ("do-pin-"; SHOTS=do-pin takes only those). Unlike
 // the smoke test, the map loads the real OpenStreetMap tiles (MOCK_TILES=1 serves the mock's blank tiles instead).
 // The mock's trucks drive in the open sea, so the tiles there are plain water.
 
@@ -44,9 +45,64 @@ async function shoot(browser, name, { fullPage = false } = {}) {
 
 const tilesLoaded = "document.querySelectorAll('.leaflet-tile-loaded').length >= 4";
 
+/** An access token of a mock account, for finding ids through the API. */
+async function apiToken(username) {
+  const started = await fetch(`${API}/api/auth/sso/start?as=${username}`, { redirect: "manual" });
+  const ticket = new URL(started.headers.get("location") ?? "").searchParams;
+  const exchange = await fetch(`${API}/api/auth/sso/exchange`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token: ticket.get("token"), appId: ticket.get("appId") }),
+  });
+  return (await exchange.json()).accessToken;
+}
+
+/** The destination pin of a DO: the form with the picker, the DO page, and Lacak kendaraan with the destination. */
+async function doPinShots(browser) {
+  const token = await apiToken("super.contoh");
+  const orders = (await (await fetch(`${API}/api/delivery-orders`, { headers: { authorization: `Bearer ${token}` } })).json()).items;
+  const pinned = orders.find((order) => order.destination?.location);
+  const sheet = '[role="dialog"]';
+  for (const theme of ["dark", "light"]) {
+    await browser.colorScheme(theme);
+    for (const [width, height, mobile] of [
+      [1440, 900, false],
+      [390, 844, true],
+    ]) {
+      await browser.viewport(width, height, mobile);
+      await browser.goto(`${WEB}/delivery-order`);
+      await browser.waitFor(`[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'DO baru')`);
+      await browser.click("DO baru");
+      await browser.fill(`${sheet} input[name="destName"]`, "Gudang Contoh Tujuan");
+      await browser.fill(`${sheet} input[name="destRegency"]`, "Kab. Contoh");
+      await browser.evaluate(`(() => {
+        const input = document.querySelector('${sheet} input[name="destLat"]');
+        const data = new DataTransfer();
+        data.setData('text/plain', '-10.68, 85.52');
+        input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+        document.querySelector('[data-testid="do-pin"]').scrollIntoView({ block: "start" });
+      })()`);
+      await browser.waitFor(`document.querySelector('[data-testid="do-pin"] .gps-destination') && ${tilesLoaded}`, 20000);
+      await shoot(browser, `do-pin-form-${theme}-${width}`);
+      await browser.pressEscape();
+
+      await browser.goto(`${WEB}/delivery-order/${encodeURIComponent(String(pinned.id))}`);
+      await browser.waitFor(`document.querySelector('[data-testid="do-pin-view"] .gps-destination') && ${tilesLoaded}`, 20000);
+      await shoot(browser, `do-pin-detail-${theme}-${width}`, { fullPage: true });
+
+      await browser.goto(`${WEB}/lacak?vehicle=v-2`);
+      await browser.waitFor(`document.querySelector('[data-testid="gps-destination-row"]') && document.querySelector('.gps-map .gps-destination') && ${tilesLoaded}`, 20000);
+      await shoot(browser, `do-pin-lacak-${theme}-${width}`, { fullPage: mobile });
+    }
+  }
+}
+
 async function run(browser) {
   await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
+  // SHOTS=do-pin takes only the destination pin screens
+  if (process.env.SHOTS === "do-pin") return doPinShots(browser);
+  await doPinShots(browser);
 
   for (const theme of ["dark", "light"]) {
     await browser.colorScheme(theme);

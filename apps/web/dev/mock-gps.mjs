@@ -231,7 +231,24 @@ export function createGpsMock(deps) {
   const owns = (user, vehicle) => user.kind === "INTERNAL" || (vehicle?.owner?.id !== undefined && vehicle.owner.id === user.partner?.id);
   const sees = (user, entry) => owns(user, vehicleOf(entry.vehicleId)) || (onTheRoad(entry.trip) && concerns(user, entry.trip));
 
-  const tripView = (trip) => {
+  /** The pinned destinations of a trip, one per DO in allocation order; the distance from `last` when given. */
+  const destinationsOf = (trip, last) => {
+    const seen = new Set();
+    return registrationOf(trip)
+      .allocations.map((allocation) => deliveryOrders.find((order) => order.id === allocation.deliveryOrderId))
+      .filter((order) => order?.destLocation && !seen.has(order.id) && seen.add(order.id))
+      .map((order) => ({
+        deliveryOrderId: order.id,
+        doNo: order.doNo,
+        name: order.destName ?? null,
+        regency: order.destRegency ?? null,
+        lat: order.destLocation.lat,
+        lon: order.destLocation.lon,
+        ...(last === undefined ? {} : { distanceKm: last ? Math.round(kmBetween(last, order.destLocation) * 10) / 10 : null }),
+      }));
+  };
+
+  const tripView = (trip, last = null) => {
     if (!trip) return null;
     const registration = registrationOf(trip);
     const orders = registration.allocations.map((allocation) => deliveryOrders.find((order) => order.id === allocation.deliveryOrderId)).filter(Boolean);
@@ -244,6 +261,7 @@ export function createGpsMock(deps) {
       partner: ref(registration.partner),
       doNos: orders.map((order) => order.doNo),
       contractNos: registration.direction === "IN" ? ["0125/CONTOH/CPO/XI/2026"] : [],
+      destinations: destinationsOf(trip, last),
     };
   };
 
@@ -263,7 +281,7 @@ export function createGpsMock(deps) {
       },
       last,
       minutesSince: Math.max(0, Math.floor((now - Date.parse(last.at)) / MINUTE)),
-      trip: onTheRoad(entry.trip) ? tripView(entry.trip) : null,
+      trip: onTheRoad(entry.trip) ? tripView(entry.trip, last) : null,
       distanceToPlantKm: distanceKm(last),
     };
   }
@@ -327,7 +345,14 @@ export function createGpsMock(deps) {
       const points = entry ? pointsOf(entry, entry.tripStartMs, now, now).map((point) => ({ ...point, tripId: id })) : [];
       const registration = registrationOf(trip);
       return send(request, response, 200, {
-        trip: { id, tripNo: trip.tripNo, plateDisplay: vehicleOf(trip.vehicleId)?.plateDisplay ?? null, direction: registration.direction, status: trip.status },
+        trip: {
+          id,
+          tripNo: trip.tripNo,
+          plateDisplay: vehicleOf(trip.vehicleId)?.plateDisplay ?? null,
+          direction: registration.direction,
+          status: trip.status,
+          destinations: destinationsOf(trip, points.at(-1) ?? null),
+        },
         points,
         total: points.length,
         thinned: false,
@@ -453,7 +478,9 @@ export function createGpsMock(deps) {
         : trip && registrationOf(trip).direction === "OUT"
           ? `Sampai ${settings.customerDaysAfterExit} hari setelah truk keluar dari pabrik.`
           : "Sampai truk selesai dan keluar dari pabrik.";
-      return send(request, response, 200, { plateDisplay, open, until, untilAt: null });
+      // the pinned destinations without a distance, while sharing is open
+      const destinations = open && trip ? destinationsOf(trip) : [];
+      return send(request, response, 200, { plateDisplay, open, until, untilAt: null, destinations });
     },
 
     "POST /api/gps/share/:id/positions": async (request, response, url, id) => {

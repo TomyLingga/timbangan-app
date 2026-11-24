@@ -83,6 +83,9 @@ export interface AppContext {
 
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
+    // TRUST_PROXY: trust only the immediate peer (the one proxy in front of the API) and take the client from the last
+    // address it appended to X-Forwarded-For. A hop count is not used: Fastify 5 treats it as trusting nobody.
+    trustProxy: options.config.trustProxy ? (_address: string, hop: number) => hop === 0 : false,
     logger: options.logger === false ? false : { ...options.logger, redact: { paths: REDACT_PATHS, censor: "[REDACTED]" } },
   });
   const context: AppContext = {

@@ -306,6 +306,9 @@ export const deliveryOrders = pgTable("delivery_orders", {
   cancelReason: text("cancel_reason"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  // added by 0013: optional map pin of the typed destination, both set or both null
+  destLat: doublePrecision("dest_lat"),
+  destLon: doublePrecision("dest_lon"),
 });
 
 /** One finding of the registration checks, stored in registrations.check_findings. */
