@@ -1,0 +1,13 @@
+# The build stage copies this whole folder, so anything local stays out here.
+# .env files would override the build arguments or leak values into the image.
+node_modules
+.next
+out
+build
+coverage
+dev
+.env
+.env.*
+*.tsbuildinfo
+next-env.d.ts
+*.log

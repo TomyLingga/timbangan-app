@@ -20,7 +20,7 @@ npm install
 copy .env.example .env      # isi DATABASE_URL dan JWT_SECRET; bagian lain boleh kosong dulu
 npm run migrate
 $env:NEW_USER_PASSWORD = "<kata sandi admin>"
-npm run user:create -- --username admin --full-name "Admin Sistem" --kind INTERNAL --role SUPER_ADMIN
+npm run user:create -- --username admin --full-name "Admin Sistem" --kind INTERNAL --admin
 npm run dev                  # http://localhost:3100
 
 # Web, di terminal lain

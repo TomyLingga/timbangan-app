@@ -1,0 +1,12 @@
+# Only package files, tsconfig, src and migrations are copied into the image.
+# Local data, model files and secrets never enter the build context.
+node_modules
+dist
+.data
+storage
+test
+coverage
+.env
+.env.*
+*.tsbuildinfo
+*.log

@@ -1,0 +1,130 @@
+# Production stack: PostgreSQL, API, web app and Caddy in front of both.
+# Run every command from this folder; values come from deploy/.env (copy .env.example).
+# See README.md in this folder.
+name: timbangan
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-timbangan}
+      POSTGRES_DB: ${POSTGRES_DB:-timbangan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      TZ: Asia/Jakarta
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # not published to the host: only the api container connects
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *logging
+
+  api:
+    build:
+      context: ../apps/api
+    image: timbangan-api:local
+    restart: unless-stopped
+    init: true
+    depends_on:
+      db:
+        condition: service_healthy
+    # PORT, HOST and the folder paths are set in the image (apps/api/Dockerfile).
+    # An empty value counts as not set (apps/api/src/config.ts), so the optional groups may stay empty.
+    environment:
+      TZ: Asia/Jakarta
+      DATABASE_URL: postgres://${POSTGRES_USER:-timbangan}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}@db:5432/${POSTGRES_DB:-timbangan}
+      WEB_ORIGIN: ${PUBLIC_URL:?set PUBLIC_URL in deploy/.env}
+      # the API is reachable through Caddy only, so the client address is the one Caddy forwards
+      TRUST_PROXY: "true"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in deploy/.env}
+      ACCESS_TOKEN_TTL_S: ${ACCESS_TOKEN_TTL_S:-}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-}
+      ODOO_URL: ${ODOO_URL:-}
+      ODOO_DB: ${ODOO_DB:-}
+      ODOO_UID: ${ODOO_UID:-}
+      ODOO_PASSWORD: ${ODOO_PASSWORD:-}
+      ODOO_TANK_PARENT_LOCATION_ID: ${ODOO_TANK_PARENT_LOCATION_ID:-}
+      PORTAL_API_URL: ${PORTAL_API_URL:-}
+      PORTAL_WEB_URL: ${PORTAL_WEB_URL:-}
+      PORTAL_APP_NAME: ${PORTAL_APP_NAME:-}
+      BOOTSTRAP_ADMIN_EMAILS: ${BOOTSTRAP_ADMIN_EMAILS:-}
+      VCF_URL: ${VCF_URL:-}
+      VCF_USERNAME: ${VCF_USERNAME:-}
+      VCF_PASSWORD: ${VCF_PASSWORD:-}
+      TTS_ENGINE: ${TTS_ENGINE:-off}
+      TTS_VOICE: ${TTS_VOICE:-}
+      TTS_SPEED: ${TTS_SPEED:-}
+      TTS_THREADS: ${TTS_THREADS:-}
+      LEGACY_DATABASE_URL: ${LEGACY_DATABASE_URL:-}
+    volumes:
+      # uploaded files, and the control room plan written by plan:import (FILE_STORAGE_DIR)
+      - api-files:/data/files
+      # audio of spoken sentences (TTS_CACHE_DIR)
+      - api-tts-cache:/data/tts-cache
+      # Supertonic 3 model files (TTS_MODEL_DIR); not in git, copied by hand
+      - ./storage/tts:/models/tts:ro
+      # input of plan:import (plan JSON, drawing, picture); not in git, copied by hand
+      - ./storage/plan:/plan:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then((r) => r.json()).then((b) => process.exit(b.database === 'up' ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging: *logging
+
+  web:
+    build:
+      context: ../apps/web
+      args:
+        NEXT_PUBLIC_API_URL: ${PUBLIC_URL:?set PUBLIC_URL in deploy/.env}
+        NEXT_PUBLIC_MAP_TILES_URL: ${NEXT_PUBLIC_MAP_TILES_URL:-}
+    image: timbangan-web:local
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: Asia/Jakarta
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *logging
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+      - web
+    environment:
+      TZ: Asia/Jakarta
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+      TLS_MODE: ${TLS_MODE:-auto}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # certificates, and the root certificate of Caddy's own authority (tls internal)
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *logging
+
+volumes:
+  db-data:
+  api-files:
+  api-tts-cache:
+  caddy-data:
+  caddy-config:
