@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { decodeJwt } from "jose";
 import { describe, expect, it } from "vitest";
 import { createGuards } from "../src/auth/guard.js";
+import { SyncLock } from "../src/sync/lock.js";
 import { covers, type PermissionLevel } from "../src/auth/permissions.js";
 import { testApp } from "./helpers/app.js";
 import { bearer, EVERYTHING, LOGISTICS, PASSWORD, seedPartner, seedPartnerUser, seedStaff, TRANSPORTER, VIEWER } from "./helpers/users.js";
@@ -220,7 +221,7 @@ describe("covers", () => {
 describe("permission guards", () => {
   async function guarded() {
     const context = await testApp();
-    const guards = createGuards({ config: context.config, database: context.database, now: context.clock.now, vcf: null, registryPushTimeoutMs: 5_000 });
+    const guards = createGuards({ config: context.config, database: context.database, now: context.clock.now, vcf: null, registryPushTimeoutMs: 5_000, syncLock: new SyncLock(), push: null });
     context.app.get("/test/create", { preHandler: [guards.authenticate, guards.requirePermission("vehicles", "CREATE")] }, async () => ({ ok: true }));
     context.app.get("/test/either", { preHandler: [guards.authenticate, guards.requireAnyPermission(["gate", "VIEW"], ["registrations", "VIEW"])] }, async () => ({ ok: true }));
     context.app.get("/test/internal", { preHandler: [guards.authenticate, guards.requireInternal] }, async () => ({ ok: true }));

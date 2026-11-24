@@ -56,6 +56,12 @@ const envSchema = z.object({
   FILE_STORAGE_DIR: z.string().default(".data/files"),
   // the old weighbridge database, read by `npm run legacy:import` in a read-only session
   LEGACY_DATABASE_URL: z.string().regex(/^postgres(ql)?:\/\//, "must start with postgres:// or postgresql://").optional(),
+  // the time of the daily Odoo (full) and VCF pull, HH:MM at the plant (Asia/Jakarta); empty: no daily pull
+  SYNC_DAILY_AT: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "must be a time HH:MM, 00:00 to 23:59").optional(),
+  // phone pushes: off (notifications stay in the app inbox only) or fcm (Firebase Cloud Messaging HTTP v1)
+  PUSH_PROVIDER: z.enum(["off", "fcm"], "must be off or fcm").default("off"),
+  // fcm: the service account key file (JSON) of the Firebase project, kept outside git; required when PUSH_PROVIDER=fcm
+  FCM_SERVICE_ACCOUNT_FILE: z.string().optional(),
 });
 
 export interface OdooConfig {
@@ -83,6 +89,8 @@ export type TtsConfig =
   | { engine: "off"; cacheDir: string }
   | { engine: "supertonic"; cacheDir: string; modelDir: string; voice: TtsVoice; speed: number; threads: number };
 
+export type PushConfig = { provider: "off" } | { provider: "fcm"; serviceAccountFile: string };
+
 export interface Config {
   port: number;
   host: string;
@@ -105,6 +113,9 @@ export interface Config {
   files: { dir: string };
   /** The old weighbridge database for `npm run legacy:import`; null when not set. */
   legacyDatabaseUrl: string | null;
+  /** "HH:MM" at the plant when the API pulls Odoo (full) and VCF each day; null: no daily pull. */
+  syncDailyAt: string | null;
+  push: PushConfig;
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -142,7 +153,17 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     tts: ttsConfig(e),
     files: { dir: e.FILE_STORAGE_DIR },
     legacyDatabaseUrl: e.LEGACY_DATABASE_URL ?? null,
+    syncDailyAt: e.SYNC_DAILY_AT ?? null,
+    push: pushConfig(e),
   };
+}
+
+function pushConfig(e: z.infer<typeof envSchema>): PushConfig {
+  if (e.PUSH_PROVIDER === "off") return { provider: "off" };
+  if (!e.FCM_SERVICE_ACCOUNT_FILE) {
+    throw new ConfigError("Invalid configuration:\n  FCM_SERVICE_ACCOUNT_FILE: is required when PUSH_PROVIDER=fcm (the service account key file of the Firebase project)");
+  }
+  return { provider: "fcm", serviceAccountFile: e.FCM_SERVICE_ACCOUNT_FILE };
 }
 
 function ttsConfig(e: z.infer<typeof envSchema>): TtsConfig {

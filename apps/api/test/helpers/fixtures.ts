@@ -109,7 +109,7 @@ export async function siteCode(database: Database): Promise<string> {
   return String((await database.query<{ code: string }>("select code from sites order by id limit 1"))[0]?.code);
 }
 
-type Method = "GET" | "POST" | "PUT" | "PATCH";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 type Phase3User = "logistics" | "pos" | "qc" | "pks1" | "pks2" | "angkut1" | "angkut2";
 
 /**

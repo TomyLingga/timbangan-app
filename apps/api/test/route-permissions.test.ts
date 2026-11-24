@@ -20,9 +20,12 @@ interface Row {
   needs: Need[];
   /** Refused to partner accounts whatever their levels. */
   staffOnly: boolean;
+  /** Open to every signed-in account, also a staff account without any permission; it touches only the caller's rows. */
+  anyAccount?: boolean;
 }
 
 const row = (method: Method, url: string, needs: Need[], staffOnly = false): Row => ({ method, url, needs, staffOnly });
+const anyAccount = (method: Method, url: string): Row => ({ method, url, needs: [], staffOnly: false, anyAccount: true });
 const ROUTES: Row[] = [
   row("GET", "/api/contracts", [["contracts", "VIEW"]]),
   row("POST", "/api/admin/sync/odoo", [["contracts", "EDIT"]], true),
@@ -163,6 +166,13 @@ const ROUTES: Row[] = [
   row("GET", "/api/admin/modules", [["users", "VIEW"]]),
   row("PUT", "/api/admin/users/999999/permissions", [["users", "EDIT"]]),
   row("PATCH", "/api/admin/users/999999", [["users", "EDIT"]]),
+
+  // the phone's push token and the inbox (notifications.test.ts checks that only the caller's rows are touched)
+  anyAccount("POST", "/api/devices"),
+  anyAccount("DELETE", "/api/devices/NOTATOKEN"),
+  anyAccount("GET", "/api/notifications"),
+  anyAccount("POST", "/api/notifications/999999/read"),
+  anyAccount("POST", "/api/notifications/read-all"),
 ];
 
 const BELOW: Record<PermissionLevel, PermissionLevel | null> = { VIEW: null, CREATE: "VIEW", EDIT: "CREATE" };
@@ -207,7 +217,19 @@ afterAll(async () => {
 const label = (route: Row) => `${route.method} ${route.url}`;
 
 describe("route permissions", () => {
-  it.each(ROUTES.map((route) => [label(route), route] as const))("%s refuses below its level and lets its level pass", async (_name, route) => {
+  it.each(ROUTES.filter((route) => route.anyAccount).map((route) => [label(route), route] as const))(
+    "%s is open to every signed-in account and to nobody else",
+    async (_name, route) => {
+      expect((await app.inject({ method: route.method, url: route.url, ...(route.method === "GET" ? {} : { payload: {} }) })).statusCode).toBe(401);
+      for (const headers of [await holding({}), await holding({ gate: "VIEW" }), partnerHeaders]) {
+        const response = await send(route, headers);
+        expect(response.statusCode, `${label(route)}: ${response.body}`).not.toBe(403);
+        expect(response.statusCode, `${label(route)}: ${response.body}`).not.toBe(401);
+      }
+    },
+  );
+
+  it.each(ROUTES.filter((route) => !route.anyAccount).map((route) => [label(route), route] as const))("%s refuses below its level and lets its level pass", async (_name, route) => {
     // one level below every alternative at once; an account needs some permission to get past NO_ACCESS
     const below: Permissions = {};
     for (const [moduleCode, level] of route.needs) {
@@ -238,7 +260,7 @@ describe("route permissions", () => {
 
   it("answers NO_ACCESS on every route to a staff account without any permission", async () => {
     const nothing = await holding({});
-    for (const route of ROUTES) {
+    for (const route of ROUTES.filter((candidate) => !candidate.anyAccount)) {
       const response = await send(route, nothing);
       expect(response.statusCode, label(route)).toBe(403);
       expect(response.json().error.code, label(route)).toBe("NO_ACCESS");

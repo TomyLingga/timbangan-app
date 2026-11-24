@@ -17,20 +17,19 @@ export function registerSyncRoutes(app: FastifyInstance, context: AppContext, gu
   const syncing = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("contracts", "EDIT")] };
   // the history holds both the Odoo and the driver registry runs
   const history = { preHandler: [guards.authenticate, guards.requireInternal, guards.requireAnyPermission(["contracts", "VIEW"], ["drivers", "VIEW"])] };
-  // One run at a time in this process. `npm run sync:odoo` in another process is not seen here.
-  let running = false;
-
+  // One run at a time in this process, shared with the daily pull (src/sync/daily.ts). `npm run sync:odoo` in
+  // another process is not seen here.
   app.post("/api/admin/sync/odoo", syncing, async (request) => {
     if (!context.config.odoo) throw notConfigured("Odoo");
-    if (running) throw new AppError(409, "SYNC_RUNNING", "Sinkronisasi Odoo sedang berjalan.");
-    running = true;
+    const release = context.syncLock.acquire("odoo");
+    if (!release) throw new AppError(409, "SYNC_RUNNING", "Sinkronisasi Odoo sedang berjalan.");
     try {
       return await syncOdoo(context.database, new OdooClient(context.config.odoo), context.now, { tankParentLocationId: context.config.odooTankParentLocationId });
     } catch (error) {
       request.log.error({ err: error }, "odoo sync failed");
       throw new AppError(502, "SYNC_FAILED", "Sinkronisasi Odoo gagal. Lihat riwayat sinkronisasi.");
     } finally {
-      running = false;
+      release();
     }
   });
 

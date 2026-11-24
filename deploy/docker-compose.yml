@@ -61,6 +61,10 @@ services:
       VCF_URL: ${VCF_URL:-}
       VCF_USERNAME: ${VCF_USERNAME:-}
       VCF_PASSWORD: ${VCF_PASSWORD:-}
+      SYNC_DAILY_AT: ${SYNC_DAILY_AT:-}
+      PUSH_PROVIDER: ${PUSH_PROVIDER:-off}
+      # read only when PUSH_PROVIDER=fcm
+      FCM_SERVICE_ACCOUNT_FILE: /secrets/firebase/service-account.json
       TTS_ENGINE: ${TTS_ENGINE:-off}
       TTS_VOICE: ${TTS_VOICE:-}
       TTS_SPEED: ${TTS_SPEED:-}
@@ -75,6 +79,8 @@ services:
       - ./storage/tts:/models/tts:ro
       # input of plan:import (plan JSON, drawing, picture); not in git, copied by hand
       - ./storage/plan:/plan:ro
+      # service account key of the Firebase project (PUSH_PROVIDER=fcm); not in git, copied by hand
+      - ./storage/firebase:/secrets/firebase:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then((r) => r.json()).then((b) => process.exit(b.database === 'up' ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 30s

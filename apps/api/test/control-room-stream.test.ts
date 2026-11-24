@@ -3,6 +3,7 @@
 import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { createGuards } from "../src/auth/guard.js";
+import { SyncLock } from "../src/sync/lock.js";
 import { registerControlRoomRoutes } from "../src/control-room/routes.js";
 import { StateWatcher } from "../src/control-room/watcher.js";
 import { errorHandler, notFoundHandler } from "../src/errors.js";
@@ -126,7 +127,7 @@ describe("GET /api/control-room/stream", () => {
     app.decorateRequest("account", null);
     // a still clock: the minutes in the state do not tick during the test
     const now = new Date("2026-11-20T03:00:00Z");
-    const context = { config: ctx.config, database: ctx.database, now: () => now, vcf: null, registryPushTimeoutMs: 0 };
+    const context = { config: ctx.config, database: ctx.database, now: () => now, vcf: null, registryPushTimeoutMs: 0, syncLock: new SyncLock(), push: null };
     const { watcher } = registerControlRoomRoutes(app, context, createGuards(context), { intervalMs: 40, heartbeatMs: 60_000 });
     const address = await app.listen({ port: 0, host: "127.0.0.1" });
     return { ...ctx, base, headers, watcher, address, close: () => app.close() };

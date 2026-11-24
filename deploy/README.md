@@ -49,7 +49,14 @@ Server tidak memerlukan Node.js. Node 24 ada di dalam image API dan web.
 4. Buat folder untuk berkas yang tidak masuk git:
 
    ```sh
-   mkdir -p storage/tts storage/plan storage/backups
+   mkdir -p storage/tts storage/plan storage/firebase storage/backups
+   ```
+
+   Bila notifikasi push dipakai (`PUSH_PROVIDER=fcm`), salin kunci service account proyek Firebase ke `deploy/storage/firebase/service-account.json`. Berkas ini rahasia dan tidak masuk git. Batasi aksesnya ke pengguna yang menjalankan API di dalam container (`node`, uid 1000):
+
+   ```sh
+   sudo chown 1000:1000 storage/firebase/service-account.json
+   sudo chmod 600 storage/firebase/service-account.json
    ```
 
 5. Bila suara timbangan dipakai (`TTS_ENGINE=supertonic`), salin tujuh berkas model Supertonic 3 (sekitar 139 MB) dari komputer pengembangan, folder `apps/api/storage/tts/supertonic3/`, langsung ke `deploy/storage/tts/` di server (tanpa subfolder):
@@ -172,6 +179,8 @@ Sertifikat akar dan kuncinya tersimpan di volume `caddy-data`. Bila volume itu h
 
 Yang sudah berjalan sendiri di dalam proses API, tanpa jadwal di host:
 
+- Tarik data Odoo (semua kontrak) lalu VCF, sekali sehari pada jam `SYNC_DAILY_AT` waktu pabrik (`apps/api/src/sync/daily.ts`). Lihat [Jadwal tarik data](#jadwal-tarik-data-odoo-dan-vcf).
+- Pemberitahuan: tiap 5 detik API membuat pemberitahuan untuk permintaan keputusan yang baru dan, bila `PUSH_PROVIDER=fcm`, mengirim push yang tertunda (`apps/api/src/notifications/sender.ts`).
 - Penghapusan titik GPS yang melewati masa simpan: pertama 5 menit setelah API mulai, lalu sekali sehari (`apps/api/src/gps/retention.ts`). Masa simpannya diatur di aplikasi.
 - Pembuatan audio kalimat tetap saat API mulai, bila suara aktif.
 - Kedaluwarsa trip dihitung saat data trip dibaca, bukan oleh jadwal.
@@ -183,8 +192,8 @@ Alat baris perintah dijalankan di container API yang sedang berjalan. Di dalam i
 |---|---|---|
 | Migrasi database | `docker compose exec api node dist/cli/migrate.js` | Otomatis setiap container API mulai; perintah ini hanya bila perlu manual |
 | Buat akun | `docker compose exec api node dist/cli/user-create.js --username <u> --full-name "<nama>" --kind INTERNAL [--admin]` | Bila perlu. Untuk akun partner: `--kind PARTNER --partner-id <id>` |
-| Sinkron Odoo | `docker compose exec api node dist/cli/sync-odoo.js` (tambahkan `--full` untuk membaca semua kontrak) | Lihat catatan jadwal di bawah |
-| Sinkron VCF | `docker compose exec api node dist/cli/sync-vcf.js` | Lihat catatan jadwal di bawah |
+| Sinkron Odoo | `docker compose exec api node dist/cli/sync-odoo.js` (tambahkan `--full` untuk membaca semua kontrak) | Hanya bila perlu di luar jadwal harian |
+| Sinkron VCF | `docker compose exec api node dist/cli/sync-vcf.js` | Hanya bila perlu di luar jadwal harian |
 | Impor data lama | `docker compose exec api node dist/cli/legacy-import.js [--dry-run] [--since=YYYY-MM-DD] [--only=trips,exceptions,vehicles,seals,cards] [--resume]` | Sekali, saat peralihan. Perlu `LEGACY_DATABASE_URL` |
 | Saldo awal kontrak | `docker compose exec api node dist/cli/cutover-opening.js [--dry-run] [--again] [--stale-ok]` | Sekali, pada hari peralihan, setelah impor data lama dan `sync-odoo.js --full` |
 | Impor denah | `docker compose exec api node dist/control-room/plan-import.js /plan/<berkas>.json` | Saat denah berubah |
@@ -197,15 +206,13 @@ docker compose exec -e NEW_USER_PASSWORD api node dist/cli/user-create.js --user
 unset NEW_USER_PASSWORD
 ```
 
-### Jadwal sinkron Odoo dan VCF
+### Jadwal tarik data Odoo dan VCF
 
-Kode dan dokumentasi proyek tidak menyebut seberapa sering `sync-odoo.js` dan `sync-vcf.js` harus berjalan, dan API tidak menjalankannya sendiri. Keduanya juga bisa dijalankan dari web (tombol "Ambil dari Odoo" dan "Ambil dari VCF"). Bila diputuskan perlu jadwal, pasang di cron host. Contoh baris crontab; isi menit dan jam sesuai keputusan:
+API menarik data sendiri sekali sehari pada jam `SYNC_DAILY_AT` (format `HH:MM`, waktu pabrik; di `.env.example` diisi `18:15`). Urutannya Odoo dengan semua kontrak, lalu VCF, masing-masing hanya bila sudah diatur di `.env`. Tidak perlu cron di host. Kosongkan `SYNC_DAILY_AT` untuk mematikan jadwal.
 
-```
-<menit> <jam> * * * cd /opt/timbangan-registrasi/deploy && docker compose exec -T api node dist/cli/sync-odoo.js >> storage/sync-odoo.log 2>&1
-```
+Tombol "Ambil dari Odoo" dan "Ambil dari VCF" di web tetap bisa dipakai kapan saja. Jadwal harian dan tombol memakai penjaga yang sama: tarikan yang sedang berjalan tidak dimulai dua kali. Bila tarikan harian gagal, galatnya tercatat di log API dan di riwayat tarikan; percobaan berikutnya esok hari.
 
-API hanya mencegah dua sinkron bersamaan dari web. Sinkron dari cron tidak terlihat olehnya, jadi bisa berjalan bersamaan dengan sinkron yang dimulai dari tombol.
+Alat baris perintah `sync-odoo.js` dan `sync-vcf.js` berjalan di proses lain dan tidak terlihat oleh penjaga itu, jadi jangan dijalankan bersamaan dengan jam jadwal.
 
 ### Denah ruang kontrol
 
@@ -283,6 +290,7 @@ docker compose run --rm --no-deps -T api tar xzf - -C /data/files < storage/back
 | Cache audio suara | volume `timbangan_api-tts-cache` | `/data/tts-cache` (`TTS_CACHE_DIR`); boleh hilang, dibuat ulang |
 | Model suara | folder `deploy/storage/tts/` | `/models/tts`, baca-saja (`TTS_MODEL_DIR`) |
 | Bahan impor denah | folder `deploy/storage/plan/` | `/plan`, baca-saja |
+| Kunci Firebase | folder `deploy/storage/firebase/` | `/secrets/firebase`, baca-saja; dipakai bila `PUSH_PROVIDER=fcm` |
 | Sertifikat Caddy | volume `timbangan_caddy-data` | `/data` di container `proxy` |
 | Pengaturan dan rahasia | berkas `deploy/.env` | tidak masuk git |
 
@@ -321,3 +329,4 @@ Berkas di folder ini ditulis di komputer tanpa Docker. Belum ada yang dijalankan
 - Izin tulis user `node` pada volume `api-files` dan `api-tts-cache`.
 - Backup dan pemulihan dengan perintah di atas.
 - Program timbangan, aplikasi ponsel, dan alat GPS yang memanggil alamat lewat Caddy, dengan HTTP maupun HTTPS.
+- Tarik data harian pada jam `SYNC_DAILY_AT` di server yang berjalan, dan push Firebase dari dalam container (akses keluar ke Google, berkas kunci terpasang baca-saja).

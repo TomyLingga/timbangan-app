@@ -13,6 +13,7 @@ import type { Orm } from "../db/client.js";
 import { deliveryOrders, erpContracts, partners, products, registrationAllocations, spjDocuments, tripAllocations, trips } from "../db/schema.js";
 import { AppError, duplicate, invalid, invalidState, notFound } from "../errors.js";
 import { dateText, idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
+import { notifyDeliveryOrderSent } from "../notifications/service.js";
 import { nextDoNumber } from "../numbering.js";
 import { defaultSite, readSetting } from "../settings.js";
 import { ARRIVED_STATUSES, expireDueTrips, loadTrips } from "../trips/view.js";
@@ -400,6 +401,8 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
       if (!(await isTransporter(tx, transporterId))) throw invalid("transporterId", "Transporter harus partner transporter.");
       await tx.update(deliveryOrders).set({ status: "SENT", transporterId, sentAt: now, updatedAt: now }).where(eq(deliveryOrders.id, id));
       await audit(tx, request, now, id, "DO_SENT", { status: current.status }, { status: "SENT", transporterId });
+      // the transporter's accounts see it in their inbox, and on their phones once the sender loop runs
+      await notifyDeliveryOrderSent(tx, { id, doNo: current.doNo, siteId: current.siteId, transporterId }, now);
       return one(tx, id, account);
     });
     return { deliveryOrder };

@@ -590,6 +590,52 @@ export const exceptions = pgTable("exceptions", {
   stationId: integer("station_id"),
 });
 
+// --- Phase 5: notifications (tables from 0001, created_at of a delivery from 0014) ---
+
+export const DEVICE_PLATFORMS = ["ANDROID", "IOS", "WEB"] as const;
+export type DevicePlatform = (typeof DEVICE_PLATFORMS)[number];
+
+/** One installed app that receives pushes: its FCM token belongs to the account last signed in on it. */
+export const userDevices = pgTable("user_devices", {
+  id: id(),
+  userId: bigint("user_id", { mode: "number" }).notNull(),
+  platform: text("platform", { enum: DEVICE_PLATFORMS }).notNull(),
+  pushToken: text("push_token").notNull(),
+  appVersion: text("app_version"),
+  isActive: boolean("is_active").notNull().default(true),
+  lastSeenAt: timestamptz("last_seen_at").notNull().defaultNow(),
+});
+
+export const NOTIFICATION_SEVERITIES = ["INFO", "WARNING", "ALARM"] as const;
+
+export const notifications = pgTable("notifications", {
+  id: id(),
+  siteId: smallint("site_id"),
+  type: text("type").notNull(),
+  severity: text("severity", { enum: NOTIFICATION_SEVERITIES }).notNull().default("INFO"),
+  title: text("title").notNull(),
+  body: text("body").notNull(),
+  data: jsonb("data").$type<Record<string, unknown>>().notNull().default({}),
+  exceptionId: bigint("exception_id", { mode: "number" }),
+  tripId: bigint("trip_id", { mode: "number" }),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
+/** One recipient of a notification: its inbox entry (IN_APP) or one push to one device (PUSH). */
+export const notificationDeliveries = pgTable("notification_deliveries", {
+  id: id(),
+  notificationId: bigint("notification_id", { mode: "number" }).notNull(),
+  userId: bigint("user_id", { mode: "number" }).notNull(),
+  deviceId: bigint("device_id", { mode: "number" }),
+  channel: text("channel", { enum: ["PUSH", "IN_APP"] }).notNull(),
+  sentAt: timestamptz("sent_at"),
+  providerRef: text("provider_ref"),
+  error: text("error"),
+  readAt: timestamptz("read_at"),
+  // added by 0014
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+});
+
 export const weighbridgeRequests = pgTable("weighbridge_requests", {
   stationId: integer("station_id").notNull(),
   requestId: text("request_id").notNull(),

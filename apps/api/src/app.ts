@@ -26,6 +26,10 @@ import { scheduleGpsRetention } from "./gps/retention.js";
 import { registerGpsShareRoutes } from "./gps/share-routes.js";
 import { registerHistoryRoutes } from "./history/routes.js";
 import { registerLookupRoutes } from "./lookup/routes.js";
+import { fcmSenderFromFile } from "./notifications/fcm.js";
+import type { PushSender } from "./notifications/push.js";
+import { registerNotificationRoutes } from "./notifications/routes.js";
+import { scheduleNotifications } from "./notifications/sender.js";
 import { registerProductRoutes } from "./products/routes.js";
 import { registerSyncRoutes } from "./odoo/routes.js";
 import { registerTripRoutes } from "./trips/routes.js";
@@ -37,6 +41,8 @@ import { registerRegistrationRoutes } from "./registrations/routes.js";
 import { registerReportRoutes } from "./reports/routes.js";
 import { registerRfidCardRoutes } from "./rfid-cards/routes.js";
 import { registerStationRoutes } from "./stations/routes.js";
+import { runDailySync, scheduleDailySync } from "./sync/daily.js";
+import { SyncLock } from "./sync/lock.js";
 import { registerUserAdminRoutes } from "./users/routes.js";
 import { type VcfClient, vcfClientFor } from "./vcf/client.js";
 import { registerVcfRoutes } from "./vcf/routes.js";
@@ -68,6 +74,14 @@ export interface AppOptions {
   warmSpeech?: boolean;
   /** Deletes GPS points past their retention once a day while the server listens (the server does; tests do not). */
   gpsRetention?: boolean;
+  /** Pulls Odoo and VCF each day at SYNC_DAILY_AT while the server listens (the server does; tests do not). */
+  dailySync?: boolean;
+  /** Runs the notification loop while the server listens (the server does; tests do not). */
+  notifications?: boolean;
+  /** The push provider; by default the one PUSH_PROVIDER names (none when off). Tests pass their own or null. */
+  pushSender?: PushSender | null;
+  /** Tests pass one to share it with a daily pull they run by hand. */
+  syncLock?: SyncLock;
 }
 
 /** Everything a route needs, built once per application. */
@@ -78,6 +92,10 @@ export interface AppContext {
   /** One client for the whole process, so its login token is reused; null without VCF_URL. */
   vcf: VcfClient | null;
   registryPushTimeoutMs: number;
+  /** One Odoo and one VCF pull at a time in this process: the web buttons and the daily pull. */
+  syncLock: SyncLock;
+  /** Null when PUSH_PROVIDER=off or the key file could not be read: pushes then stay pending. */
+  push: PushSender | null;
   speech: { engine: SpeechEngine; cache: SpeechCache };
 }
 
@@ -87,13 +105,26 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     // address it appended to X-Forwarded-For. A hop count is not used: Fastify 5 treats it as trusting nobody.
     trustProxy: options.config.trustProxy ? (_address: string, hop: number) => hop === 0 : false,
     logger: options.logger === false ? false : { ...options.logger, redact: { paths: REDACT_PATHS, censor: "[REDACTED]" } },
+    // an FCM token in DELETE /api/devices/:pushToken is longer than the default 100 characters
+    maxParamLength: 4096,
   });
+  let push: PushSender | null = options.pushSender ?? null;
+  if (options.pushSender === undefined && options.config.push.provider === "fcm") {
+    try {
+      push = await fcmSenderFromFile(options.config.push.serviceAccountFile);
+    } catch (error) {
+      // the API still starts: notifications stay in the inbox and pushes wait until the file is fixed
+      app.log.error({ reason: error instanceof Error ? error.message : String(error) }, "push disabled: the FCM service account file is not usable");
+    }
+  }
   const context: AppContext = {
     config: options.config,
     database: options.database,
     now: options.now ?? (() => new Date()),
     vcf: vcfClientFor(options.config.vcf),
     registryPushTimeoutMs: options.registryPushTimeoutMs ?? DEFAULT_REGISTRY_PUSH_TIMEOUT_MS,
+    syncLock: options.syncLock ?? new SyncLock(),
+    push,
     speech: { engine: options.speechEngine ?? speechEngineFor(options.config.tts), cache: new SpeechCache(options.config.tts.cacheDir) },
   };
 
@@ -156,6 +187,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerGpsMasterRoutes(app, context, guards);
   registerGpsShareRoutes(app, context, guards);
   registerGpsReadRoutes(app, context, guards);
+  registerNotificationRoutes(app, context, guards);
 
   if (options.gpsRetention) {
     let stop: (() => void) | null = null;
@@ -164,6 +196,32 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         info: (data, message) => app.log.info(data, message),
         warn: (data, message) => app.log.warn(data, message),
       });
+    });
+    app.addHook("onClose", async () => stop?.());
+  }
+
+  if (options.dailySync) {
+    let stop: (() => void) | null = null;
+    app.addHook("onListen", async () => {
+      const log = {
+        info: (data: object, message: string) => app.log.info(data, message),
+        warn: (data: object, message: string) => app.log.warn(data, message),
+        error: (data: object, message: string) => app.log.error(data, message),
+      };
+      stop = scheduleDailySync(context.config.syncDailyAt, context.now, () => runDailySync(context, log), log);
+      if (stop) app.log.info({ at: context.config.syncDailyAt, odoo: context.config.odoo !== null, vcf: context.vcf !== null }, "daily Odoo and VCF pull scheduled");
+    });
+    app.addHook("onClose", async () => stop?.());
+  }
+
+  if (options.notifications) {
+    let stop: (() => Promise<void>) | null = null;
+    app.addHook("onListen", async () => {
+      stop = scheduleNotifications(context.database.db, context.now, context.push, {
+        info: (data, message) => app.log.info(data, message),
+        warn: (data, message) => app.log.warn(data, message),
+      });
+      app.log.info({ push: context.push?.provider ?? "off" }, "notification loop started");
     });
     app.addHook("onClose", async () => stop?.());
   }

@@ -26,7 +26,28 @@ describe("loadConfig", () => {
       tts: { engine: "off", cacheDir: ".data/tts-cache" },
       files: { dir: ".data/files" },
       legacyDatabaseUrl: null,
+      syncDailyAt: null,
+      push: { provider: "off" },
     });
+  });
+
+  it("takes the daily pull time as HH:MM and refuses anything else", () => {
+    expect(loadConfig({ ...base, SYNC_DAILY_AT: "18:15" }).syncDailyAt).toBe("18:15");
+    expect(loadConfig({ ...base, SYNC_DAILY_AT: "00:00" }).syncDailyAt).toBe("00:00");
+    expect(loadConfig({ ...base, SYNC_DAILY_AT: "" }).syncDailyAt).toBeNull();
+    for (const bad of ["18.15", "24:00", "7:05", "18:60", "18:15:00", "jam enam"]) {
+      expect(() => loadConfig({ ...base, SYNC_DAILY_AT: bad }), bad).toThrow(/SYNC_DAILY_AT: must be a time HH:MM/);
+    }
+  });
+
+  it("reads the push provider, off by default, and wants the key file for fcm", () => {
+    expect(loadConfig({ ...base, PUSH_PROVIDER: "fcm", FCM_SERVICE_ACCOUNT_FILE: "C:/keys/service-account.json" }).push).toEqual({
+      provider: "fcm",
+      serviceAccountFile: "C:/keys/service-account.json",
+    });
+    expect(loadConfig({ ...base, FCM_SERVICE_ACCOUNT_FILE: "C:/keys/service-account.json" }).push).toEqual({ provider: "off" });
+    expect(() => loadConfig({ ...base, PUSH_PROVIDER: "fcm" })).toThrow(/FCM_SERVICE_ACCOUNT_FILE/);
+    expect(() => loadConfig({ ...base, PUSH_PROVIDER: "apns" })).toThrow(/PUSH_PROVIDER/);
   });
 
   it("reads TRUST_PROXY as true or false, off by default", () => {
