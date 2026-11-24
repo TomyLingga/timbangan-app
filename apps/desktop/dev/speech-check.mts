@@ -4,7 +4,7 @@
 //
 //   npm run speech:check                      muted (Chromium --mute-audio), API at http://localhost:3100
 //   npm run speech:check -- --audible         through the speakers
-//   npm run speech:check -- --api http://192.168.1.10:3100
+//   npm run speech:check -- --api http://server-name:3100
 //   npm run speech:check -- --autoplay-policy document-user-activation-required   Chromium's own default, to compare
 //
 // The station key comes from SPEECH_CHECK_STATION_KEY. Without it the check signs in with DEV_ADMIN_USERNAME and
