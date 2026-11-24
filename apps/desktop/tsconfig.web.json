@@ -5,5 +5,5 @@
     "jsx": "react-jsx",
     "types": []
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/bridge.ts"]
+  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/bridge.ts", "dev/speech-check/page.ts", "dev/speech-check/marks.ts"]
 }

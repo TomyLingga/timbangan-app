@@ -42,6 +42,19 @@ npm run build        # build produksi ke out/ (bukan installer)
 npm start            # menjalankan hasil build
 ```
 
+## Cek suara
+
+`npm run speech:check` membuktikan suara API benar-benar diputar di jendela Electron. Ia membangun jendela tersembunyi dari kode program sendiri (klien API proses utama, preload, `audio.ts`, antrean suara, pengaturan jendela yang sama), lalu memutar empat potongan dua kali terhadap API yang sedang jalan: kalimat plat dan kalimat dua berat (angkanya acak, jadi putaran pertama membuat suara baru di API dan putaran kedua diambil dari simpanannya), satu kalimat yang sengaja terlalu panjang sehingga tidak bersuara dan harus diganti nada, dan kalimat penolakan dari jawaban API untuk kartu tak dikenal. Tiap potongan dicetak lama ambil, ukuran, durasi hasil decode, lama sampai `onended`, dan urutan selesainya. Kode keluar 0 hanya bila semua lolos.
+
+```sh
+npm run speech:check                     # tanpa bunyi (--mute-audio), API http://localhost:3100
+npm run speech:check -- --audible        # lewat speaker
+npm run speech:check -- --api http://alamat-api:3100
+npm run speech:check -- --autoplay-policy document-user-activation-required   # pembanding: kebijakan bawaan Chromium
+```
+
+Kunci stasiun diambil dari `SPEECH_CHECK_STATION_KEY`. Bila kosong, cek masuk dengan `DEV_ADMIN_USERNAME` dan `DEV_ADMIN_PASSWORD` dari `../api/.env` (`--api-env` untuk berkas lain), memakai stasiun `WB-CEK-SUARA` (dibuat sekali, nonaktif di luar cek), memberinya kunci baru, menyalakannya selama cek, lalu mematikannya dan keluar. Tidak ada yang ditimbang atau didaftarkan. Hasil build cek ada di folder temp (`timbangan-speech-check`), bukan di `out/`.
+
 ## Memakai API dan timbangan sungguhan
 
 1. Di web, buat stasiun timbangan dan kuncinya di halaman Stasiun. Kunci hanya tampil sekali.

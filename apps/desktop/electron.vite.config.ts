@@ -6,9 +6,9 @@ import type { Plugin } from "vite";
 /**
  * The Content Security Policy of the window, as a meta tag. The built program loads only its own files. The
  * development server needs inline styles and scripts (React refresh) and its websocket, so it gets a looser policy;
- * it is never shipped.
+ * it is never shipped. The speech check (dev/speech-check) builds its page with the same plugin.
  */
-function contentSecurityPolicy(): Plugin {
+export function contentSecurityPolicy(): Plugin {
   const strict = [
     "default-src 'none'",
     "script-src 'self'",

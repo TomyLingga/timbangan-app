@@ -14,7 +14,9 @@ import { createSerialScale, loadSerialPort } from "./scale/serial";
 import { createSimulatorScale, type SimulatorScale } from "./scale/simulator";
 import { createTcpScale } from "./scale/tcp";
 import { createSettingsStore, parseSettings, type SecretCodec, toggleTheme } from "./settings";
+import { speechAudioFor } from "./speech";
 import { createStation, type Station } from "./station";
+import { stationWebPreferences } from "./window-options";
 
 const DEMO = !app.isPackaged && process.argv.includes("--demo");
 /** The key of dev/fake-api-server.mts; used only by the demo run. */
@@ -121,10 +123,7 @@ const settingsOpen = () => stationKey === null || Date.now() < settingsUnlockedU
 function registerIpc(): void {
   ipcMain.handle("station:ready", (event) => (fromWindow(event) && station ? screenView(station.view()) : null));
 
-  ipcMain.handle("speech:audio", async (event, text: unknown) => {
-    if (!fromWindow(event) || typeof text !== "string" || !text.trim() || text.length > 300 || !api) return null;
-    return api.speechAudio(text);
-  });
+  ipcMain.handle("speech:audio", (event, text: unknown) => (fromWindow(event) ? speechAudioFor(api, text) : null));
 
   ipcMain.handle("settings:needPin", (event) => !fromWindow(event) || stationKey !== null);
 
@@ -211,14 +210,8 @@ function createWindow(): BrowserWindow {
     show: false,
     title: "Timbangan",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true,
-      spellcheck: false,
+      ...stationWebPreferences(join(__dirname, "../preload/index.js")),
       devTools: !app.isPackaged,
-      autoplayPolicy: "no-user-gesture-required",
       // demo screenshots at an exact page size, whatever the size of this computer's display
       offscreen,
       zoomFactor: zoom,

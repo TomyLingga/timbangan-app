@@ -5,23 +5,47 @@ import { createSpeechQueue, type SpeechQueue } from "../../shared/speech-queue";
 let context: AudioContext | null = null;
 const audio = () => (context ??= new AudioContext());
 
-async function play(data: ArrayBuffer): Promise<void> {
+/** How long `resume()` may take. Chromium leaves it pending for good when the window may not start audio. */
+const RESUME_LIMIT_MS = 2_000;
+/** Time allowed after the end of a segment for its `ended` event before the segment is given up. */
+const END_MARGIN_MS = 2_000;
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The context, running. Throws when it does not start, so the queue moves on (and shows the text) instead of
+ * waiting on that segment for ever.
+ */
+async function runningContext(): Promise<AudioContext> {
   const ctx = audio();
-  if (ctx.state === "suspended") await ctx.resume();
+  if (ctx.state !== "running") await Promise.race([ctx.resume(), wait(RESUME_LIMIT_MS)]);
+  if (ctx.state !== "running") throw new Error(`audio context is ${ctx.state}`);
+  return ctx;
+}
+
+async function play(data: ArrayBuffer): Promise<void> {
+  const ctx = await runningContext();
   const buffer = await ctx.decodeAudioData(data.slice(0));
-  await new Promise<void>((resolve) => {
+  await new Promise<void>((resolve, reject) => {
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
-    source.onended = () => resolve();
+    const timer = setTimeout(() => {
+      source.onended = null;
+      source.stop();
+      reject(new Error("speech segment did not end"));
+    }, buffer.duration * 1000 + END_MARGIN_MS);
+    source.onended = () => {
+      clearTimeout(timer);
+      resolve();
+    };
     source.start();
   });
 }
 
 /** Two short soft beeps: there is text on screen to read. */
 async function tone(): Promise<void> {
-  const ctx = audio();
-  if (ctx.state === "suspended") await ctx.resume();
+  const ctx = await runningContext();
   const start = ctx.currentTime + 0.02;
   for (const [offset, frequency] of [
     [0, 880],

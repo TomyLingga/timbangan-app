@@ -4,5 +4,6 @@
     "lib": ["ES2023"],
     "types": ["node"]
   },
-  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "test/**/*", "dev/**/*.ts", "dev/**/*.mts", "electron.vite.config.ts", "vitest.config.mts"]
+  "include": ["src/main/**/*", "src/preload/**/*", "src/shared/**/*", "test/**/*", "dev/**/*.ts", "dev/**/*.mts", "electron.vite.config.ts", "vitest.config.mts"],
+  "exclude": ["dev/speech-check/page.ts"]
 }
