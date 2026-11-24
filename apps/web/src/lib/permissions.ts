@@ -13,7 +13,6 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   contracts: "Kontrak",
   drivers: "Supir",
   vehicles: "Kendaraan",
-  destinations: "Tujuan",
   delivery_orders: "Delivery Order",
   registrations: "Registrasi",
   gate: "Pos registrasi",
@@ -77,8 +76,6 @@ export const canAddDriver = (user: MaybeUser) => isStaff(user) && canCreate(user
 export const canSyncVcf = (user: MaybeUser) => isStaff(user) && canEdit(user, "drivers");
 export const canAddVehicle = (user: MaybeUser) => isStaff(user) && canCreate(user, "vehicles");
 export const canEditVehicle = (user: MaybeUser) => isStaff(user) && canEdit(user, "vehicles");
-export const canAddDestination = (user: MaybeUser) => canCreate(user, "destinations");
-export const canEditDestination = (user: MaybeUser) => canEdit(user, "destinations");
 
 // --- delivery orders ------------------------------------------------------------
 

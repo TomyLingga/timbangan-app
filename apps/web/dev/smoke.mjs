@@ -479,9 +479,11 @@ async function run(browser) {
   const staffModules = await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].map((s) => s.name).join(' ')`);
   check(
     "a staff account is offered every module, each with its own levels",
-    ["contracts", "drivers", "vehicles", "destinations", "delivery_orders", "registrations", "gate", "rfid_cards", "users", "weighbridge", "approvals", "qc", "qc_approvals", "security_check", "unloading", "loading", "sealing", "reports"].every((code) =>
+    ["contracts", "drivers", "vehicles", "delivery_orders", "registrations", "gate", "rfid_cards", "users", "weighbridge", "approvals", "qc", "qc_approvals", "security_check", "unloading", "loading", "sealing", "reports"].every((code) =>
       (staffModules ?? "").includes(`permission-${code}`),
     ) &&
+      // the destinations master is switched off (API migration 0009)
+      !(staffModules ?? "").includes("permission-destinations") &&
       (await browser.evaluate(`[...document.querySelector('[role="dialog"] select[name="permission-contracts"]').options].map((o) => o.value).join(',') === ',VIEW,EDIT'`)),
     staffModules ?? "",
   );
@@ -1156,8 +1158,42 @@ async function phaseFour(browser) {
   // 33. Laporan: both reports, and the CSV.
   await browser.click('a[href="/laporan"]');
   check("/laporan shows the realisation per contract", Boolean(await browser.waitFor(`location.pathname === '/laporan' && ${visibleRows} > 0 && ${rowText("0125/CONTOH")} !== ''`)));
+  check(
+    "by default only contracts that moved are listed, and the header counts them",
+    !(await browser.evaluate("document.body.innerText.includes('ZZ-SEPI-')")) && Boolean(await browser.hasText("kontrak bergerak")) && Boolean(await browser.hasText("truk selesai")),
+  );
+  await browser.click('button[role="switch"]');
+  check(
+    "the switch lists every contract, 50 per page, and goes into the address",
+    Boolean(await browser.waitFor(`${visibleRows} === 50 && /^1–50 dari \\d+ kontrak$/.test(${textOf('[data-testid="pager"] [role="status"]')}) && new URLSearchParams(location.search).get('all') === '1'`)),
+  );
+  await browser.click("Berikutnya");
+  check(
+    "the next page shows the following rows and keeps its number in the address",
+    Boolean(await browser.waitFor(`/^51–\\d+ dari \\d+ kontrak$/.test(${textOf('[data-testid="pager"] [role="status"]')}) && new URLSearchParams(location.search).get('page') === '2'`)),
+  );
+  await browser.goto(`${WEB}/laporan${await browser.evaluate("location.search")}`);
+  check(
+    "a reload keeps the page and the switch",
+    Boolean(await browser.waitFor(`/^51–/.test(${textOf('[data-testid="pager"] [role="status"]')}) && document.querySelector('button[role="switch"]')?.getAttribute('aria-checked') === 'true'`)),
+  );
+  await browser.click("Sebelumnya");
+  check("the previous page goes back to the first rows", Boolean(await browser.waitFor(`/^1–50 /.test(${textOf('[data-testid="pager"] [role="status"]')}) && !new URLSearchParams(location.search).has('page')`)));
+  await browser.click('button[role="switch"]');
+  await browser.waitFor(`!new URLSearchParams(location.search).has('all')`);
   await browser.click("Per truk");
   check("the trip report lists the weighed trucks", Boolean(await browser.waitFor(`${rowText("ZZ0004CTH")}.includes('24.020 kg') || ${rowText("ZZ0004CTH")}.includes('15.020 kg')`)));
+  const searchesBefore = await stat("GET /api/reports/trips");
+  await browser.type('input[type="search"]', "zz 0004", { perKey: true });
+  check(
+    "the truck search goes to the server, plate typed with a space",
+    Boolean(await browser.waitFor(`${visibleRows} > 0 && [...document.querySelectorAll('tbody tr')].every((row) => row.innerText.includes('ZZ0004CTH')) && new URLSearchParams(location.search).get('q') === 'zz 0004'`)) &&
+      (await stat("GET /api/reports/trips")) > searchesBefore,
+  );
+  await browser.fill('input[type="search"]', "");
+  await browser.waitFor(`!new URLSearchParams(location.search).has('q')`);
+  // the cleared search reaches the server after the debounce; count the CSV request only after that one
+  await sleep(800);
   const csvBefore = await stat("GET /api/reports/trips");
   await browser.click("Unduh CSV");
   await sleep(800);
@@ -1202,6 +1238,12 @@ async function phaseFive(browser) {
   const pfad = await browser.evaluate(rowText("TK-201"));
   check("a tank from Odoo shows the product name Odoo keeps and its source", pfad.includes("PFAD") && pfad.includes("Odoo"), pfad);
   check("the page says the tanks are kept in Odoo", Boolean(await browser.hasText("Data tangki dikelola di Odoo.")));
+  const unlabelled = await browser.evaluate(rowText("TK-LAMA"));
+  check(
+    "a tank without product and label is marked as not used by the forms, a labelled one is not",
+    unlabelled.includes("Tanpa produk dan label") && unlabelled.includes("Tidak dipakai di form (tanpa label)") && !pfad.includes("Tidak dipakai di form"),
+    unlabelled,
+  );
   await browser.type('main input[type="search"]', "pfad");
   check("search narrows the tanks", (await browser.waitFor(`location.search.includes('q=pfad') && ${visibleRows} === 1 && ${visibleRows}`)) === 1);
   await browser.goto(`${WEB}/tangki`);

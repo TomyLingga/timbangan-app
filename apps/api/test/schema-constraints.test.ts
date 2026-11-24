@@ -74,8 +74,8 @@ describe("migrated schema", () => {
     expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(136);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
     expect(await count("select count(*) n from modules")).toBe(20);
-    // every module is active since 0007 switched on the dashboard
-    expect(await count("select count(*) n from modules where is_active")).toBe(20);
+    // 0007 switched on the dashboard, 0009 switched off destinations
+    expect(await count("select count(*) n from modules where is_active")).toBe(19);
     expect(await count("select count(*) n from flow_steps where performer_module is not null")).toBe(22);
     expect(await count("select count(*) n from zones")).toBe(9);
     expect(await count("select count(*) n from flow_steps where wait_zone_id is null or work_zone_id is null")).toBe(0);

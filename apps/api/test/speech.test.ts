@@ -94,10 +94,34 @@ describe("GET /api/weighbridge/speech", () => {
     const first = await ask("Bruto 40.200 kilogram.");
     expect(first.statusCode).toBe(200);
     expect(first.headers["content-type"]).toBe("audio/wav");
-    expect(first.body).toBe("RIFFBruto 40.200 kilogram.");
-    expect((await ask("Bruto 40.200 kilogram.")).body).toBe("RIFFBruto 40.200 kilogram.");
-    expect(engine.calls).toEqual(["Bruto 40.200 kilogram."]);
+    // the engine is given the spoken form; the route takes the readable segment
+    expect(first.body).toBe("RIFFBruto empat puluh ribu dua ratus kilogram.");
+    expect((await ask("Bruto 40.200 kilogram.")).body).toBe("RIFFBruto empat puluh ribu dua ratus kilogram.");
+    expect(engine.calls).toEqual(["Bruto empat puluh ribu dua ratus kilogram."]);
     expect(await readdir(join(cacheDir, "fake"))).toHaveLength(1);
+  });
+
+  it("answers 204 when the engine fails, and the weighbridge answer itself is unaffected", async () => {
+    const engine: SpeechEngine = { name: "broken", synthesize: async () => Promise.reject(new Error("model broke")) };
+    const { app, database } = await testApp({ TTS_CACHE_DIR: await tempFolder() }, { speechEngine: engine });
+    const { key } = await seedWeighbridge(database, { code: "WB-S", directions: ["IN"] });
+    const card = await app.inject({ method: "GET", url: "/api/weighbridge/card/0000", headers: { "x-station-key": key } });
+    expect(card.statusCode).toBe(404);
+    expect(card.json().error.speech).toEqual(["Kartu tidak dikenal."]);
+    const audio = await app.inject({ method: "GET", url: `/api/weighbridge/speech?text=${encodeURIComponent("Kartu tidak dikenal.")}`, headers: { "x-station-key": key } });
+    expect(audio.statusCode).toBe(204);
+  });
+
+  it("starts making the audio of every weighbridge answer's segments right away (errors included)", async () => {
+    const engine = fakeEngine();
+    const { app, database } = await testApp({ TTS_CACHE_DIR: await tempFolder() }, { speechEngine: engine });
+    const { key } = await seedWeighbridge(database, { code: "WB-S", directions: ["IN"] });
+    await app.inject({ method: "GET", url: "/api/weighbridge/card/0000", headers: { "x-station-key": key } });
+    await app.inject({ method: "GET", url: "/api/weighbridge/card/0000" });
+    // a route outside the weighbridge does not
+    await app.inject({ method: "GET", url: "/api/health" });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(engine.calls).toEqual(["Kartu tidak dikenal.", "Kunci stasiun tidak valid."]);
   });
 });
 

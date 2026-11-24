@@ -9,6 +9,10 @@ const baseUrl = (key: string) =>
     .url(`${key} must be a URL`)
     .transform((value) => value.replace(/\/+$/, ""));
 
+/** Supertonic 3 preset voices; the speaker id of the model is the position in this list (F2 is 1). */
+export const TTS_VOICES = ["F1", "F2", "F3", "F4", "F5", "M1", "M2", "M3", "M4", "M5"] as const;
+export type TtsVoice = (typeof TTS_VOICES)[number];
+
 const envSchema = z.object({
   // 0 lets the operating system pick a free port
   PORT: z.coerce.number("must be a port number").int("must be a port number").min(0).max(65535).default(3100),
@@ -34,10 +38,18 @@ const envSchema = z.object({
   VCF_PASSWORD: z.string().optional(),
   // portal emails that get EDIT on every active module at each sign-in; comma separated
   BOOTSTRAP_ADMIN_EMAILS: z.string().optional(),
-  // the voice of the weighbridge answers; "off" is the only engine built so far
-  TTS_ENGINE: z.enum(["off"], "must be off (the only speech engine built so far)").default("off"),
-  // where the audio of each sentence is kept, per engine
+  // the voice of the weighbridge answers: off (text and a tone only) or supertonic (Supertonic 3, on this machine)
+  TTS_ENGINE: z.enum(["off", "supertonic"], "must be off or supertonic").default("off"),
+  // where the audio of each sentence is kept, per engine, voice and speed
   TTS_CACHE_DIR: z.string().default(".data/tts-cache"),
+  // supertonic: the folder with the seven model files; required when TTS_ENGINE=supertonic
+  TTS_MODEL_DIR: z.string().optional(),
+  // supertonic: preset voice F1..F5 (female) or M1..M5 (male)
+  TTS_VOICE: z.enum(TTS_VOICES, `must be one of ${TTS_VOICES.join(", ")}`).default("F2"),
+  // supertonic: 1.0 is the normal pace
+  TTS_SPEED: z.coerce.number("must be a number").min(0.5, "must be 0.5 to 2").max(2, "must be 0.5 to 2").default(1),
+  // supertonic: CPU threads for one synthesis
+  TTS_THREADS: z.coerce.number("must be a whole number").int("must be a whole number").min(1).max(32).default(4),
   // where uploaded photos are kept; each file is stored under a random key below this folder
   FILE_STORAGE_DIR: z.string().default(".data/files"),
 });
@@ -63,10 +75,9 @@ export interface VcfConfig {
   password: string | null;
 }
 
-export interface TtsConfig {
-  engine: "off";
-  cacheDir: string;
-}
+export type TtsConfig =
+  | { engine: "off"; cacheDir: string }
+  | { engine: "supertonic"; cacheDir: string; modelDir: string; voice: TtsVoice; speed: number; threads: number };
 
 export interface Config {
   port: number;
@@ -119,7 +130,13 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),
-    tts: { engine: e.TTS_ENGINE, cacheDir: e.TTS_CACHE_DIR },
+    tts: ttsConfig(e),
     files: { dir: e.FILE_STORAGE_DIR },
   };
+}
+
+function ttsConfig(e: z.infer<typeof envSchema>): TtsConfig {
+  if (e.TTS_ENGINE === "off") return { engine: "off", cacheDir: e.TTS_CACHE_DIR };
+  if (!e.TTS_MODEL_DIR) throw new ConfigError("Invalid configuration:\n  TTS_MODEL_DIR: is required when TTS_ENGINE=supertonic (the folder with the Supertonic 3 model files)");
+  return { engine: "supertonic", cacheDir: e.TTS_CACHE_DIR, modelDir: e.TTS_MODEL_DIR, voice: e.TTS_VOICE, speed: e.TTS_SPEED, threads: e.TTS_THREADS };
 }

@@ -10,7 +10,7 @@ import { AppError, violatedUnique } from "../errors.js";
 import { stationAnswer } from "../exceptions/decide.js";
 import { expireStaleExceptions, openException, pendingSpoken, recordLiveWeight } from "../exceptions/service.js";
 import { idParams } from "../http.js";
-import { speak } from "../speech/engine.js";
+import { speakerFor } from "../speech/engine.js";
 import { createStationGuard, stationOf } from "../stations/guard.js";
 import { checkStationPin, PIN_PATTERN } from "../stations/pin.js";
 import { readWeighbridgeConfig } from "../stations/routes.js";
@@ -48,6 +48,23 @@ const asJson = (value: unknown) => JSON.parse(JSON.stringify(value)) as Record<s
 export function registerWeighbridgeRoutes(app: FastifyInstance, context: AppContext): void {
   const orm = context.database.db;
   const stationOnly = { preHandler: [createStationGuard(orm)] };
+  const speaker = speakerFor(context.speech.engine, context.speech.cache, (text, error) => app.log.warn({ err: error, text }, "speech synthesis failed"));
+
+  // Every weighbridge answer that carries `speech` (errors included) starts making the audio of its segments now,
+  // so it is usually ready when the program asks for it a moment later.
+  app.addHook("onSend", async (request, reply, payload) => {
+    const url = request.routeOptions.url ?? "";
+    if (!url.startsWith("/api/weighbridge/") || url === "/api/weighbridge/speech" || typeof payload !== "string") return payload;
+    if (!String(reply.getHeader("content-type") ?? "").includes("json")) return payload;
+    try {
+      const body = JSON.parse(payload) as { speech?: unknown; error?: { speech?: unknown } };
+      const segments = Array.isArray(body.speech) ? body.speech : Array.isArray(body.error?.speech) ? body.error.speech : [];
+      speaker.prefetch(segments.filter((segment): segment is string => typeof segment === "string"));
+    } catch {
+      // not JSON: nothing to speak
+    }
+    return payload;
+  });
 
   app.get("/api/weighbridge/card/:uid", stationOnly, async (request) => {
     const station = stationOf(request);
@@ -140,7 +157,7 @@ export function registerWeighbridgeRoutes(app: FastifyInstance, context: AppCont
   // the audio of one speech segment; 204 when the engine makes none (TTS_ENGINE=off)
   app.get("/api/weighbridge/speech", stationOnly, async (request, reply) => {
     const { text } = speechQuery.parse(request.query);
-    const audio = await speak(context.speech.engine, context.speech.cache, text);
+    const audio = await speaker.audio(text);
     if (!audio) return reply.code(204).send();
     return reply.header("content-type", "audio/wav").header("cache-control", "private, max-age=86400").send(Buffer.from(audio));
   });

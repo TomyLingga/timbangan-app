@@ -13,6 +13,7 @@ import {
   fieldSubmissions,
   files,
   flowSteps,
+  products,
   qualityParameters,
   registrations,
   seals,
@@ -28,7 +29,7 @@ import { readSetting, siteById } from "../settings.js";
 import { INSIDE_STATUSES } from "../trips/view.js";
 import { loadSteps, readyStep } from "../weighing/steps.js";
 import { loadWeighTrip } from "../weighing/view.js";
-import { productsByIds, tankTakes } from "../plant-masters/tank-products.js";
+import { productsByIds, tankIsLabelled, tankUse } from "../plant-masters/tank-products.js";
 import { tripProducts } from "./view.js";
 
 /** A form step with what the rules need about its trip. */
@@ -314,17 +315,18 @@ export async function issueDocumentNo(orm: Orm, document: FieldDocument, siteId:
   return nextFieldDocumentNo(orm, document, typeof format === "string" ? format : null, site.code, now);
 }
 
-/**
- * An active tank of the trip's site that may take the trip's product: its own product, an Odoo label naming the
- * product, or neither (a tank without product and label takes any).
- */
+/** An active tank of the trip's site that the form offers for this truck (tankUse); the same set is accepted. */
 export async function tankFor(orm: Orm, step: FormStep, tankId: number, field: string): Promise<typeof storageTanks.$inferSelect> {
-  const [tank] = await orm.select().from(storageTanks).where(and(eq(storageTanks.id, tankId), eq(storageTanks.siteId, step.trip.siteId), eq(storageTanks.isActive, true)));
-  if (!tank) throw invalid(field, "Tangki tidak ditemukan atau tidak aktif.");
-  if (tank.productId !== null || tank.productLabel !== null) {
-    const productIds = (await tripProducts(orm, [step.trip.id])).get(step.trip.id)?.map((item) => item.id) ?? [];
-    if (!tankTakes(tank, await productsByIds(orm, productIds))) throw invalid(field, "Tangki ini bukan untuk produk truk ini.");
-  }
+  const [found] = await orm
+    .select({ tank: storageTanks, productCategory: products.category })
+    .from(storageTanks)
+    .leftJoin(products, eq(products.id, storageTanks.productId))
+    .where(and(eq(storageTanks.id, tankId), eq(storageTanks.siteId, step.trip.siteId), eq(storageTanks.isActive, true)));
+  if (!found) throw invalid(field, "Tangki tidak ditemukan atau tidak aktif.");
+  const { tank, productCategory } = found;
+  if (!tankIsLabelled(tank)) throw invalid(field, "Tangki ini belum punya produk atau label, jadi tidak bisa dipilih.");
+  const productIds = (await tripProducts(orm, [step.trip.id])).get(step.trip.id)?.map((item) => item.id) ?? [];
+  if (tankUse({ ...tank, productCategory }, step.direction, await productsByIds(orm, productIds)) === null) throw invalid(field, "Tangki ini bukan untuk produk truk ini.");
   return tank;
 }
 

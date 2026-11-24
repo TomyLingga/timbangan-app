@@ -17,11 +17,16 @@ export const SEAL_KINDS = [
   { value: "CUSTOMS", label: "Bea cukai" },
 ] as const;
 
-/** What the product column says: the synced product, else the Odoo label, else that the tank takes any product. */
+/** What the product column says: the synced product, else the Odoo label, else that the tank has neither. */
 export function tankProductText(tank: Pick<StorageTank, "product" | "productLabel">): string {
   if (tank.product) return tank.product.name ?? "Produk tanpa nama";
-  if (tank.productLabel) return tank.productLabel;
-  return "Semua produk";
+  if (tank.productLabel?.trim()) return tank.productLabel;
+  return "Tanpa produk dan label";
+}
+
+/** The note on a tank the field forms never offer (the API says so in usableInForms); null for the others. */
+export function tankFormNote(tank: Pick<StorageTank, "usableInForms">): string | null {
+  return tank.usableInForms ? null : "Tidak dipakai di form (tanpa label)";
 }
 
 export interface SealBatchValues {

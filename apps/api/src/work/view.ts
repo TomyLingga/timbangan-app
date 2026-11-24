@@ -5,7 +5,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { type Account, can } from "../auth/guard.js";
 import type { ModuleCode } from "../auth/permissions.js";
 import type { Orm } from "../db/client.js";
-import { productsByIds, tankTakes } from "../plant-masters/tank-products.js";
+import { productsByIds, tankUse } from "../plant-masters/tank-products.js";
 import {
   deliveryOrders,
   drivers,
@@ -203,23 +203,34 @@ export async function loadFormParameters(orm: Orm, flowCode: string, stepCode: s
 }
 
 /**
- * Active tanks of the site that may take one of these products: a tank of one of them, a tank whose Odoo label
- * names one of them, and a tank without product and label (it takes any).
+ * Active tanks of the site a form may use for this truck (tankUse): the tanks of the truck's product first, then,
+ * for an outgoing truck, the other tanks that are not CPO tanks, each by code. `label` says what the tank holds:
+ * its Odoo label, else the name of its product.
  */
-export async function tankChoices(orm: Orm, siteId: number, productIds: number[]) {
+export async function tankChoices(orm: Orm, siteId: number, direction: "IN" | "OUT", productIds: number[]) {
   const rows = await orm
-    .select({ id: storageTanks.id, code: storageTanks.code, name: storageTanks.name, productId: storageTanks.productId, productLabel: storageTanks.productLabel })
+    .select({
+      id: storageTanks.id,
+      code: storageTanks.code,
+      name: storageTanks.name,
+      productId: storageTanks.productId,
+      productLabel: storageTanks.productLabel,
+      erpRef: storageTanks.erpRef,
+      productName: products.name,
+      productCategory: products.category,
+    })
     .from(storageTanks)
-    .where(
-      and(
-        eq(storageTanks.siteId, siteId),
-        eq(storageTanks.isActive, true),
-        productIds.length ? or(isNull(storageTanks.productId), inArray(storageTanks.productId, productIds)) : isNull(storageTanks.productId),
-      ),
-    )
+    .leftJoin(products, eq(products.id, storageTanks.productId))
+    .where(and(eq(storageTanks.siteId, siteId), eq(storageTanks.isActive, true)))
     .orderBy(asc(storageTanks.code));
   const truckProducts = await productsByIds(orm, productIds);
-  return rows.filter((tank) => tankTakes(tank, truckProducts)).map(({ id, code, name }) => ({ id, code, name }));
+  const judged = rows.flatMap((tank) => {
+    const use = tankUse(tank, direction, truckProducts);
+    if (use === null) return [];
+    const label = tank.productLabel?.trim() ? tank.productLabel.trim() : tank.productName;
+    return [{ id: tank.id, code: tank.code, name: tank.name, label, fitsProduct: use === "fits" }];
+  });
+  return [...judged.filter((tank) => tank.fitsProduct), ...judged.filter((tank) => !tank.fitsProduct)];
 }
 
 /** Applied seals of the trip that are still on the truck. */
@@ -307,7 +318,7 @@ export async function loadFormData(orm: Orm, row: WorkRow, siteId: number, now: 
   return {
     letter: view ? { docGrossKg: view.docGrossKg, docTareKg: view.docTareKg, docNetKg: view.docNetKg, allocations: view.allocations } : null,
     declaredSeals,
-    tanks: TANK_STEPS.includes(row.stepCode) ? await tankChoices(orm, siteId, productIds) : [],
+    tanks: TANK_STEPS.includes(row.stepCode) ? await tankChoices(orm, siteId, truck.direction, productIds) : [],
     parameters: await loadFormParameters(orm, truck.flowCode, row.stepCode, productIds[0] ?? null, now),
     sealsInPlace: await sealsInPlace(orm, truck.tripId),
     history: await loadHistory(orm, truck.tripId),

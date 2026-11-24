@@ -167,7 +167,7 @@ describe("POST /api/auth/sso/exchange", () => {
 
 describe("bootstrap admins", () => {
   const EVERY_ACTIVE_MODULE = {
-    contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
+    contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
     weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW", plant_masters: "EDIT",
     dashboard: "VIEW",
   };

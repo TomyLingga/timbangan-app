@@ -5,7 +5,7 @@ import { modules, PERMISSION_LEVELS, type PermissionLevel, userPermissions, user
 
 export { PERMISSION_LEVELS, type PermissionLevel };
 
-/** The modules the routes check. `dashboard` exists in the table but is not active yet. */
+/** The modules the routes check. `destinations` is switched off since 0009, so no account holds it and its routes refuse everyone. */
 export type ModuleCode =
   | "contracts"
   | "drivers"

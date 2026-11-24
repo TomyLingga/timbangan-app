@@ -1,12 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  destinationPayload,
   driverPayload,
-  EMPTY_DESTINATION,
   EMPTY_DRIVER,
   EMPTY_VEHICLE,
-  validateDestination,
   validateDriver,
   validateVehicle,
   vehiclePayload,
@@ -146,34 +143,3 @@ describe("vehiclePayload", () => {
   });
 });
 
-describe("validateDestination", () => {
-  it("asks for the place name and the address", () => {
-    expect(validateDestination(EMPTY_DESTINATION)).toEqual({
-      name: "Isi nama tempat.",
-      address: "Isi alamat.",
-    });
-    expect(validateDestination({ ...EMPTY_DESTINATION, name: "Gudang Contoh", address: "Jalan Contoh 1" })).toEqual({});
-  });
-
-  it("builds the request body with trimmed text and null for empty optional fields", () => {
-    expect(
-      destinationPayload({
-        partnerId: "",
-        name: " Gudang Contoh ",
-        address: " Jalan Contoh 1 ",
-        district: "",
-        regency: " Kabupaten Contoh ",
-        province: "",
-        isActive: false,
-      }),
-    ).toEqual({
-      partnerId: null,
-      name: "Gudang Contoh",
-      address: "Jalan Contoh 1",
-      district: null,
-      regency: "Kabupaten Contoh",
-      province: null,
-      isActive: false,
-    });
-  });
-});

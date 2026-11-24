@@ -8,6 +8,7 @@ import type { Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
 import { products, SEAL_KINDS, SEAL_STATUSES, seals, storageTanks, trips, tripSeals } from "../db/schema.js";
+import { tankIsLabelled } from "./tank-products.js";
 import { duplicate, invalid, invalidState, notFound, refused, violatedUnique } from "../errors.js";
 import { idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
 import { defaultSite } from "../settings.js";
@@ -92,6 +93,8 @@ export const tankView = (tank: TankRow, productName: string | null) => ({
   productLabel: tank.productLabel,
   capacityKg: tank.capacityKg,
   isActive: tank.isActive,
+  /** False for a tank without product and label: the field forms never offer it (tankUse). */
+  usableInForms: tankIsLabelled(tank),
   /** ODOO: copied by the Odoo sync and read only here except isActive; LOCAL: kept in this application. */
   source: tank.erpRef === null ? ("LOCAL" as const) : ("ODOO" as const),
 });

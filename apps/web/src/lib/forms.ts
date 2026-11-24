@@ -7,7 +7,6 @@ import { plateDisplay, plateError } from "@/lib/plate";
 export type FieldErrors<T> = Partial<Record<keyof T, string>>;
 
 const text = (value: string): string => value.trim();
-const textOrNull = (value: string): string | null => value.trim() || null;
 
 // --- drivers ----------------------------------------------------------------
 
@@ -153,45 +152,4 @@ export function vehiclePayload(values: VehicleValues, original: VehicleOriginal 
     if (tareChanged(values, original)) payload.tareReason = text(values.tareReason);
   }
   return payload;
-}
-
-// --- destinations -----------------------------------------------------------
-
-export interface DestinationValues {
-  partnerId: string;
-  name: string;
-  address: string;
-  district: string;
-  regency: string;
-  province: string;
-  isActive: boolean;
-}
-
-export const EMPTY_DESTINATION: DestinationValues = {
-  partnerId: "",
-  name: "",
-  address: "",
-  district: "",
-  regency: "",
-  province: "",
-  isActive: true,
-};
-
-export function validateDestination(values: DestinationValues): FieldErrors<DestinationValues> {
-  const errors: FieldErrors<DestinationValues> = {};
-  if (!text(values.name)) errors.name = "Isi nama tempat.";
-  if (!text(values.address)) errors.address = "Isi alamat.";
-  return errors;
-}
-
-export function destinationPayload(values: DestinationValues): Record<string, unknown> {
-  return {
-    partnerId: values.partnerId || null,
-    name: text(values.name),
-    address: text(values.address),
-    district: textOrNull(values.district),
-    regency: textOrNull(values.regency),
-    province: textOrNull(values.province),
-    isActive: values.isActive,
-  };
 }

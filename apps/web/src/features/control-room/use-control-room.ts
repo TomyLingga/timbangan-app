@@ -5,7 +5,6 @@ import { useEffect, useState } from "react";
 import { API_URL } from "@/lib/config";
 import type { ControlRoomState } from "@/lib/control-room";
 import { isPlanImageType, isSafePlanSvg, planAspect, planBackdrop, planImagePath, type PlanBackdrop, type PlanImageRef } from "@/lib/control-room-plan";
-import { currentAccessToken } from "@/lib/control-room-session";
 import { type FeedStatus, startLiveFeed } from "@/lib/control-room-stream";
 import { api } from "@/lib/session";
 
@@ -39,7 +38,7 @@ export function useLiveControlRoom(): LiveControlRoom {
     });
     const feed = startLiveFeed<ControlRoomState>({
       streamUrl: `${API_URL}/api/control-room/stream`,
-      getToken: (options) => currentAccessToken(api, options),
+      getToken: (options) => api.getAccessToken({ renew: options?.refresh }),
       poll,
       onState: take,
       onStatus: (next) => {

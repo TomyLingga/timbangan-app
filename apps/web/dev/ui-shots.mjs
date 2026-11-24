@@ -118,7 +118,6 @@ async function samplePass(browser) {
   await shootAll(browser, "kendaraan", `${WEB}/kendaraan`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "registrasi", `${WEB}/registrasi`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "supir", `${WEB}/supir`, (size) => browser.waitFor(listReady(size)));
-  await shootAll(browser, "tujuan", `${WEB}/tujuan`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "pengguna", `${WEB}/pengguna`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "kartu", `${WEB}/kartu`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "delivery-order", `${WEB}/delivery-order`, (size) => browser.waitFor(listReady(size)));

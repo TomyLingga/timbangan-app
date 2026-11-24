@@ -17,7 +17,7 @@ import { useUrlFilter } from "@/hooks/use-url-filter";
 import { formatNumber } from "@/lib/format";
 import { syncErrorMessage } from "@/lib/messages";
 import { canSeePlantMasters, canSyncOdoo, canToggleTanks } from "@/lib/permissions";
-import { tankProductText, tankSyncSummary } from "@/lib/plant-masters";
+import { tankFormNote, tankProductText, tankSyncSummary } from "@/lib/plant-masters";
 import { api } from "@/lib/session";
 import type { StorageTank, SyncResult, User } from "@/lib/types";
 
@@ -91,7 +91,8 @@ function TanksPage({ user }: { user: User }) {
         cell: (tank) => (
           <>
             <span className="block">{tankProductText(tank)}</span>
-            {!tank.product && tank.productLabel ? <span className="block text-xs text-muted-foreground">Nama produk dari Odoo</span> : null}
+            {!tank.product && tank.productLabel?.trim() ? <span className="block text-xs text-muted-foreground">Nama produk dari Odoo</span> : null}
+            {tankFormNote(tank) ? <span className="block text-xs font-medium text-warning">{tankFormNote(tank)}</span> : null}
           </>
         ),
       },

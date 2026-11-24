@@ -79,7 +79,6 @@ describe("GET /api/admin/modules", () => {
         { code: "contracts", name: "Kontrak", levels: ["VIEW", "EDIT"], partnerAllowed: true },
         { code: "drivers", name: "Supir", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
         { code: "vehicles", name: "Kendaraan", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
-        { code: "destinations", name: "Tujuan", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "delivery_orders", name: "Delivery Order", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
         { code: "registrations", name: "Registrasi", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
         { code: "gate", name: "Pos registrasi", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },

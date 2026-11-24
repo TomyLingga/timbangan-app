@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { createApiClient } from "@/lib/api-client";
 import { backoffDelay, type FeedStatus, SseParser, startLiveFeed } from "@/lib/control-room-stream";
 
 describe("SseParser", () => {
@@ -152,5 +153,52 @@ describe("startLiveFeed", () => {
     await done;
     expect(h.requests).toHaveLength(1);
     expect(h.statuses.at(-1)).toBe("stopped");
+  });
+});
+
+describe("startLiveFeed with the shared API client", () => {
+  it("renews the token through the client after a 401 and keeps reconnecting with the renewed token", async () => {
+    let refreshes = 0;
+    const client = createApiClient({
+      baseUrl: "http://api.test",
+      fetch: (async (input: string) => {
+        if (input.endsWith("/api/auth/refresh")) {
+          refreshes++;
+          return new Response(JSON.stringify({ accessToken: "renewed" }), { status: 200, headers: { "content-type": "application/json" } });
+        }
+        throw new Error(`unexpected request ${input}`);
+      }) as unknown as typeof fetch,
+    });
+    client.setAccessToken("expired");
+    const answers = [
+      () => new Response("{}", { status: 401 }),
+      () => eventStream(streamBody(['event: state\ndata: {"n":1}\n\n'])),
+      () => eventStream(streamBody(['event: state\ndata: {"n":2}\n\n'])),
+      () => eventStream(streamBody([": connected\n\n"])),
+    ];
+    const sent: (string | null)[] = [];
+    const states: unknown[] = [];
+    let sleeps = 0;
+    await new Promise<void>((resolve) => {
+      const feed = startLiveFeed<unknown>({
+        streamUrl: "http://api.test/api/control-room/stream",
+        getToken: (options) => client.getAccessToken({ renew: options?.refresh }),
+        poll: async () => ({}),
+        onState: (state) => states.push(state),
+        onStatus: () => {},
+        fetch: async (_input, init) => {
+          sent.push(new Headers(init?.headers).get("authorization"));
+          return (answers[sent.length - 1] ?? answers[answers.length - 1])();
+        },
+        sleep: async () => {
+          if (++sleeps >= 4) feed.stop();
+        },
+        random: () => 1,
+        onStop: resolve,
+      });
+    });
+    expect(sent).toEqual(["Bearer expired", "Bearer renewed", "Bearer renewed", "Bearer renewed"]);
+    expect(states).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(refreshes).toBe(1);
   });
 });

@@ -22,7 +22,6 @@ const EVERYTHING: Permissions = {
   contracts: "EDIT",
   drivers: "EDIT",
   vehicles: "EDIT",
-  destinations: "EDIT",
   delivery_orders: "EDIT",
   registrations: "EDIT",
   gate: "EDIT",

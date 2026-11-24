@@ -68,9 +68,18 @@ describe("destinations", () => {
     regency: "Kota B",
     province: "Provinsi C",
   });
+  /** 0009 switched the module off; its routes are tested with it switched on again, as a later migration could. */
+  async function withDestinations() {
+    const context = await setup();
+    await context.database.query("update modules set is_active = true where code = 'destinations'");
+    await context.database.query(
+      "insert into user_permissions (user_id, module_code, level) select id, 'destinations', case username when 'logistics' then 'EDIT' else 'VIEW' end from users where username in ('logistics', 'qc')",
+    );
+    return context;
+  }
 
   it("creates a destination for a customer or for everyone", async () => {
-    const { call, ids, database, adminId } = await setup();
+    const { call, ids, database, adminId } = await withDestinations();
     const response = await call("POST", "/api/destinations", "logistics", gudang(ids.pembeli));
     expect(response.statusCode).toBe(201);
     expect(response.json()).toEqual({
@@ -92,7 +101,7 @@ describe("destinations", () => {
   });
 
   it("answers 400 VALIDATION without name or address, or for a partner that does not exist", async () => {
-    const { call, database } = await setup();
+    const { call, database } = await withDestinations();
     const empty = await call("POST", "/api/destinations", "logistics", { name: "  " });
     expect(empty.statusCode).toBe(400);
     expect(empty.json().error.fields).toEqual([
@@ -106,7 +115,7 @@ describe("destinations", () => {
   });
 
   it("changes a destination, and answers 404 for an unknown one", async () => {
-    const { call, ids } = await setup();
+    const { call, ids } = await withDestinations();
     const id = (await call("POST", "/api/destinations", "logistics", gudang(ids.pembeli))).json().destination.id as number;
     const response = await call("PATCH", `/api/destinations/${id}`, "logistics", { name: "Gudang Dua", district: null, partnerId: null, isActive: false });
     expect(response.statusCode).toBe(200);
@@ -126,7 +135,7 @@ describe("destinations", () => {
   });
 
   it("lists destinations; partnerId gives that partner's and the ones for everyone", async () => {
-    const { call, ids } = await setup();
+    const { call, ids } = await withDestinations();
     await call("POST", "/api/destinations", "logistics", gudang(ids.pembeli));
     await call("POST", "/api/destinations", "logistics", { partnerId: ids.serba, name: "Depo Serba", address: "Jl. Industri 9" });
     await call("POST", "/api/destinations", "logistics", { name: "Pelabuhan Umum", address: "Dermaga 2" });
@@ -144,7 +153,7 @@ describe("destinations", () => {
   });
 
   it("lets only system and logistics admins write, and only staff read", async () => {
-    const { call, database } = await setup();
+    const { call, database } = await withDestinations();
     expect((await call("POST", "/api/destinations", "qc", gudang())).statusCode).toBe(403);
     expect((await call("POST", "/api/destinations", "angkut", gudang())).statusCode).toBe(403);
     expect((await call("PATCH", "/api/destinations/1", "qc", { name: "x" })).statusCode).toBe(403);

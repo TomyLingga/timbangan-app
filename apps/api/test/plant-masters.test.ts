@@ -32,7 +32,7 @@ describe("tanks", () => {
     expect(created.statusCode, created.body).toBe(201);
     const tank = created.json().tank;
     expect(tank).toEqual({
-      id: expect.any(Number), code: "TK-101", name: "Tangki 101", product: { id: cpo, name: "Minyak Contoh Mentah" }, productLabel: null, capacityKg: 2_000_000, isActive: true, source: "LOCAL",
+      id: expect.any(Number), code: "TK-101", name: "Tangki 101", product: { id: cpo, name: "Minyak Contoh Mentah" }, productLabel: null, capacityKg: 2_000_000, isActive: true, usableInForms: true, source: "LOCAL",
     });
     await call("POST", "/api/tanks", "pabrik", { code: "TK-201", productId: olein });
     await call("POST", "/api/tanks", "pabrik", { code: "TK-301", isActive: false });
@@ -59,7 +59,7 @@ describe("tanks", () => {
     await call("POST", "/api/tanks", "pabrik", { code: "TK-LOKAL" });
 
     const listed = (await call("GET", "/api/tanks?q=pfad", "lihat")).json().items;
-    expect(listed).toEqual([{ id, code: "TK-501", name: "WH/Tangki/TK-501", product: null, productLabel: "PFAD", capacityKg: null, isActive: true, source: "ODOO" }]);
+    expect(listed).toEqual([{ id, code: "TK-501", name: "WH/Tangki/TK-501", product: null, productLabel: "PFAD", capacityKg: null, isActive: true, usableInForms: true, source: "ODOO" }]);
 
     for (const body of [{ name: "Ganti" }, { code: "TK-502" }, { isActive: false, capacityKg: 5 }, { productId: null }]) {
       const refused = await call("PATCH", `/api/tanks/${id}`, "pabrik", body);

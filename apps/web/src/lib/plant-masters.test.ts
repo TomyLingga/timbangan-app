@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sealBatchPreview, tankProductText, tankSyncSummary } from "@/lib/plant-masters";
+import { sealBatchPreview, tankFormNote, tankProductText, tankSyncSummary } from "@/lib/plant-masters";
 
 const roll = (over: Partial<{ kind: string; prefix: string; from: string; to: string; width: string }> = {}) => ({
   kind: "LOCIS",
@@ -39,7 +39,14 @@ describe("tankProductText", () => {
   it("prefers the product, then the Odoo label", () => {
     expect(tankProductText({ product: { id: 1, name: "Minyak Contoh" }, productLabel: "CPO" })).toBe("Minyak Contoh");
     expect(tankProductText({ product: null, productLabel: "PFAD" })).toBe("PFAD");
-    expect(tankProductText({ product: null, productLabel: null })).toBe("Semua produk");
+    expect(tankProductText({ product: null, productLabel: null })).toBe("Tanpa produk dan label");
+  });
+});
+
+describe("tankFormNote", () => {
+  it("marks a tank the field forms never offer because it has neither product nor label", () => {
+    expect(tankFormNote({ usableInForms: false })).toBe("Tidak dipakai di form (tanpa label)");
+    expect(tankFormNote({ usableInForms: true })).toBeNull();
   });
 });
 

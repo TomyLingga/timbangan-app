@@ -7,16 +7,16 @@ export const PASSWORD = "s3cret-s3cret";
 
 /** EDIT on every active module. */
 export const EVERYTHING: Permissions = {
-  contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
+  contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT", users: "EDIT",
   weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW", plant_masters: "EDIT",
 };
 /** The logistics office: everything except the user administration. */
 export const LOGISTICS: Permissions = {
-  contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", destinations: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT",
+  contracts: "EDIT", drivers: "EDIT", vehicles: "EDIT", delivery_orders: "EDIT", registrations: "EDIT", gate: "EDIT", rfid_cards: "EDIT",
 };
 /** Reads the master data, DOs and registrations, and changes nothing. */
 export const VIEWER: Permissions = {
-  contracts: "VIEW", drivers: "VIEW", vehicles: "VIEW", destinations: "VIEW", delivery_orders: "VIEW", registrations: "VIEW",
+  contracts: "VIEW", drivers: "VIEW", vehicles: "VIEW", delivery_orders: "VIEW", registrations: "VIEW",
 };
 /** The registration desk. */
 export const DESK: Permissions = { gate: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" };

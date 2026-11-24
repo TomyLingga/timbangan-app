@@ -8,6 +8,21 @@ export const SIGNED_OUT = "SIGNED_OUT";
 export const NETWORK_ERROR = "NETWORK_ERROR";
 
 const REFRESH_PATH = "/api/auth/refresh";
+/** An access token this close to its expiry is renewed before it is sent or handed out. */
+const RENEW_BEFORE_MS = 30_000;
+
+/** When a JWT access token expires (ms since the epoch), read from its payload; null when it does not say. */
+export function tokenExpiry(token: string): number | null {
+  const payload = token.split(".")[1];
+  if (!payload) return null;
+  try {
+    const base64 = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const claims = JSON.parse(atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "="))) as { exp?: unknown };
+    return typeof claims.exp === "number" ? claims.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
 
 export class ApiError extends Error {
   /** HTTP status, or 0 when the request never got an answer. */
@@ -93,6 +108,8 @@ export interface ApiClientOptions {
   onSignedOut?: () => void;
   /** Makes the request object of an upload; tests pass a stand-in. */
   xhr?: () => XMLHttpRequest;
+  /** The clock the token expiry is compared with; tests pass a fixed one. */
+  now?: () => number;
 }
 
 export interface UploadOptions {
@@ -111,6 +128,12 @@ export interface ApiClient {
   upload<T = unknown>(path: string, file: Blob, fileName: string, options?: UploadOptions): Promise<T>;
   /** Asks for a new access token with the refresh cookie. False means no session. */
   refresh(): Promise<boolean>;
+  /**
+   * An access token for a request this client does not make itself, such as the event stream read with fetch. It
+   * is renewed first when it expires within 30 seconds, when there is none yet, or with `renew` (the token just got
+   * a 401). Null means no session. Never throws; without the network a token that is still valid is handed out.
+   */
+  getAccessToken(options?: { renew?: boolean }): Promise<string | null>;
   setAccessToken(token: string | null): void;
   hasAccessToken(): boolean;
 }
@@ -165,6 +188,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   const { baseUrl, onSignedOut } = options;
   const doFetch: typeof fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const makeXhr = options.xhr ?? (() => new XMLHttpRequest());
+  const now = options.now ?? (() => Date.now());
 
   let accessToken: string | null = null;
   let refreshInFlight: Promise<boolean> | null = null;
@@ -220,10 +244,47 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     return new ApiError(401, SIGNED_OUT, "The session has ended");
   }
 
+  /** Milliseconds the token has left; Infinity when it does not say. */
+  function timeLeft(token: string): number {
+    const expiry = tokenExpiry(token);
+    return expiry === null ? Infinity : expiry - now();
+  }
+
+  /** The token to send: renewed first when it is about to expire. A refused renewal ends the session. */
+  async function tokenToSend(): Promise<string | null> {
+    const held = accessToken;
+    if (held === null || timeLeft(held) > RENEW_BEFORE_MS) return held;
+    let renewed: boolean;
+    try {
+      renewed = await refresh();
+    } catch {
+      // not renewed this time; the old token may still pass, and a 401 is handled as usual
+      return held;
+    }
+    if (!renewed) throw signedOut();
+    return accessToken;
+  }
+
+  async function getAccessToken({ renew = false }: { renew?: boolean } = {}): Promise<string | null> {
+    const held = accessToken;
+    if (held !== null && !renew && timeLeft(held) > RENEW_BEFORE_MS) return held;
+    let renewed: boolean;
+    try {
+      renewed = await refresh();
+    } catch {
+      return held !== null && !renew && timeLeft(held) > 0 ? held : null;
+    }
+    if (!renewed) {
+      if (held !== null) signedOut();
+      return null;
+    }
+    return accessToken;
+  }
+
   /** Sends the request; a 401 on a session call gets one refresh and one retry. */
   async function authorized(path: string, requestOptions: RequestOptions): Promise<Response> {
     const useAuth = requestOptions.auth !== false;
-    const tokenUsed = useAuth ? accessToken : null;
+    const tokenUsed = useAuth ? await tokenToSend() : null;
 
     let response = await send(path, requestOptions, tokenUsed);
 
@@ -279,7 +340,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
   }
 
   async function upload<T>(path: string, file: Blob, fileName: string, uploadOptions: UploadOptions = {}): Promise<T> {
-    const tokenUsed = accessToken;
+    const tokenUsed = await tokenToSend();
     let answer = await sendUpload(path, file, fileName, uploadOptions, tokenUsed);
     if (answer.status === 401) {
       const alreadyRenewed = accessToken !== null && accessToken !== tokenUsed;
@@ -297,6 +358,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     download,
     upload,
     refresh,
+    getAccessToken,
     setAccessToken(token) {
       accessToken = token;
     },

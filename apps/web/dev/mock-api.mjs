@@ -86,7 +86,6 @@ const modules = [
   ["contracts", "Kontrak", ["VIEW", "EDIT"], true],
   ["drivers", "Supir", ["VIEW", "CREATE", "EDIT"], true],
   ["vehicles", "Kendaraan", ["VIEW", "CREATE", "EDIT"], true],
-  ["destinations", "Tujuan", ["VIEW", "CREATE", "EDIT"], false],
   ["delivery_orders", "Delivery Order", ["VIEW", "CREATE", "EDIT"], true],
   ["registrations", "Registrasi", ["VIEW", "CREATE", "EDIT"], true],
   ["gate", "Pos registrasi", ["VIEW", "CREATE", "EDIT"], false],
@@ -119,7 +118,7 @@ const users = [
     kind: "INTERNAL",
     username: "pos.contoh",
     fullName: "Petugas Pos Contoh",
-    permissions: { contracts: "VIEW", drivers: "CREATE", vehicles: "CREATE", destinations: "VIEW", registrations: "CREATE", gate: "EDIT" },
+    permissions: { contracts: "VIEW", drivers: "CREATE", vehicles: "CREATE", registrations: "CREATE", gate: "EDIT" },
     partner: null,
   },
   { id: "u-3", kind: "INTERNAL", username: "staf.baru", fullName: "Staf Baru Contoh", permissions: {}, partner: null },
@@ -536,34 +535,6 @@ function applyVehicle(target, body, creating) {
   if (next.plateNo && vehicles.some((item) => item !== target && item.plateNo === next.plateNo)) {
     return { status: 409, body: { error: { code: "DUPLICATE", message: "A vehicle with this plate exists" } } };
   }
-  Object.assign(target, next);
-  return null;
-}
-
-/** Checks the body and writes it onto the destination. Returns the refused fields, or null when saved. */
-function applyDestination(target, body, creating) {
-  const fields = {};
-  const next = {};
-  for (const name of ["name", "address"]) {
-    if (!creating && !(name in body)) continue;
-    if (!optionalText(body[name])) fields[name] = "Required";
-    else next[name] = body[name].trim();
-  }
-  if (creating || "partnerId" in body) {
-    const partner = Object.values(partners).find(
-      (candidate) => candidate.id === body.partnerId && partnerRole(candidate) === "customer",
-    );
-    if (body.partnerId && !partner) fields.partnerId = "Unknown customer";
-    next.partner = partner ?? null;
-  }
-  for (const name of ["district", "regency", "province"]) {
-    if (creating || name in body) next[name] = optionalText(body[name]);
-  }
-  if ("isActive" in body) {
-    if (typeof body.isActive !== "boolean") fields.isActive = "Must be true or false";
-    next.isActive = body.isActive;
-  }
-  if (Object.keys(fields).length > 0) return fields;
   Object.assign(target, next);
   return null;
 }
@@ -1786,6 +1757,35 @@ function sendCsv(request, response, fileName, header, rows) {
   return 200;
 }
 
+/**
+ * Contract lines nobody moved, shown only by the contract report: the real data holds thousands of them, which is
+ * why the report hides them by default and pages through the rest (apps/api reports/routes.ts).
+ */
+const IDLE_REPORT_LINES = Array.from({ length: 60 }, (_, index) => ({
+  contractId: `idle-${index + 1}`,
+  contractNo: `ZZ-SEPI-${String(index + 1).padStart(3, "0")}/CONTOH`,
+  direction: index % 2 === 0 ? "IN" : "OUT",
+  partner: "PT Contoh Sepi",
+  product: "Produk Contoh",
+  uom: "kg",
+  state: "OPEN",
+  qtyContract: 100000,
+  qtyOpening: 0,
+  realised: 0,
+  realisedTotal: 0,
+  inProgress: 0,
+  remaining: 100000,
+  tripCount: 0,
+}));
+
+/** limit (50, at most 200) and offset of a report page; null when one is not a valid number. */
+function reportPage(url) {
+  const limitText = url.searchParams.get("limit") ?? "50";
+  const offsetText = url.searchParams.get("offset") ?? "0";
+  if (!/^\d+$/.test(limitText) || Number(limitText) < 1 || !/^\d+$/.test(offsetText)) return null;
+  return { limit: Math.min(Number(limitText), 200), offset: Number(offsetText) };
+}
+
 const inPeriod = (iso, from, to) => {
   if (!iso) return false;
   const day = plantDate(new Date(iso)).iso;
@@ -1965,7 +1965,12 @@ function phaseFourRoutes() {
       if (from && to && from > to) return invalid(request, response, { to: "Tanggal akhir tidak boleh sebelum tanggal awal." });
       const direction = url.searchParams.get("direction") ?? "";
       const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
-      const items = contracts
+      const activity = url.searchParams.get("activity") ?? "moving";
+      if (!["moving", "all"].includes(activity)) return invalid(request, response, { activity: "Activity harus moving atau all." });
+      const page = reportPage(url);
+      if (!page) return invalid(request, response, { limit: "Limit harus angka mulai dari 1." });
+      const completedInPeriod = new Set();
+      const lines = contracts
         .filter((row) => (!direction || row.direction === direction) && (!q || includesText(row.contractNo, q) || includesText(row.partner.name, q)))
         .map((row) => {
           const own = trips.filter((trip) => ["COMPLETED", "CHECKED_IN", "IN_PROCESS"].includes(trip.status) && allocationShares(trip).some((line) => line.contractNo === row.contractNo));
@@ -1973,6 +1978,7 @@ function phaseFourRoutes() {
           const completed = own.filter((trip) => trip.status === "COMPLETED");
           const realisedTotal = completed.reduce((sum, trip) => sum + Number(shareOf(trip)?.qtyActual ?? shareOf(trip)?.netKg ?? 0), 0);
           const inside = completed.filter((trip) => !from && !to ? true : inPeriod(trip.exitedAt, from, to));
+          for (const trip of inside) completedInPeriod.add(trip.id);
           const qtyContract = row.qtyContract === null ? null : Number(row.qtyContract);
           return {
             contractId: row.id,
@@ -1989,8 +1995,17 @@ function phaseFourRoutes() {
             inProgress: own.filter((trip) => trip.status !== "COMPLETED").reduce((sum, trip) => sum + Number(shareOf(trip)?.qtyPlanned ?? 0), 0),
             remaining: qtyContract === null ? null : qtyContract - realisedTotal,
             tripCount: new Set(inside.map((trip) => trip.id)).size,
+            trucksInside: own.filter((trip) => trip.status !== "COMPLETED").length,
           };
-        });
+        })
+        .concat(IDLE_REPORT_LINES.filter((row) => (!direction || row.direction === direction) && (!q || includesText(row.contractNo, q) || includesText(row.partner, q))).map((row) => ({ ...row, trucksInside: 0 })))
+        .filter((row) => activity === "all" || row.realised > 0 || row.trucksInside > 0)
+        .sort((a, b) => (a.contractNo < b.contractNo ? -1 : a.contractNo > b.contractNo ? 1 : 0));
+      const items = lines.map((row) => {
+        const copy = { ...row };
+        delete copy.trucksInside;
+        return copy;
+      });
       if (url.searchParams.get("format") === "csv") {
         return sendCsv(
           request,
@@ -2000,7 +2015,16 @@ function phaseFourRoutes() {
           items.map((row) => [row.contractNo, row.direction, row.partner, row.product, row.uom, row.qtyContract, row.qtyOpening, row.realised, row.realisedTotal, row.inProgress, row.remaining, row.tripCount]),
         );
       }
-      return send(request, response, 200, { items });
+      const byUom = new Map();
+      for (const row of items) byUom.set(row.uom, (byUom.get(row.uom) ?? 0) + row.realised);
+      const realisedByUom = [...byUom].filter(([, realised]) => realised !== 0).map(([uom, realised]) => ({ uom, realised })).sort((a, b) => String(a.uom).localeCompare(String(b.uom)));
+      return send(request, response, 200, {
+        items: items.slice(page.offset, page.offset + page.limit),
+        total: items.length,
+        limit: page.limit,
+        offset: page.offset,
+        totals: { realised: items.reduce((sum, row) => sum + row.realised, 0), realisedByUom, tripCount: completedInPeriod.size },
+      });
     },
 
     "GET /api/reports/trips": (request, response, url) => {
@@ -2009,6 +2033,10 @@ function phaseFourRoutes() {
       const to = url.searchParams.get("to") ?? "";
       if (from && to && from > to) return invalid(request, response, { to: "Tanggal akhir tidak boleh sebelum tanggal awal." });
       const direction = url.searchParams.get("direction") ?? "";
+      const page = reportPage(url);
+      if (!page) return invalid(request, response, { limit: "Limit harus angka mulai dari 1." });
+      const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+      const plateWord = q.replace(/[^a-z0-9]/g, "");
       const items = trips
         .filter((trip) => (trip.weighings ?? []).some((weighing) => weighing.stage === 1))
         .filter((trip) => !direction || registrationOf(trip).direction === direction)
@@ -2036,7 +2064,15 @@ function phaseFourRoutes() {
             weigh1At: first.weighedAt,
             weigh2At: second?.weighedAt ?? null,
           }));
-        });
+        })
+        .filter(
+          (row) =>
+            !q ||
+            (plateWord && includesText(row.plateNo, plateWord)) ||
+            includesText(row.tripNo, q) ||
+            includesText(row.contractNo, q) ||
+            includesText(row.doNo, q),
+        );
       if (url.searchParams.get("format") === "csv") {
         return sendCsv(
           request,
@@ -2046,7 +2082,13 @@ function phaseFourRoutes() {
           items.map((row) => [row.tripNo, row.status, row.outcome, row.direction, row.plateNo, row.seq, row.contractNo, row.doNo, row.uom, row.grossKg, row.tareKg, row.truckNetKg, row.shareNetKg, row.qtyActual, row.splitMethod, row.weigh1At, row.weigh2At]),
         );
       }
-      return send(request, response, 200, { items });
+      return send(request, response, 200, {
+        items: items.slice(page.offset, page.offset + page.limit),
+        total: items.length,
+        limit: page.limit,
+        offset: page.offset,
+        totals: { tripCount: new Set(items.map((row) => row.tripId)).size, shareNetKg: items.reduce((sum, row) => sum + Number(row.shareNetKg ?? 0), 0) },
+      });
     },
   };
 }
@@ -2226,6 +2268,9 @@ const tanks = [
   id: `t-${nextTankId++}`, code, name, product: product ? { id: product.id, name: product.name } : null, productLabel, capacityKg, isActive, source,
 }));
 
+/** A tank as GET /api/tanks answers it; one with neither product nor label is never used by a field form. */
+const publicTank = (tank) => ({ ...tank, usableInForms: Boolean(tank.product || tank.productLabel?.trim()) });
+
 let nextSealId = 1;
 const seals = [];
 for (let n = 1; n <= 12; n++) {
@@ -2307,7 +2352,8 @@ function plantAndFileRoutes() {
       const items = tanks
         .filter((tank) => !q || [tank.code, tank.name, tank.productLabel].some((text) => includesText(text, q)))
         .filter((tank) => !active || String(tank.isActive) === active)
-        .sort((a, b) => a.code.localeCompare(b.code));
+        .sort((a, b) => a.code.localeCompare(b.code))
+        .map(publicTank);
       return send(request, response, 200, { items });
     },
 
@@ -2320,7 +2366,7 @@ function plantAndFileRoutes() {
         return fail(request, response, 409, "FROM_ERP", "Tangki ini dari Odoo. Ubah datanya di Odoo; di sini hanya bisa diaktifkan atau dinonaktifkan.");
       }
       if (typeof body.isActive === "boolean") tank.isActive = body.isActive;
-      return send(request, response, 200, { tank });
+      return send(request, response, 200, { tank: publicTank(tank) });
     },
 
     "GET /api/seals": (request, response, url) => {
@@ -2779,35 +2825,7 @@ const routes = {
     );
   },
 
-  "GET /api/destinations": (request, response, url) => {
-    if (!guard(request, response, [["destinations", "VIEW"]])) return 0;
-    const partnerId = url.searchParams.get("partnerId") ?? "";
-    const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
-    const matches = destinations.filter(
-      (item) =>
-        (!partnerId || item.partner?.id === partnerId) &&
-        (!q || includesText(item.name, q) || includesText(item.address, q)),
-    );
-    return page(request, response, url, matches);
-  },
 
-  "POST /api/destinations": async (request, response) => {
-    if (!guard(request, response, [["destinations", "CREATE"]])) return 0;
-    const created = { id: `t-${nextDestinationId++}`, isActive: true };
-    const fields = applyDestination(created, await readJson(request), true);
-    if (fields) return invalid(request, response, fields);
-    destinations.unshift(created);
-    return send(request, response, 201, { destination: created });
-  },
-
-  "PATCH /api/destinations/:id": async (request, response, url, id) => {
-    if (!guard(request, response, [["destinations", "EDIT"]])) return 0;
-    const target = destinations.find((item) => item.id === id);
-    if (!target) return fail(request, response, 404, "NOT_FOUND", "Tujuan tidak ditemukan.");
-    const fields = applyDestination(target, await readJson(request), false);
-    if (fields) return invalid(request, response, fields);
-    return send(request, response, 200, { destination: target });
-  },
 
   // --- phase 3: what the registration and DO forms read -----------------------
 

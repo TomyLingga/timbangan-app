@@ -116,7 +116,7 @@ describe("GET /api/work/steps/:id", () => {
     const incoming = await ctx.incoming();
     await ctx.forceReady(incoming.tripId, "UNLOADING");
     const unloading = (await ctx.call("GET", `/api/work/steps/${await ctx.stepId(incoming.tripId, "UNLOADING")}`, "bongkar")).json().form;
-    expect(unloading.tanks).toEqual([{ id: ctx.tanks.cpo, code: "TK-CPO", name: "Tangki TK-CPO" }]);
+    expect(unloading.tanks).toEqual([{ id: ctx.tanks.cpo, code: "TK-CPO", name: "Tangki TK-CPO", label: "Minyak Contoh Mentah", fitsProduct: true }]);
     expect(unloading.parameters).toEqual([]);
 
     const outgoing = await ctx.outgoing();

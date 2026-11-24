@@ -289,7 +289,7 @@ describe("errors", () => {
     client.setAccessToken("t");
 
     const asMap = (await client.request("/api/vehicles", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
-    const asList = (await client.request("/api/destinations", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
+    const asList = (await client.request("/api/vehicles", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
     const without = (await client.request("/api/drivers", { method: "POST", body: {} }).catch((e: unknown) => e)) as ApiError;
 
     expect(asMap.fields).toEqual(["plateDisplay", "roles"]);
@@ -413,5 +413,105 @@ describe("upload", () => {
     const client = createApiClient({ baseUrl: BASE, fetch: fakeFetch() as unknown as typeof fetch, xhr: xhr.make });
     client.setAccessToken("token");
     await expect(client.upload("/api/files", new Blob(["x"]), "a.png")).rejects.toMatchObject({ status: 413, code: "FILE_TOO_LARGE" });
+  });
+});
+
+/** A JWT-shaped token whose payload says it expires at `exp` (seconds since the epoch); header and signature are fake. */
+function tokenUntil(exp: number, name = "t"): string {
+  const payload = btoa(JSON.stringify({ sub: name, exp })).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+  return `head.${payload}.${name}`;
+}
+
+const NOW_S = 1_800_000_000;
+
+function clocked(...responses: Array<Response | Error | (() => Response)>) {
+  const fetchMock = fakeFetch(...responses);
+  const onSignedOut = vi.fn();
+  const client = createApiClient({ baseUrl: BASE, fetch: fetchMock as unknown as typeof fetch, onSignedOut, now: () => NOW_S * 1000 });
+  return { client, fetchMock, onSignedOut };
+}
+
+describe("getAccessToken", () => {
+  it("hands out the token it holds while it is good for more than 30 seconds, without a request", async () => {
+    const { client, fetchMock } = clocked();
+    const held = tokenUntil(NOW_S + 600);
+    client.setAccessToken(held);
+    await expect(client.getAccessToken()).resolves.toBe(held);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("renews a token that expires within 30 seconds, or when asked after a 401", async () => {
+    const fresh = tokenUntil(NOW_S + 900, "fresh");
+    const { client, fetchMock } = clocked(json(200, { accessToken: fresh }), json(200, { accessToken: "after-401" }));
+    client.setAccessToken(tokenUntil(NOW_S + 20));
+    await expect(client.getAccessToken()).resolves.toBe(fresh);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(`${BASE}/api/auth/refresh`);
+    await expect(client.getAccessToken({ renew: true })).resolves.toBe("after-401");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("restores a session from the refresh cookie when it holds no token", async () => {
+    const { client } = clocked(json(200, { accessToken: "restored" }));
+    await expect(client.getAccessToken()).resolves.toBe("restored");
+    expect(client.hasAccessToken()).toBe(true);
+  });
+
+  it("answers null when the session is over, and signs out only a session that was in use", async () => {
+    const idle = clocked(json(401, errorBody("NO_SESSION")));
+    await expect(idle.client.getAccessToken()).resolves.toBeNull();
+    expect(idle.onSignedOut).not.toHaveBeenCalled();
+
+    const used = clocked(json(401, errorBody("NO_SESSION")));
+    used.client.setAccessToken("old");
+    await expect(used.client.getAccessToken({ renew: true })).resolves.toBeNull();
+    expect(used.onSignedOut).toHaveBeenCalledTimes(1);
+    expect(used.client.hasAccessToken()).toBe(false);
+  });
+
+  it("never throws: without the network it keeps a token that is still valid, else answers null", async () => {
+    const soon = tokenUntil(NOW_S + 10);
+    const { client, onSignedOut } = clocked(new TypeError("fetch failed"), new TypeError("fetch failed"));
+    client.setAccessToken(soon);
+    await expect(client.getAccessToken()).resolves.toBe(soon);
+    await expect(client.getAccessToken({ renew: true })).resolves.toBeNull();
+    expect(onSignedOut).not.toHaveBeenCalled();
+  });
+
+  it("shares one refresh with requests that renew at the same time", async () => {
+    const fresh = tokenUntil(NOW_S + 900, "fresh");
+    let refreshes = 0;
+    const fetchMock = vi.fn(async (input: string) => {
+      if (input.endsWith("/api/auth/refresh")) {
+        refreshes += 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return json(200, { accessToken: fresh });
+      }
+      return json(200, { ok: true });
+    });
+    const client = createApiClient({ baseUrl: BASE, fetch: fetchMock as unknown as typeof fetch, now: () => NOW_S * 1000 });
+    client.setAccessToken(tokenUntil(NOW_S + 5));
+    const [token] = await Promise.all([client.getAccessToken(), client.request("/api/me")]);
+    expect(token).toBe(fresh);
+    expect(refreshes).toBe(1);
+  });
+});
+
+describe("requests near the expiry of the token", () => {
+  it("renew the token first instead of sending one that is about to run out", async () => {
+    const fresh = tokenUntil(NOW_S + 900, "fresh");
+    const { client, fetchMock } = clocked(json(200, { accessToken: fresh }), new Response(new Blob(["png"], { type: "image/png" }), { status: 200 }));
+    client.setAccessToken(tokenUntil(NOW_S + 15));
+    const { blob } = await client.download("/api/control-room/plan-image?v=1");
+    expect(blob.size).toBe(3);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([`${BASE}/api/auth/refresh`, `${BASE}/api/control-room/plan-image?v=1`]);
+    expect(headerOf(fetchMock.mock.calls[1] as FetchArgs, "authorization")).toBe(`Bearer ${fresh}`);
+  });
+
+  it("stop as signed out when that renewal is refused", async () => {
+    const { client, fetchMock, onSignedOut } = clocked(json(401, errorBody("NO_SESSION")));
+    client.setAccessToken(tokenUntil(NOW_S + 15));
+    await expect(client.request("/api/me")).rejects.toMatchObject({ code: "SIGNED_OUT" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(onSignedOut).toHaveBeenCalledTimes(1);
   });
 });

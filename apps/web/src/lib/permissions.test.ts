@@ -4,7 +4,6 @@ import {
   accessSummary,
   awaitsAccess,
   canAcceptDeliveryOrder,
-  canAddDestination,
   canAddDriver,
   canAddVehicle,
   canCancelRegistration,
@@ -13,7 +12,6 @@ import {
   canCreateIncoming,
   canCreateOutgoing,
   canEdit,
-  canEditDestination,
   canEditDraft,
   canEditVehicle,
   canManageDeliveryOrders,
@@ -112,12 +110,6 @@ describe("actions follow the route table of the API", () => {
     expect(canAddVehicle(partner({ vehicles: "EDIT" }))).toBe(false);
     expect(canEditVehicle(staff({ vehicles: "CREATE" }))).toBe(false);
     expect(canEditVehicle(staff({ vehicles: "EDIT" }))).toBe(true);
-  });
-
-  it("adds destinations from CREATE and changes them at EDIT", () => {
-    expect(canAddDestination(staff({ destinations: "CREATE" }))).toBe(true);
-    expect(canEditDestination(staff({ destinations: "CREATE" }))).toBe(false);
-    expect(canEditDestination(staff({ destinations: "EDIT" }))).toBe(true);
   });
 
   it("keeps writing a delivery order with staff and lets anyone with EDIT accept one", () => {

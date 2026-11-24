@@ -13,7 +13,6 @@ export type ModuleCode =
   | "contracts"
   | "drivers"
   | "vehicles"
-  | "destinations"
   | "delivery_orders"
   | "registrations"
   | "gate"
@@ -116,6 +115,8 @@ export interface StorageTank {
   productLabel: string | null;
   capacityKg: number | null;
   isActive: boolean;
+  /** False for a tank with neither product nor label: the field forms never offer or accept it. */
+  usableInForms: boolean;
   /** ODOO: maintained in Odoo, only isActive changes here. */
   source: "ODOO" | "LOCAL";
 }
@@ -664,6 +665,30 @@ export interface ContractReportRow {
   inProgress: number;
   remaining: number | null;
   tripCount: number;
+}
+
+/** One page of a report: the rows, how many match in all, and totals over all of them. */
+export interface ReportPage<Row, Totals> {
+  items: Row[];
+  total: number;
+  limit: number;
+  offset: number;
+  totals: Totals;
+}
+
+/** GET /api/reports/contracts, totals over every matching line. */
+export interface ContractReportTotals {
+  /** A plain sum over every unit; `realisedByUom` keeps the units apart. */
+  realised: number;
+  realisedByUom: { uom: string | null; realised: number }[];
+  /** Trucks completed in the period; a truck on two contracts counts once. */
+  tripCount: number;
+}
+
+/** GET /api/reports/trips, totals over every matching line. */
+export interface TripReportTotals {
+  tripCount: number;
+  shareNetKg: number;
 }
 
 /** GET /api/reports/trips, one row per truck allocation. */

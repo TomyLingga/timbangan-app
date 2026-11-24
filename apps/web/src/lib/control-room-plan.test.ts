@@ -1,7 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { createApiClient } from "@/lib/api-client";
-import { currentAccessToken } from "@/lib/control-room-session";
 import { isPlanImageType, isSafePlanSvg, planAspect, planBackdrop, planImagePath } from "@/lib/control-room-plan";
 
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 916 506" fill="none" stroke="currentColor"><g><rect x="1" y="1" width="9" height="9"/></g></svg>';
@@ -29,29 +27,6 @@ describe("planAspect", () => {
   it("reads width over height from the viewBox", () => {
     expect(planAspect(SVG)).toEqual({ width: 916, height: 506 });
     expect(planAspect("<svg/>")).toBeNull();
-  });
-});
-
-describe("currentAccessToken", () => {
-  const realFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = realFetch;
-  });
-
-  it("reads the token the shared client sends, and leaves fetch as it was", async () => {
-    const stub = vi.fn(async () => new Response(JSON.stringify({ user: {} }), { status: 200, headers: { "content-type": "application/json" } }));
-    globalThis.fetch = stub as typeof fetch;
-    const client = createApiClient({ baseUrl: "http://api.test" });
-    client.setAccessToken("secret-token");
-    expect(await currentAccessToken(client)).toBe("secret-token");
-    expect(globalThis.fetch).toBe(stub);
-    expect(stub).toHaveBeenCalledTimes(1);
-  });
-
-  it("answers null without a session", async () => {
-    globalThis.fetch = (async () => new Response("{}", { status: 401 })) as typeof fetch;
-    const client = createApiClient({ baseUrl: "http://api.test" });
-    expect(await currentAccessToken(client)).toBeNull();
   });
 });
 
