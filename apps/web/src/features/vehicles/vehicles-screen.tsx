@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { BadgeCheck, Ellipsis, Pencil, Plus } from "lucide-react";
+import { BadgeCheck, Ellipsis, MapPinned, Pencil, Plus } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
 import { DataList, type Column } from "@/components/data-list";
@@ -15,6 +15,7 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
+import { TrackerSheet } from "@/features/tracking/tracker-sheet";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { useUrlFilter } from "@/hooks/use-url-filter";
@@ -23,7 +24,7 @@ import { formatNumber, formatQuantity } from "@/lib/format";
 import { EMPTY_VEHICLE, tareChanged, validateVehicle, vehiclePayload, type VehicleValues } from "@/lib/forms";
 import { isApiError } from "@/lib/api-client";
 import { saveErrorMessage, verificationErrorMessage } from "@/lib/messages";
-import { canAddVehicle, canEditVehicle, canView } from "@/lib/permissions";
+import { canAddVehicle, canEditVehicle, canManageGps, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { expirySummary } from "@/lib/status";
 import { UNVERIFIED_NOTE, VERIFICATION_FILTERS, verificationText, verificationView, type VerificationFilter } from "@/lib/vehicle-verification";
@@ -275,8 +276,11 @@ export function VehiclesScreen() {
   const mayView = canView(user, "vehicles");
   const mayAdd = canAddVehicle(user);
   const mayEdit = canEditVehicle(user);
+  const mayGps = canManageGps(user);
 
   const ids = useId();
+  // the vehicle whose GPS tracker dialog is open
+  const [tracking, setTracking] = useState<Vehicle | null>(null);
   const [searchText, setSearchText] = useUrlFilter("q");
   const [reloadToken, setReloadToken] = useState(0);
   const [saved, setSaved] = useState<string | null>(null);
@@ -314,6 +318,16 @@ export function VehiclesScreen() {
               <span className="flex flex-wrap items-center gap-2">
                 <span className="plate text-[0.8125rem]">{vehicle.plateDisplay}</span>
                 {vehicle.isActive ? null : <StatusBadge info={{ label: "Nonaktif", tone: "neutral" }} />}
+                {vehicle.hasGps ? (
+                  <span
+                    title="Punya alat pelacak GPS"
+                    data-testid="vehicle-gps"
+                    className="inline-flex h-6 items-center gap-1 rounded-sm border border-primary/25 bg-primary/10 px-1.5 text-xs font-medium text-primary-ink"
+                  >
+                    <MapPinned className="size-3.5" aria-hidden="true" />
+                    GPS
+                  </span>
+                ) : null}
                 {vehicle.verified ? null : (
                   <span title={UNVERIFIED_NOTE} data-testid="vehicle-unverified">
                     <StatusBadge info={{ label: "Belum diverifikasi", tone: "neutral" }} />
@@ -471,10 +485,22 @@ export function VehiclesScreen() {
             rowKey={(vehicle) => vehicle.id}
             stale={list.isStale}
             actions={
-              mayEdit
+              mayEdit || mayGps
                 ? (vehicle) => (
                     <span className="inline-flex items-center gap-1">
-                      {vehicle.verified ? null : (
+                      {mayGps ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-10 md:h-8"
+                          onClick={() => setTracking(vehicle)}
+                          aria-label={`Alat GPS ${vehicle.plateDisplay}`}
+                        >
+                          <MapPinned aria-hidden="true" />
+                          GPS
+                        </Button>
+                      ) : null}
+                      {!mayEdit ? null : vehicle.verified ? null : (
                         <Button
                           variant="outline"
                           size="sm"
@@ -486,17 +512,19 @@ export function VehiclesScreen() {
                           Verifikasi
                         </Button>
                       )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-10 md:h-8"
-                        onClick={() => setEditing(vehicle)}
-                        aria-label={`Ubah ${vehicle.plateDisplay}`}
-                      >
-                        <Pencil aria-hidden="true" />
-                        Ubah
-                      </Button>
-                      {vehicle.verified ? (
+                      {mayEdit ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-10 md:h-8"
+                          onClick={() => setEditing(vehicle)}
+                          aria-label={`Ubah ${vehicle.plateDisplay}`}
+                        >
+                          <Pencil aria-hidden="true" />
+                          Ubah
+                        </Button>
+                      ) : null}
+                      {mayEdit && vehicle.verified ? (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="sm" className="h-10 w-10 md:h-8 md:w-8" aria-label={`Tindakan lain ${vehicle.plateDisplay}`}>
@@ -517,6 +545,18 @@ export function VehiclesScreen() {
           />
         </div>
       )}
+
+      {tracking ? (
+        <TrackerSheet
+          vehicle={{ id: tracking.id, plateDisplay: tracking.plateDisplay }}
+          onClose={() => setTracking(null)}
+          onDone={(message) => {
+            setTracking(null);
+            setSaved(message);
+            reload();
+          }}
+        />
+      ) : null}
 
       {confirming ? <VerificationSheet {...confirming} onClose={() => setConfirming(null)} onDone={verificationDone} onStale={reload} /> : null}
 

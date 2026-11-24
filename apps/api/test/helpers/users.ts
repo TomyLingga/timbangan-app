@@ -21,9 +21,9 @@ export const VIEWER: Permissions = {
 /** The registration desk. */
 export const DESK: Permissions = { gate: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" };
 /** What a supplier company's account gets by default. */
-export const SUPPLIER: Permissions = { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" };
+export const SUPPLIER: Permissions = { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" };
 /** What a transporter or customer company's account gets by default. */
-export const TRANSPORTER: Permissions = { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" };
+export const TRANSPORTER: Permissions = { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" };
 
 export interface PartnerFlags {
   erpRef?: string;

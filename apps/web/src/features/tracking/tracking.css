@@ -1,0 +1,183 @@
+/* The road map of Lacak kendaraan: Leaflet's own look brought to the app's tokens, the truck markers, and darker
+   tiles in the dark theme. Leaflet's stylesheet is imported next to this one. */
+
+.gps-map {
+  background: var(--muted);
+  font-family: var(--font-text);
+  isolation: isolate;
+}
+
+/* Inverted tiles read as a dark map without a second tile set. */
+.dark .gps-map .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.88) saturate(0.6);
+}
+
+.gps-map .leaflet-control-zoom,
+.gps-map .leaflet-bar {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: var(--elevation-1);
+}
+.gps-map .leaflet-bar a {
+  width: 2.25rem;
+  height: 2.25rem;
+  line-height: 2.25rem;
+  background: var(--card);
+  color: var(--foreground);
+  border-bottom-color: var(--border);
+}
+.gps-map .leaflet-bar a:hover,
+.gps-map .leaflet-bar a:focus-visible {
+  background: var(--muted);
+}
+.gps-map .leaflet-control-attribution {
+  background: color-mix(in oklch, var(--card) 85%, transparent);
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+}
+.gps-map .leaflet-control-attribution a {
+  color: var(--primary-ink);
+}
+.gps-map .leaflet-container a.leaflet-popup-close-button {
+  color: var(--muted-foreground);
+}
+.gps-map:focus-visible,
+.gps-map .leaflet-marker-icon:focus-visible {
+  outline: 3px solid color-mix(in oklch, var(--ring) 60%, transparent);
+  outline-offset: 2px;
+}
+
+/* A truck: the picture, the plate under it, and a small sign of its state in the corner. */
+.gps-marker {
+  background: none;
+  border: 0;
+}
+/* Only the drawn truck and plate take the pointer, not the empty corners of the icon box, so close trucks stay
+   clickable. The box keeps its focus ring and keyboard handling. */
+.leaflet-marker-icon.gps-marker.leaflet-interactive {
+  pointer-events: none;
+}
+.gps-marker .gps-marker-truck,
+.gps-marker .gps-marker-plate {
+  pointer-events: auto;
+}
+.gps-marker-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+}
+.gps-marker-truck {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 30px;
+  border-radius: 9px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  box-shadow: var(--elevation-1);
+}
+.gps-marker-truck svg.gps-truck {
+  width: 34px;
+  height: 17px;
+}
+.gps-marker-plate {
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 0 4px 1px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 15px;
+  white-space: nowrap;
+  box-shadow: var(--elevation-1);
+}
+.gps-marker-state {
+  position: absolute;
+  top: -7px;
+  right: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  border: 1.5px solid var(--card);
+  color: var(--card);
+}
+.gps-marker-state svg {
+  width: 11px;
+  height: 11px;
+}
+.gps-marker[data-state="MOVING"] .gps-marker-state {
+  background: var(--success);
+}
+.gps-marker[data-state="STOPPED"] .gps-marker-state {
+  background: var(--warning);
+}
+.gps-marker[data-state="SILENT"] .gps-marker-state {
+  background: var(--muted-foreground);
+}
+.gps-marker[data-state="SILENT"] .gps-marker-truck {
+  border-style: dashed;
+  opacity: 0.8;
+}
+.gps-marker[data-selected="true"] .gps-marker-truck {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--primary) 35%, transparent), var(--elevation-2, var(--elevation-1));
+}
+.gps-marker[data-selected="true"] .gps-marker-plate {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* The track of the selected truck and its first point. */
+.gps-track {
+  stroke: var(--primary);
+}
+.gps-track-halo {
+  stroke: var(--card);
+}
+.gps-track-start {
+  stroke: var(--primary);
+  fill: var(--card);
+}
+
+/* The cross in the middle of the map on the settings page, where "Pakai titik tengah peta" takes the location. */
+.gps-crosshair {
+  pointer-events: none;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 500;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  color: var(--foreground);
+}
+.gps-plant {
+  background: none;
+  border: 0;
+}
+.gps-plant-pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  border: 2px solid var(--card);
+  background: var(--primary);
+  color: var(--primary-foreground);
+  box-shadow: var(--elevation-1);
+  font-size: 11px;
+  font-weight: 700;
+}

@@ -120,9 +120,21 @@ function SpjSheet({ spj, paper }: { spj: SpjPrint; paper: Paper }) {
         </tbody>
       </table>
 
-      <p className="text-xs text-neutral-700">
-        Tunjukkan SPJ ini di pos registrasi. Petugas memindai barcode, lalu memberi kartu RFID untuk dibawa selama di dalam pabrik.
-      </p>
+      <div className="flex items-end justify-between gap-5">
+        <p className="text-xs text-neutral-700">
+          Tunjukkan SPJ ini di pos registrasi. Petugas memindai barcode, lalu memberi kartu RFID untuk dibawa selama di dalam pabrik.
+        </p>
+        {spj.shareUrl ? (
+          // the driver's page; a second, smaller code so the gate's scanner never takes it for the SPJ
+          <div className="flex shrink-0 items-center gap-2.5 rounded-md border border-dashed border-neutral-400 p-2" data-testid="spj-share">
+            <Barcode kind="qr" text={spj.shareUrl} label="QR Bagikan lokasi" className="w-[19mm] shrink-0" />
+            <div className="w-[30mm]">
+              <p className="text-[0.7rem] leading-tight font-semibold">Bagikan lokasi (opsional)</p>
+              <p className="mt-1 text-[0.65rem] leading-snug text-neutral-700">Supir: pindai dengan kamera ponsel untuk mengirim lokasi truk selama perjalanan.</p>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </article>
   );
 }

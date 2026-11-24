@@ -87,9 +87,12 @@ export async function grantEverything(orm: Orm, userId: number, now: Date): Prom
     where user_permissions.level <> excluded.level`);
 }
 
-/** What a new partner account gets, from the kinds of its company (supplier, transporter, customer). */
+/**
+ * What a new partner account gets, from the kinds of its company (supplier, transporter, customer). Every partner
+ * account may follow the trucks that concern it (gps VIEW); the GPS routes decide which trucks those are.
+ */
 export function partnerDefaults(company: { isSupplier: boolean; isTransporter: boolean; isCustomer: boolean }): Permissions {
-  const granted: Permissions = {};
+  const granted: Permissions = { gps: "VIEW" };
   const raise = (code: ModuleCode, level: PermissionLevel) => {
     if (!covers(granted[code], level)) granted[code] = level;
   };

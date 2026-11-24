@@ -7,10 +7,12 @@ import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
-import { GPS_SOURCE_KINDS, gpsSources, gpsUnknownDevices, vehicles, vehicleTrackers } from "../db/schema.js";
+import { GPS_SOURCE_KINDS, gpsSources, gpsUnknownDevices, settings, vehicles, vehicleTrackers } from "../db/schema.js";
 import { duplicate, invalid, invalidState, notFound, violatedUnique } from "../errors.js";
 import { idNumber, idParams } from "../http.js";
+import { defaultSite } from "../settings.js";
 import { generateTrackerKey } from "./keys.js";
+import { gpsSettings } from "./trips.js";
 
 const sourceBody = z.object({
   name: z.string("Nama wajib diisi.").trim().min(1, "Nama wajib diisi.").max(100, "Nama terlalu panjang."),
@@ -22,6 +24,42 @@ const trackerBody = z.object({
   deviceId: z.string("Nomor alat wajib diisi.").trim().min(1, "Nomor alat wajib diisi.").max(64, "Nomor alat terlalu panjang."),
 });
 const trackerQuery = z.object({ sourceId: idNumber.optional(), vehicleId: idNumber.optional() });
+
+const RETENTION_MESSAGE = "Lama penyimpanan harus angka bulat dari 7 sampai 730 hari.";
+const CUSTOMER_MESSAGE = "Batas waktu customer harus angka bulat dari 0 sampai 30 hari.";
+const LAT_MESSAGE = "Lintang harus angka dari -90 sampai 90.";
+const LON_MESSAGE = "Bujur harus angka dari -180 sampai 180.";
+const settingsBody = z
+  .object({
+    plantLocation: z
+      .object({
+        lat: z.number(LAT_MESSAGE).min(-90, LAT_MESSAGE).max(90, LAT_MESSAGE),
+        lon: z.number(LON_MESSAGE).min(-180, LON_MESSAGE).max(180, LON_MESSAGE),
+      })
+      .nullable()
+      .optional(),
+    retentionDays: z.number(RETENTION_MESSAGE).int(RETENTION_MESSAGE).min(7, RETENTION_MESSAGE).max(730, RETENTION_MESSAGE).optional(),
+    customerDaysAfterExit: z.number(CUSTOMER_MESSAGE).int(CUSTOMER_MESSAGE).min(0, CUSTOMER_MESSAGE).max(30, CUSTOMER_MESSAGE).optional(),
+  })
+  .refine((body) => body.plantLocation !== undefined || body.retentionDays !== undefined || body.customerDaysAfterExit !== undefined, "Kirim minimal satu pengaturan.");
+
+/** The GPS settings as the routes answer them. */
+async function settingsView(orm: Orm) {
+  const current = await gpsSettings(orm);
+  return { plantLocation: current.plant, retentionDays: current.retentionDays, customerDaysAfterExit: current.customerDays };
+}
+
+/** Writes one setting of the site; the row exists since 0011, but a site added later gets it here. */
+async function writeSiteSetting(orm: Orm, siteId: number, key: string, value: unknown, actor: number, now: Date): Promise<void> {
+  // a JSON null must reach the jsonb column as 'null', not as SQL NULL
+  const json = sql`${JSON.stringify(value)}::jsonb`;
+  const updated = await orm
+    .update(settings)
+    .set({ value: json, updatedBy: actor, updatedAt: now })
+    .where(and(eq(settings.siteId, siteId), eq(settings.key, key)))
+    .returning({ key: settings.key });
+  if (updated.length === 0) await orm.insert(settings).values({ siteId, key, value: json, updatedBy: actor, updatedAt: now });
+}
 
 type SourceRow = typeof gpsSources.$inferSelect;
 
@@ -173,6 +211,25 @@ export function registerGpsMasterRoutes(app: FastifyInstance, context: AppContex
       if (constraint === "vehicle_trackers_device_key") throw duplicate(`Alat ${body.deviceId} sudah terpasang di kendaraan lain.`);
       throw error;
     }
+  });
+
+  app.get("/api/gps/settings", editors, async () => ({ settings: await settingsView(orm) }));
+
+  app.put("/api/gps/settings", editors, async (request) => {
+    const body = settingsBody.parse(request.body ?? {});
+    const actor = accountOf(request).id;
+    const now = context.now();
+    const site = await defaultSite(orm);
+    const changed = await orm.transaction(async (tx) => {
+      const before = await settingsView(tx);
+      if (body.plantLocation !== undefined) await writeSiteSetting(tx, site.id, "plant_location", body.plantLocation, actor, now);
+      if (body.retentionDays !== undefined) await writeSiteSetting(tx, site.id, "gps_retention_days", body.retentionDays, actor, now);
+      if (body.customerDaysAfterExit !== undefined) await writeSiteSetting(tx, site.id, "gps_customer_days_after_exit", body.customerDaysAfterExit, actor, now);
+      const after = await settingsView(tx);
+      await writeAudit(tx, request, now, { action: "GPS_SETTINGS_CHANGED", entityType: "settings", entityId: site.id, before, after });
+      return after;
+    });
+    return { settings: changed };
   });
 
   app.post("/api/gps/trackers/:id/detach", editors, async (request) => {

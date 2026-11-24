@@ -30,7 +30,9 @@ export type ModuleCode =
   | "reports"
   // phase 5 and 6: plant masters, control room
   | "plant_masters"
-  | "dashboard";
+  | "dashboard"
+  // phase 8: GPS positions of trucks outside the plant
+  | "gps";
 
 /** EDIT covers CREATE, CREATE covers VIEW. */
 export type PermissionLevel = "VIEW" | "CREATE" | "EDIT";
@@ -248,6 +250,8 @@ export interface Vehicle {
   expired: string[];
   isActive: boolean;
   verified: boolean;
+  /** The vehicle has an active GPS tracker (apps/api vehicles, phase 8); absent in older answers. */
+  hasGps?: boolean;
 }
 
 export type PartnerRole = "supplier" | "customer" | "transporter";
@@ -447,6 +451,8 @@ export interface SpjPrint {
   containerNo: string | null;
   transporter: PartnerRef | null;
   lines: SpjLine[];
+  /** The driver's page that shares the phone's location for this trip; null when the trip has no active link. */
+  shareUrl?: string | null;
 }
 
 export interface SpjLine {

@@ -77,6 +77,12 @@ describe("navigationFor", () => {
     expect(navigationFor(partner({ plant_masters: "EDIT" }))).toEqual(["/"]);
   });
 
+  it("adds Lacak kendaraan after the control room for staff and partner accounts with gps", () => {
+    expect(navigationFor(staff({ dashboard: "VIEW", gps: "VIEW", approvals: "VIEW" }))).toEqual(["/", "/ruang-kontrol", "/lacak", "/keputusan"]);
+    expect(navigationFor(partner({ registrations: "CREATE", gps: "VIEW" }))).toEqual(["/", "/registrasi", "/lacak"]);
+    expect(navigationFor(staff({ registrations: "VIEW" }))).not.toContain("/lacak");
+  });
+
   it("gives an account without access only the start page", () => {
     expect(navigationFor(staff({}))).toEqual(["/"]);
   });

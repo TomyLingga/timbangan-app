@@ -26,6 +26,11 @@ const positive = (value: unknown, fallback: number) => {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : fallback;
 };
+/** 0 is a real choice for the customer window: the customer stops following the truck when it leaves the plant. */
+const nonNegative = (value: unknown, fallback: number) => {
+  const number = typeof value === "number" ? value : Number.NaN;
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+};
 
 /** The GPS settings of the default site (one site today). */
 export async function gpsSettings(orm: Orm): Promise<GpsSettings> {
@@ -35,7 +40,7 @@ export async function gpsSettings(orm: Orm): Promise<GpsSettings> {
   const lon = Number(plant?.lon);
   return {
     retentionDays: positive(await readSetting(orm, site.id, "gps_retention_days"), 90),
-    customerDays: positive(await readSetting(orm, site.id, "gps_customer_days_after_exit"), 3),
+    customerDays: nonNegative(await readSetting(orm, site.id, "gps_customer_days_after_exit"), 3),
     plant: plant && Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat, lon } : null,
   };
 }

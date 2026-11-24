@@ -31,6 +31,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { createServer } from "node:http";
 
 import { controlRoomRoutes } from "./mock-control-room.mjs";
+import { createGpsMock } from "./mock-gps.mjs";
 import { historyRoutes } from "./mock-history.mjs";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -105,6 +106,8 @@ const modules = [
   ["reports", "Laporan", ["VIEW"], false],
   // phase 5, migration 0006: tanks and seals, staff only
   ["plant_masters", "Master pabrik", ["VIEW", "CREATE", "EDIT"], false],
+  // phase 8, migration 0011: GPS positions (dev/mock-gps.mjs); every partner account holds VIEW since 0012
+  ["gps", "Lacak kendaraan", ["VIEW", "EDIT"], true],
 ].map(([code, name, levels, partnerAllowed]) => ({ code, name, levels, partnerAllowed }));
 
 const everything = () => Object.fromEntries(modules.map((item) => [item.code, item.levels.at(-1)]));
@@ -130,7 +133,7 @@ const users = [
     kind: "PARTNER",
     username: "pks.contoh.a",
     fullName: "Admin PKS Contoh A",
-    permissions: { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" },
+    permissions: { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
     partner: partners.pksA,
     password: "contoh-123",
   },
@@ -139,7 +142,7 @@ const users = [
     kind: "PARTNER",
     username: "transporter.contoh",
     fullName: "Admin Transporter Contoh A",
-    permissions: { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE" },
+    permissions: { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
     partner: partners.transporterA,
     password: "contoh-123",
   },
@@ -484,8 +487,11 @@ function setVerified(request, response, id, verified) {
 function publicVehicle(item) {
   const documents = { STNK: item.stnkValidUntil, TAX: item.taxValidUntil, KIR: item.kirValidUntil };
   const expired = Object.keys(documents).filter((code) => documents[code] && documents[code] < today());
-  return { ...item, expired };
+  return { ...item, expired, hasGps: gpsMock?.hasTracker(item.id) ?? false };
 }
+
+/** The GPS part (dev/mock-gps.mjs), made once the seed trips exist; seeding reads vehicles before that. */
+let gpsMock = null;
 
 const EMPTY_VEHICLE_BODY = {
   vehicleTypeCode: null,
@@ -3328,6 +3334,7 @@ const routes = {
         containerNo: trip.containerNo,
         transporter: ref(findPartner(registration.transporterId)),
         lines,
+        shareUrl: gpsMock?.shareUrlFor(trip) ?? null,
       },
     });
   },
@@ -3467,6 +3474,8 @@ const routes = {
 Object.assign(routes, phaseFourRoutes());
 Object.assign(routes, plantAndFileRoutes());
 Object.assign(routes, historyRoutes({ guard, send, fail, invalid, sendCsv, reportPage }));
+gpsMock = createGpsMock({ guard, send, fail, invalid, readJson, corsHeaders, plateKey, vehicles, trips, registrationOf, deliveryOrders, ref, webOrigin: WEB_ORIGIN });
+Object.assign(routes, gpsMock.routes);
 
 /**
  * Routes written with ":id" match one path segment in that place; a second

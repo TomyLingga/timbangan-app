@@ -74,8 +74,13 @@ export class Browser {
     this.nextId = 1;
     this.pending = new Map();
     this.sessionId = undefined;
+    this.listeners = new Map();
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(event.data);
+      if (message.method) {
+        for (const listener of this.listeners.get(message.method) ?? []) void listener(message.params, message.sessionId);
+        return;
+      }
       const waiter = this.pending.get(message.id);
       if (!waiter) return;
       this.pending.delete(message.id);
@@ -113,9 +118,11 @@ export class Browser {
   /** Polls until the expression is truthy. Returns its value, or null on timeout. */
   async waitFor(expression, timeoutMs = this.waitMs) {
     const deadline = Date.now() + timeoutMs;
+    // a DOM node cannot be returned by value; a found node counts as true
+    const settled = `(() => { const value = (${expression}); return typeof Node !== "undefined" && value instanceof Node ? true : value; })()`;
     while (Date.now() < deadline) {
       try {
-        const value = await this.evaluate(expression);
+        const value = await this.evaluate(settled);
         if (value) return value;
       } catch {
         // The page is navigating; try again.
@@ -231,6 +238,65 @@ export class Browser {
 
   async media(value) {
     await this.send("Emulation.setEmulatedMedia", { media: value });
+  }
+
+  /** Calls `listener(params, sessionId)` for every DevTools event `method`. */
+  on(method, listener) {
+    this.listeners.set(method, [...(this.listeners.get(method) ?? []), listener]);
+  }
+
+  /**
+   * Answers the page's requests for OpenStreetMap tiles with the mock's blank tile, so a map works without the
+   * internet. Answers how many tiles it served so far, through the returned function.
+   */
+  async serveMapTilesFrom(tileBase) {
+    let served = 0;
+    this.on("Fetch.requestPaused", async (params, sessionId) => {
+      const match = /\/(\d+)\/(\d+)\/(\d+)\.png/.exec(params.request.url);
+      const answer = await fetch(`${tileBase}${match ? match.slice(1).join("-") : "0-0-0"}.png`);
+      const body = Buffer.from(await answer.arrayBuffer()).toString("base64");
+      served += 1;
+      await this.send(
+        "Fetch.fulfillRequest",
+        { requestId: params.requestId, responseCode: 200, responseHeaders: [{ name: "content-type", value: "image/png" }], body },
+        sessionId,
+      ).catch(() => {});
+    });
+    await this.send("Fetch.enable", { patterns: [{ urlPattern: "https://tile.openstreetmap.org/*" }] });
+    return () => served;
+  }
+
+  /**
+   * Puts this page in front and lets it believe it has the focus. A link with target=_blank opens a tab in front of
+   * it, and a page in the background gets no location.
+   */
+  async bringToFront() {
+    await this.send("Page.bringToFront");
+    await this.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  }
+
+  /** Pretends the device stands at this place (null: no override). The page still needs the permission. */
+  async geolocation(position) {
+    if (position) await this.send("Emulation.setGeolocationOverride", { latitude: position.lat, longitude: position.lon, accuracy: position.accuracy ?? 10 });
+    else await this.send("Emulation.clearGeolocationOverride");
+  }
+
+  /** Grants or denies a permission ("geolocation") to an origin, as the user would in the browser. */
+  async permission(origin, name, setting) {
+    // grantPermissions and resetPermissions are what Puppeteer uses; setPermission alone did not always grant
+    if (setting === "granted") await this.send("Browser.grantPermissions", { origin, permissions: [name] }, undefined);
+    else if (setting === "prompt") await this.send("Browser.resetPermissions", {}, undefined);
+    else await this.send("Browser.setPermission", { origin, permission: { name }, setting }, undefined);
+  }
+
+  /** Runs `source` in every page before its own scripts, until removed with the answered id. */
+  async addInitScript(source) {
+    const { identifier } = await this.send("Page.addScriptToEvaluateOnNewDocument", { source });
+    return identifier;
+  }
+
+  async removeInitScript(identifier) {
+    await this.send("Page.removeScriptToEvaluateOnNewDocument", { identifier });
   }
 
   async close() {

@@ -83,6 +83,12 @@ async function signOut(browser) {
 }
 
 async function run(browser) {
+  // SMOKE_ONLY=gps runs only the GPS checks (42 to 47), against a fresh mock.
+  if (process.env.SMOKE_ONLY === "gps") {
+    await gpsTracking(browser);
+    await driverSharing(browser);
+    return;
+  }
   // 1. Server HTML of the sign-in page.
   const html = await (await fetch(`${WEB}/login`)).text();
   if (!html.includes(`${API}/api/auth/sso/start`)) {
@@ -241,7 +247,8 @@ async function run(browser) {
     // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
     // and since migration 0006 the plant masters: Tangki and Segel
     // Tujuan left the menu: the destination is typed on each DO (owner's decision, 22 November 2026)
-    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/riwayat', '/stasiun'];
+    // and since migration 0011 Lacak kendaraan (gps)
+    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/lacak', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/riwayat', '/stasiun'];
     return !dialog.innerText.includes('Belum tersedia') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
@@ -505,7 +512,8 @@ async function run(browser) {
   const partnerModules = (await browser.waitFor(`[...document.querySelectorAll('[role="dialog"] select')].map((s) => s.name).join(' ')`)) ?? "";
   check(
     "a partner account is offered only the modules allowed for partners",
-    partnerModules === "permission-contracts permission-drivers permission-vehicles permission-delivery_orders permission-registrations",
+    // gps is allowed for partners since migration 0011 (apps/api)
+    partnerModules === "permission-contracts permission-drivers permission-vehicles permission-delivery_orders permission-registrations permission-gps",
     partnerModules,
   );
   await browser.click("Beri semua");
@@ -643,6 +651,8 @@ async function run(browser) {
   await phaseFour(browser);
   await phaseFive(browser);
   await historyAndVerification(browser);
+  await gpsTracking(browser);
+  await driverSharing(browser);
 }
 
 /**
@@ -1597,6 +1607,253 @@ async function historyAndVerification(browser) {
   await signOut(browser);
 }
 
+/** How many OpenStreetMap tiles the browser asked for, all answered by the mock (set once the page is open). */
+let tilesServed = () => 0;
+
+async function gpsTracking(browser) {
+  // 42. Lacak kendaraan for staff with gps EDIT: three tracked trucks, their states, filters kept in the address bar.
+  await browser.viewport(1440, 900);
+  await staffSignIn(browser, "super.contoh");
+  const menu = await menuLinks(browser);
+  check("Lacak kendaraan sits after the post and before Keputusan in the menu", menu.includes("/pos /lacak /keputusan"), menu);
+  await browser.click('a[href="/lacak"]');
+  const rows = `[...document.querySelectorAll('[data-testid="gps-row"]')]`;
+  const rowOf = (plate) => `(${rows}.find((row) => row.innerText.includes(${JSON.stringify(plate)}))?.innerText ?? '').replace(/\\s+/g, ' ')`;
+  check("/lacak lists the three tracked trucks", (await browser.waitFor(`location.pathname === '/lacak' && ${rows}.length`)) === 3);
+  check(
+    "each row says the state in words: moving, stopped, no news",
+    (await browser.evaluate(rowOf("ZZ 0003 CTH"))).includes("Bergerak") &&
+      (await browser.evaluate(rowOf("ZZ 0002 CTH"))).includes("Berhenti") &&
+      (await browser.evaluate(rowOf("ZZ 0001 CTH"))).includes("Tidak ada kabar"),
+    await browser.evaluate(rows + ".map((row) => row.innerText.replace(/\\s+/g, ' ')).join(' | ')"),
+  );
+  check(
+    "every truck has a marker with its plate, its state sign and the state for screen readers",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const markers = [...document.querySelectorAll('.gps-marker[data-state]')];
+        const states = markers.map((marker) => marker.dataset.vehicleId + ':' + marker.dataset.state).sort().join(' ');
+        return markers.length === 3 && states === 'v-1:SILENT v-2:STOPPED v-3:MOVING' &&
+          markers.every((marker) => marker.querySelector('.gps-marker-state svg') && marker.querySelector('.sr-only') && marker.getAttribute('role') === 'button');
+      })()`),
+    ),
+  );
+  check("the map tiles came from the mock, not the internet", tilesServed() > 0, `${tilesServed()} tiles`);
+  check("the map shows the OpenStreetMap attribution", Boolean(await browser.waitFor(`document.querySelector('.leaflet-control-attribution')?.innerText.includes('OpenStreetMap')`)));
+
+  const chip = (n) => `[aria-label="Saring menurut keadaan truk"] button:nth-child(${n})`;
+  await browser.click(chip(2));
+  check("Bergerak keeps the moving truck and goes into the address bar", Boolean(await browser.waitFor(`${rows}.length === 1 && location.search.includes('keadaan=bergerak')`)) && (await browser.evaluate(rowOf("ZZ 0003 CTH"))) !== "");
+  await browser.click(chip(4));
+  check("Tidak ada kabar keeps the silent truck", Boolean(await browser.waitFor(`${rows}.length === 1 && ${rowOf("ZZ 0001 CTH")} !== ''`)) && (await browser.evaluate("document.querySelectorAll('.gps-marker').length")) === 1);
+  await browser.click(chip(1));
+  await browser.waitFor(`${rows}.length === 3 && !location.search.includes('keadaan')`);
+  await browser.type('input[type="search"]', "0002", { perKey: true });
+  check("a plate search narrows the list and is kept in the address bar", Boolean(await browser.waitFor(`${rows}.length === 1 && location.search.includes('q=0002')`)));
+  await browser.click('button[aria-label="Hapus pencarian"]');
+  await browser.waitFor(`${rows}.length === 3`);
+
+  // a marker click, while every truck is in view
+  const panel = textOf('[data-testid="gps-panel"]');
+  await browser.click('.gps-marker[data-vehicle-id="v-2"] .gps-marker-truck');
+  check("a marker click selects its truck", Boolean(await browser.waitFor(`${panel}.includes('ZZ 0002 CTH') && ${panel}.includes('Ponsel supir') && location.search.includes('vehicle=v-2')`)));
+
+  // selecting from the list: the panel, the track, the address bar
+  await browser.click('[data-testid="gps-row"][data-vehicle-id="v-3"]');
+  check(
+    "selecting a truck shows its trip, partner, last point and source in words",
+    Boolean(await browser.waitFor(`${panel}.includes('ZZ 0003 CTH') && ${panel}.includes('Incoming') && ${panel}.includes('PKS Contoh B') && ${panel}.includes('Alat pelacak') && ${panel}.includes('km/jam')`)),
+    await browser.evaluate(panel),
+  );
+  check("the selection is kept in the address bar", (await location(browser)).includes("vehicle=v-3"));
+  check(
+    "its current trip's track is drawn",
+    Boolean(await browser.waitFor(`document.querySelector('path.gps-track') && ${textOf('[data-testid="gps-track-text"]')}.includes('Jejak perjalanan') && ${textOf('[data-testid="gps-track-text"]')}.includes('titik')`)),
+    await browser.evaluate(textOf('[data-testid="gps-track-text"]')),
+  );
+  check("the selected marker and row are marked", Boolean(await browser.waitFor(`document.querySelector('.gps-marker[data-vehicle-id="v-3"]')?.dataset.selected === 'true' && document.querySelector('[data-testid="gps-row"][data-vehicle-id="v-3"]')?.getAttribute('aria-pressed') === 'true'`)));
+  await browser.screenshot("42-lacak-selected");
+  await browser.evaluate(`document.querySelector('.gps-marker[data-vehicle-id="v-1"]').focus()`);
+  await browser.pressEnter();
+  check("Enter on a focused marker selects it", Boolean(await browser.waitFor(`${panel}.includes('ZZ 0001 CTH') && ${panel}.includes('Tidak ada kabar') && ${panel}.includes('Jejak 24 jam terakhir')`)));
+  await browser.click('button[aria-label="Tutup rincian truk"]');
+  check("closing the panel clears the selection", Boolean(await browser.waitFor(`!document.querySelector('[data-testid="gps-panel"]') && !location.search.includes('vehicle=')`)));
+  await browser.goto(`${WEB}/lacak?vehicle=v-3`);
+  check("?vehicle= opens with that truck selected", Boolean(await browser.waitFor(`${panel}.includes('ZZ 0003 CTH')`)));
+  await browser.goto(`${WEB}/lacak?trip=trip-2`);
+  check(
+    "a trip whose truck has no position says so plainly",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="gps-no-position"]')}.includes('belum punya posisi')`)),
+  );
+  await browser.viewport(390, 844, true);
+  await browser.goto(`${WEB}/lacak`);
+  await browser.waitFor(`${rows}.length === 3`);
+  check(
+    "at phone width the list sits under the map, without horizontal scroll",
+    await browser.evaluate(`(() => {
+      const map = document.querySelector('.gps-map').getBoundingClientRect();
+      const row = document.querySelector('[data-testid="gps-row"]').getBoundingClientRect();
+      return row.top >= map.bottom && document.documentElement.scrollWidth <= window.innerWidth;
+    })()`),
+  );
+  await browser.viewport(1440, 900);
+
+  // 43. Pengaturan GPS: a new source shows its key once; an unknown device goes onto a vehicle; the settings save.
+  await browser.goto(`${WEB}/lacak`);
+  await browser.click('a[href="/lacak/pengaturan"]');
+  await browser.waitFor(`document.querySelector('[data-testid="gps-source"]')`);
+  await browser.click("Sumber baru");
+  await browser.fill(inSheet('input[name="sourceName"]'), "Penyedia Uji Asap");
+  await browser.fill(inSheet('select[name="sourceKind"]'), "DEVICE");
+  await browser.click(inSheet('button[type="submit"]'));
+  const key = await browser.waitFor(`document.querySelector('#gps-key-value')?.textContent`);
+  check("a new source shows its key once in a dialog with a copy button and a warning", /^gs\d+\.[A-Za-z0-9_-]{43}$/.test(key ?? "") && (await browser.evaluate(textOf('[data-testid="gps-key-dialog"]'))).includes("hanya tampil sekali") && (await browser.evaluate(`[...document.querySelectorAll('[data-testid="gps-key-dialog"] button')].some((b) => b.innerText.includes('Salin'))`)), key ?? "");
+  await browser.screenshot("43-gps-key");
+  await browser.click("Sudah saya simpan");
+  check(
+    "after the dialog the key is nowhere on the page, and the source is listed",
+    Boolean(await browser.waitFor(`!document.querySelector('[data-testid="gps-key-dialog"]') && document.querySelector('[data-source-name="Penyedia Uji Asap"]')`)) &&
+      !(await browser.evaluate(`document.documentElement.outerHTML.includes(${JSON.stringify(key ?? "-")})`)),
+    await browser.evaluate(
+      `JSON.stringify({ dialog: Boolean(document.querySelector('[data-testid="gps-key-dialog"]')), names: [...document.querySelectorAll('[data-source-name]')].map((n) => n.dataset.sourceName), keyIn: document.documentElement.outerHTML.includes(${JSON.stringify(key ?? "-")}) })`,
+    ),
+  );
+  await browser.click('[data-source-name="Penyedia Contoh"] button[aria-expanded]');
+  await browser.click('button[aria-label="Pasang ALAT-0099 ke kendaraan"]');
+  await pickOption(browser, inSheet('input[name="trackerVehicle"]'), "ZZ 0002");
+  check("attaching an unknown device starts with its source and number", (await browser.evaluate(`document.querySelector('[role="dialog"] input[name="trackerDevice"]').value`)) === "ALAT-0099");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "the device is attached and listed under its vehicle",
+    Boolean(await browser.hasText("Alat ALAT-0099 terpasang di ZZ 0002 CTH.")) &&
+      Boolean(await browser.waitFor(`document.querySelector('[data-testid="gps-tracker"][data-plate="ZZ 0002 CTH"]') && !document.querySelector('button[aria-label="Pasang ALAT-0099 ke kendaraan"]')`)),
+    await browser.evaluate(`document.querySelector('main').innerText.replace(/\\s+/g, ' ').slice(0, 500)`),
+  );
+  await browser.fill('input[name="retentionDays"]', "6");
+  await browser.click("Simpan pengaturan");
+  check("a retention out of range is refused next to the field", Boolean(await browser.hasText("Isi angka bulat dari 7 sampai 730.")));
+  await browser.fill('input[name="retentionDays"]', "30");
+  await browser.click("Pakai titik tengah peta");
+  check("Pakai titik tengah peta fills both coordinates", Boolean(await browser.waitFor(`/^-?\\d/.test(document.querySelector('input[name="plantLat"]').value) && /^-?\\d/.test(document.querySelector('input[name="plantLon"]').value)`)));
+  await browser.click("Simpan pengaturan");
+  const staffToken = await apiSession("super.contoh");
+  const saved = await browser.hasText("Pengaturan GPS disimpan.");
+  const stored = (await (await fetch(`${API}/api/gps/settings`, { headers: { authorization: `Bearer ${staffToken}` } })).json()).settings;
+  check("the settings are saved", Boolean(saved) && stored.retentionDays === 30 && stored.plantLocation !== null, JSON.stringify(stored));
+  check("the page explains how a provider sends positions", (await browser.evaluate(textOf('[data-testid="gps-howto"]'))).includes("X-Tracker-Key") && (await browser.evaluate(textOf('[data-testid="gps-howto"]'))).includes("/api/gps/positions"));
+
+  // 44. Kendaraan: the GPS mark, and the tracker dialog of a vehicle.
+  await browser.goto(`${WEB}/kendaraan`);
+  await browser.waitFor(`${rowText("ZZ 0003 CTH")} !== ''`);
+  check(
+    "vehicles with a tracker carry the GPS mark, others do not",
+    (await browser.evaluate(`[...document.querySelectorAll('tbody tr')].filter((row) => row.offsetParent !== null && row.querySelector('[data-testid="vehicle-gps"]')).map((row) => row.innerText.match(/ZZ \\d{4} CTH/)?.[0]).sort().join()`)) === "ZZ 0001 CTH,ZZ 0002 CTH,ZZ 0003 CTH",
+  );
+  await browser.click('button[aria-label="Alat GPS ZZ 0003 CTH"]');
+  check("the vehicle's tracker dialog shows the device it has", Boolean(await browser.waitFor(`${textOf('[data-testid="tracker-attached"]')}.includes('ALAT-0003')`)));
+  await browser.click("Batal");
+
+  // 45. A trip row links to its position; the SPJ carries the second QR code.
+  await browser.goto(`${WEB}/registrasi/r-1`);
+  await browser.click('a[href="/lacak?trip=trip-1"]');
+  check("Lihat posisi on a trip row opens the map on that truck", Boolean(await browser.waitFor(`location.search.includes('trip=trip-1') && ${panel}.includes('ZZ 0003 CTH')`)));
+  await browser.goto(`${WEB}/spj/trip-1/cetak`);
+  await browser.waitFor(`document.querySelector('[data-testid="spj-sheet"]')`);
+  check(
+    "the SPJ of a trip on the road has a second, smaller QR for sharing the location",
+    Boolean(await browser.waitFor(`document.querySelectorAll('[data-testid="spj-sheet"] [data-barcode="qr"]').length === 2`)) &&
+      (await browser.evaluate(textOf('[data-testid="spj-share"]'))).includes("Bagikan lokasi (opsional)"),
+  );
+  await browser.media("print");
+  check("the SPJ with two QR codes still fits one A5 page", await browser.evaluate(`document.querySelector('[data-testid="spj-sheet"]').getBoundingClientRect().height <= 190 * 96 / 25.4`), String(await browser.evaluate(`document.querySelector('[data-testid="spj-sheet"]').getBoundingClientRect().height`)));
+  await browser.screenshot("45-spj-two-qr");
+  await browser.media("");
+  await browser.goto(`${WEB}/spj/trip-2/cetak`);
+  await browser.waitFor(`document.querySelector('[data-testid="spj-sheet"]')`);
+  check("an SPJ without a share link prints with one QR", (await browser.evaluate(`document.querySelectorAll('[data-testid="spj-sheet"] [data-barcode="qr"]').length`)) === 1 && !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="spj-share"]'))`)));
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+
+  // 46. A partner account sees only its own trucks and no settings.
+  await partnerSignIn(browser, "transporter.contoh");
+  check("a partner account with gps VIEW has Lacak kendaraan in its menu", (await menuLinks(browser)).includes("/lacak"));
+  await browser.click('a[href="/lacak"]');
+  await browser.waitFor(`${rows}.length > 0`);
+  check(
+    "the transporter sees its own two trucks and not the other company's",
+    (await browser.evaluate(`${rows}.map((row) => row.innerText.match(/ZZ \\d{4} CTH/)?.[0]).sort().join()`)) === "ZZ 0001 CTH,ZZ 0002 CTH",
+  );
+  check("a partner gets no settings tab", !(await browser.evaluate(`Boolean(document.querySelector('a[href="/lacak/pengaturan"]'))`)));
+  await browser.goto(`${WEB}/lacak/pengaturan`);
+  check("/lacak/pengaturan refuses a partner account", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")));
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
+/** Where the driver's page is and which of its screens shows, for a failed check. */
+const shareDetail = `location.pathname + ' ' + [...document.querySelectorAll('[data-testid^="share-"]')].map((node) => node.dataset.testid).join(',') + ' ' + typeof navigator.geolocation`;
+
+async function driverSharing(browser) {
+  // 47. The driver's page, without an account: link unknown, closed, sharing with an emulated location, refused,
+  // a browser without location, and a page outside HTTPS (the last two made by scripts only this test installs).
+  await browser.bringToFront();
+  await browser.viewport(390, 844, true);
+  await browser.goto(`${WEB}/bagi-lokasi/tidak-ada`);
+  check("an unknown link says so", Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-unknown"]')`)), await browser.evaluate(shareDetail));
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-tutup`);
+  check("a closed link says sharing is closed and shows the plate", Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-closed"]') && ${textOf('[data-testid="share-plate"]')} === 'ZZ 0004 CTH'`)));
+
+  await browser.permission(WEB, "geolocation", "granted");
+  await browser.geolocation({ lat: -10.52, lon: 85.2, accuracy: 12 });
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-buka`);
+  check(
+    "an open link names the truck and says what is shared, with whom and until when",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-ready"]') && ${textOf('[data-testid="share-plate"]')} === 'ZZ 0003 CTH'`)) &&
+      (await browser.evaluate(textOf('[data-testid="share-explainer"]'))).includes("Sampai truk selesai"),
+  );
+  check("the driver's page has no horizontal scroll at 390 px", await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
+  await browser.geolocation({ lat: -10.52, lon: 85.2, accuracy: 12 });
+  const fix = await browser.evaluate(
+    `Promise.race([
+      new Promise((resolve) => navigator.geolocation.getCurrentPosition((p) => resolve('fix ' + p.coords.accuracy), (e) => resolve('error ' + e.code), { timeout: 4000 })),
+      new Promise((resolve) => setTimeout(() => resolve('no answer (permission still asked?)'), 6000)),
+    ])`,
+  );
+  check("the browser gives the emulated location", fix === "fix 12", fix);
+  await browser.click("Bagikan lokasi");
+  check(
+    "sharing sends the first point at once and shows when and how exact",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-active"]') && !${textOf('[data-testid="share-last-sent"]')}.includes('belum')`)) &&
+      (await browser.evaluate(textOf('[data-testid="share-active"]'))).includes("± 12 m"),
+    await browser.evaluate(textOf('[data-testid="share-active"]')),
+  );
+  const sent = await (await fetch(`${API}/__mock/gps-share-points`)).json();
+  check("the points reached the share route", (sent["contoh-buka"] ?? 0) >= 1, JSON.stringify(sent));
+  await browser.screenshot("47-share-active");
+  await browser.click("Berhenti");
+  check("Berhenti stops sharing", Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-ready"]')`)));
+  await fetch(`${API}/__mock/gps-share/contoh-buka/close`, { method: "POST" });
+  await browser.click("Bagikan lokasi");
+  check("a link closed while sharing turns into the closed screen", Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-closed"]')`)));
+
+  await browser.permission(WEB, "geolocation", "denied");
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-buka-2`);
+  check("a refused location permission explains how to allow it", Boolean(await browser.waitFor(`${textOf('[data-testid="share-denied"]')}.includes('Izinkan')`)));
+  await browser.permission(WEB, "geolocation", "granted");
+
+  const noLocation = await browser.addInitScript("Object.defineProperty(Navigator.prototype, 'geolocation', { configurable: true, get: () => undefined });");
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-buka-2`);
+  check("a browser without location says so", Boolean(await browser.waitFor(`document.querySelector('[data-testid="share-unsupported"]')`)), await browser.evaluate(shareDetail));
+  await browser.removeInitScript(noLocation);
+  const plainHttp = await browser.addInitScript("Object.defineProperty(window, 'isSecureContext', { configurable: true, get: () => false });");
+  await browser.goto(`${WEB}/bagi-lokasi/contoh-buka-2`);
+  check("a page outside HTTPS says the browser gives the location only on HTTPS", Boolean(await browser.waitFor(`${textOf('[data-testid="share-insecure"]')}.includes('https://')`)));
+  await browser.removeInitScript(plainHttp);
+  await browser.geolocation(null);
+  await browser.permission(WEB, "geolocation", "prompt");
+  await browser.viewport(1366, 900);
+}
+
 /** Waits until the mock has answered `route` at least `count` times. */
 async function waitStat(route, count) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -1631,6 +1888,7 @@ try {
 
   browser = await Browser.launch(executable, { profileDir: path.join(outDir, "profile"), outDir, waitMs: WAIT_MS, spawnChild: start });
   await browser.openPage();
+  tilesServed = await browser.serveMapTilesFrom(`${API}/__mock/tile/`);
   await run(browser);
 } catch (error) {
   failure = error;

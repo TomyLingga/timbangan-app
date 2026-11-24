@@ -1,7 +1,7 @@
 // Which menu entries an account gets, in menu order: a module shows from level
 // view. The page behind each entry applies the same rule on a direct visit.
 
-import { canManageStations, canSeeApprovals, canSeeDrivers, canSeePlantMasters, canSeeReports, canView, isStaff } from "@/lib/permissions";
+import { canManageStations, canTrackVehicles, canSeeApprovals, canSeeDrivers, canSeePlantMasters, canSeeReports, canView, isStaff } from "@/lib/permissions";
 import type { ModuleCode, User } from "@/lib/types";
 
 export type NavHref =
@@ -10,6 +10,7 @@ export type NavHref =
   | "/delivery-order"
   | "/pos"
   | "/ruang-kontrol"
+  | "/lacak"
   | "/keputusan"
   | "/kontrak"
   | "/supir"
@@ -32,6 +33,8 @@ const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> 
   { href: "/pos", visible: (user) => isStaff(user) && canView(user, "gate") },
   // the control room routes are staff only (apps/api src/control-room/routes.ts)
   { href: "/ruang-kontrol", visible: (user) => isStaff(user) && canView(user, "dashboard") },
+  // staff and partner accounts; the API decides which trucks a partner sees (apps/api src/gps/read-routes.ts)
+  { href: "/lacak", visible: canTrackVehicles },
   { href: "/keputusan", visible: canSeeApprovals },
   { href: "/kontrak", visible: view("contracts") },
   { href: "/supir", visible: canSeeDrivers },

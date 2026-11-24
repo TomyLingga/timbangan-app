@@ -3,7 +3,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ListPlus } from "lucide-react";
+import { ArrowLeft, ListPlus, MapPinned } from "lucide-react";
 
 import { AttachmentList } from "@/components/attachments";
 import { DataList, type Column } from "@/components/data-list";
@@ -14,7 +14,8 @@ import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { canChangeDoFiles, MAX_DO_FILES } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
-import { canCreateOutgoing, canView } from "@/lib/permissions";
+import { positionLink } from "@/lib/gps";
+import { canCreateOutgoing, canTrackVehicles, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { deliveryOrderStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { DeliveryOrderDetail, Trip, User } from "@/lib/types";
@@ -28,7 +29,7 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function truckColumns(uom: string, linkRegistrations: boolean): ReadonlyArray<Column<Trip>> {
+function truckColumns(uom: string, linkRegistrations: boolean, trackable: boolean): ReadonlyArray<Column<Trip>> {
   return [
     {
       id: "plate",
@@ -86,7 +87,28 @@ function truckColumns(uom: string, linkRegistrations: boolean): ReadonlyArray<Co
         </>
       ),
     },
-    { id: "status", header: "Status", cell: (trip) => <StatusBadge info={tripStatusInfo(trip.status)} /> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (trip) => {
+        const position = trackable ? positionLink(trip) : null;
+        return (
+          <>
+            <StatusBadge info={tripStatusInfo(trip.status)} />
+            {position ? (
+              <Link
+                href={position}
+                className="mt-1 flex min-h-8 items-center gap-1 text-xs text-link underline-offset-4 hover:underline"
+                aria-label={`Lihat posisi ${trip.vehicle?.plateDisplay ?? `truk ${trip.seq}`}`}
+              >
+                <MapPinned className="size-3.5" aria-hidden="true" />
+                Lihat posisi
+              </Link>
+            ) : null}
+          </>
+        );
+      },
+    },
   ];
 }
 
@@ -197,7 +219,7 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
           <ListEmpty title="Belum ada truk" hint="Truk muncul di sini setelah transporter mengisi daftar truk DO ini." />
         ) : (
           <div data-testid="do-trucks">
-            <DataList columns={truckColumns(order.uom, canView(user, "registrations"))} rows={trips} rowKey={(trip) => trip.id} />
+            <DataList columns={truckColumns(order.uom, canView(user, "registrations"), canTrackVehicles(user))} rows={trips} rowKey={(trip) => trip.id} />
           </div>
         )}
       </section>

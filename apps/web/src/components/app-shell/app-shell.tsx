@@ -57,6 +57,9 @@ function SidebarToggle() {
   );
 }
 
+/** Pages under a menu entry that are not the detail of one record. */
+const SUBPAGE_LABELS: Readonly<Record<string, string>> = { "/lacak/pengaturan": "Pengaturan GPS" };
+
 /** Where the open page sits in the menu: a chip with the group, then the page. */
 function PageContext() {
   const pathname = usePathname();
@@ -77,7 +80,7 @@ function PageContext() {
       {deeper ? (
         <>
           <ChevronRight className="size-3.5 shrink-0 text-faint" aria-hidden="true" />
-          <span className="truncate text-muted-foreground">Rincian</span>
+          <span className="truncate text-muted-foreground">{SUBPAGE_LABELS[pathname] ?? "Rincian"}</span>
         </>
       ) : null}
     </p>

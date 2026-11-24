@@ -72,14 +72,15 @@ describe("createUser", () => {
     const make = async (username: string, partnerId: number) =>
       (await createUser(database.db, { username, fullName: username, kind: "PARTNER", partnerId, password: "s3cret-s3cret" })).id;
 
-    const supplier = { contracts: "VIEW", drivers: "CREATE", registrations: "CREATE", vehicles: "CREATE" };
-    const deliveries = { delivery_orders: "EDIT", drivers: "CREATE", registrations: "CREATE", vehicles: "CREATE" };
+    // every truck owner may follow its trucks (gps VIEW), whatever the kinds of its company
+    const supplier = { contracts: "VIEW", drivers: "CREATE", gps: "VIEW", registrations: "CREATE", vehicles: "CREATE" };
+    const deliveries = { delivery_orders: "EDIT", drivers: "CREATE", gps: "VIEW", registrations: "CREATE", vehicles: "CREATE" };
     expect(await permissionsOf(database, await make("pks", await company("PKS A", "is_supplier")))).toEqual(supplier);
     expect(await permissionsOf(database, await make("angkut", await company("Angkut T", "is_transporter")))).toEqual(deliveries);
     expect(await permissionsOf(database, await make("pembeli", await company("Pembeli C", "is_customer")))).toEqual(deliveries);
     expect(await permissionsOf(database, await make("serba", await company("Serba D", "is_supplier, is_transporter")))).toEqual({ ...supplier, ...deliveries });
     const plain = Number((await database.query<{ id: number }>("insert into partners (name) values ('Tanpa jenis') returning id"))[0]?.id);
-    expect(await permissionsOf(database, await make("plain", plain))).toEqual({});
+    expect(await permissionsOf(database, await make("plain", plain))).toEqual({ gps: "VIEW" });
   });
 
   it("refuses what would be a wrong or duplicate account, and leaves no row behind", async () => {

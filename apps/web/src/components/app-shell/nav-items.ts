@@ -11,6 +11,7 @@ import {
   House,
   IdCard,
   Map,
+  MapPinned,
   PackageCheck,
   ScanLine,
   Truck,
@@ -33,6 +34,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
   "/delivery-order": { label: "Delivery Order", icon: PackageCheck },
   "/pos": { label: "Pos registrasi", icon: ScanLine },
   "/ruang-kontrol": { label: "Ruang kontrol", icon: Map },
+  "/lacak": { label: "Lacak kendaraan", icon: MapPinned },
   "/keputusan": { label: "Keputusan", icon: Gavel },
   "/kontrak": { label: "Kontrak", icon: FileText },
   "/supir": { label: "Supir", icon: IdCard },
@@ -52,7 +54,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
  */
 export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly NavHref[] }> = [
   { label: null, hrefs: ["/"] },
-  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/ruang-kontrol", "/keputusan"] },
+  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/ruang-kontrol", "/lacak", "/keputusan"] },
   { label: "Data induk", hrefs: ["/kontrak", "/supir", "/kendaraan", "/kartu", "/tangki", "/segel"] },
   { label: "Laporan", hrefs: ["/laporan", "/riwayat"] },
   { label: "Sistem", hrefs: ["/stasiun", "/pengguna"] },

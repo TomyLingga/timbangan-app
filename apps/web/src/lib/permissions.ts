@@ -29,6 +29,7 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   reports: "Laporan",
   plant_masters: "Master pabrik",
   dashboard: "Dashboard",
+  gps: "Lacak kendaraan",
 };
 
 export const LEVEL_LABELS: Readonly<Record<PermissionLevel, string>> = {
@@ -148,6 +149,13 @@ export const canToggleTanks = (user: MaybeUser) => isStaff(user) && canEdit(user
 export const canAddSeals = (user: MaybeUser) => isStaff(user) && canCreate(user, "plant_masters");
 /** PATCH /api/seals/:id to VOID: plant_masters EDIT. */
 export const canVoidSeals = (user: MaybeUser) => isStaff(user) && canEdit(user, "plant_masters");
+
+// --- GPS (phase 8) ----------------------------------------------------------------------
+
+/** GET /api/gps/vehicles and the tracks: gps VIEW, staff and partner accounts (the API decides which trucks). */
+export const canTrackVehicles = (user: MaybeUser) => canView(user, "gps");
+/** Sources, trackers, settings and share links: gps EDIT, staff only. */
+export const canManageGps = (user: MaybeUser) => isStaff(user) && canEdit(user, "gps");
 
 // --- user administration --------------------------------------------------------------
 

@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams } from "next/navigation";
-import { ArrowLeft, ChevronDown, ChevronUp, CircleCheck, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronUp, CircleCheck, MapPinned, Pencil, Printer, RefreshCw, Send, TriangleAlert, X } from "lucide-react";
 
 import { ActionSheet } from "@/components/action-sheet";
 import { AttachmentList } from "@/components/attachments";
@@ -18,7 +18,8 @@ import { useApiQuery } from "@/hooks/use-api-query";
 import { canChangeSlips, MAX_TRIP_SLIPS } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
-import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canView, isStaff } from "@/lib/permissions";
+import { positionLink } from "@/lib/gps";
+import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canTrackVehicles, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { Registration, Trip, User } from "@/lib/types";
@@ -103,7 +104,19 @@ function TripCard({
           </h3>
           {trip.tripNo ? <p className="text-xs text-muted-foreground">Nomor trip {trip.tripNo}</p> : null}
         </div>
-        <StatusBadge info={tripStatusInfo(trip.status)} />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {canTrackVehicles(user) && positionLink(trip) ? (
+            <Link
+              href={positionLink(trip) ?? "/lacak"}
+              className="inline-flex min-h-8 items-center gap-1 text-sm text-link underline-offset-4 hover:underline"
+              aria-label={`Lihat posisi truk ${trip.seq}`}
+            >
+              <MapPinned className="size-3.5" aria-hidden="true" />
+              Lihat posisi
+            </Link>
+          ) : null}
+          <StatusBadge info={tripStatusInfo(trip.status)} />
+        </div>
       </div>
 
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">

@@ -152,6 +152,8 @@ const ROUTES: Row[] = [
   row("POST", "/api/gps/trackers/999999/detach", [["gps", "EDIT"]], true),
   row("POST", "/api/gps/trips/999999/share-link/revoke", [["gps", "EDIT"]], true),
   row("POST", "/api/gps/trips/999999/share-link/renew", [["gps", "EDIT"]], true),
+  row("GET", "/api/gps/settings", [["gps", "EDIT"]], true),
+  row("PUT", "/api/gps/settings", [["gps", "EDIT"]], true),
   // partner accounts read what concerns their company; the rest answers 404 (gps-read.test.ts)
   row("GET", "/api/gps/vehicles", [["gps", "VIEW"]]),
   row("GET", "/api/gps/vehicles/999999/track", [["gps", "VIEW"]]),

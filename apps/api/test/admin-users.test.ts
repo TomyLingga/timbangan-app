@@ -166,7 +166,7 @@ describe("PUT /api/admin/users/:id/permissions", () => {
     expect((await call("PUT", "/api/admin/users/999999/permissions", { permissions: {} })).statusCode).toBe(404);
     expect((await call("PUT", "/api/admin/users/abc/permissions", { permissions: {} })).statusCode).toBe(400);
     expect(await audit()).toEqual([]);
-    expect(await database.query("select count(*)::int as n from user_permissions where user_id = $1", [partnerUserId])).toEqual([{ n: 4 }]);
+    expect(await database.query("select count(*)::int as n from user_permissions where user_id = $1", [partnerUserId])).toEqual([{ n: Object.keys(TRANSPORTER).length }]);
   });
 
   it("refuses with 409 LAST_ADMIN a change that leaves no active staff account with users:EDIT", async () => {

@@ -44,7 +44,7 @@ export function SidebarNav({
   return (
     <nav
       aria-label="Menu utama"
-      className="flex flex-1 flex-col gap-5 overflow-x-hidden overflow-y-auto px-3 py-4 rail:lg:gap-3 rail:lg:overflow-visible rail:lg:px-0"
+      className="flex flex-1 flex-col gap-5 overflow-x-hidden overflow-y-auto px-3 py-4 rail:lg:gap-2 rail:lg:overflow-visible rail:lg:px-0 rail:lg:py-3"
     >
       <LayoutGroup id={id}>
         {groups.map((group, index) => (
@@ -57,7 +57,7 @@ export function SidebarNav({
                 {index > 0 ? (
                   <span
                     aria-hidden="true"
-                    className="mx-auto mb-3 hidden h-px w-8 bg-sidebar-border rail:lg:block"
+                    className="mx-auto mb-2 hidden h-px w-8 bg-sidebar-border rail:lg:block"
                   />
                 ) : null}
               </>
@@ -67,13 +67,13 @@ export function SidebarNav({
                 const item = NAV_ENTRIES[href];
                 const current = isCurrent(pathname, href);
                 return (
-                  <li key={href} className="relative rail:lg:size-11">
+                  <li key={href} className="relative rail:lg:size-10">
                     <Link
                       href={href}
                       onClick={onNavigate}
                       aria-current={current ? "page" : undefined}
                       className={cn(
-                        "group/nav relative flex min-h-10 items-center gap-3 rounded-xl px-3 text-sm transition-colors duration-150 rail:lg:size-11 rail:lg:justify-center rail:lg:px-0",
+                        "group/nav relative flex min-h-10 items-center gap-3 rounded-xl px-3 text-sm transition-colors duration-150 rail:lg:size-10 rail:lg:justify-center rail:lg:px-0",
                         current
                           ? "font-semibold text-sidebar-accent-foreground"
                           : "text-sidebar-muted hover:bg-sidebar-accent/45 hover:text-sidebar-foreground",
