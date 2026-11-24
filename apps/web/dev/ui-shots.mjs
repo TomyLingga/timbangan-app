@@ -66,8 +66,8 @@ async function shootAll(browser, name, url, prepare) {
       await browser.viewport(size.width, size.height, size.mobile);
       await browser.goto(url);
       if (prepare) await prepare(size);
-      // an open sheet sits over the viewport, so those phone shots keep to the viewport
-      await shoot(browser, `${name}-${theme}-${size.tag}`, { fullPage: size.mobile && !name.endsWith("rincian") });
+      // an open sheet or panel sits over the viewport, so those phone shots keep to the viewport
+      await shoot(browser, `${name}-${theme}-${size.tag}`, { fullPage: size.mobile && !name.endsWith("rincian") && !name.startsWith("notif") });
     }
   }
   await browser.viewport(1440, 900);
@@ -93,10 +93,35 @@ async function staff(browser) {
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
 }
 
+/** Opens the header bell and waits for its list. */
+async function openBell(browser) {
+  await browser.waitFor(`/\\d/.test(document.querySelector('[data-testid="notifications-bell"]')?.getAttribute('aria-label') ?? '')`);
+  await browser.click('[data-testid="notifications-bell"]');
+  await browser.waitFor(`document.querySelectorAll('[data-testid="notifications-panel"] [data-notification]').length > 0`);
+}
+
+async function signOut(browser) {
+  await browser.click('[data-testid="user-menu"]');
+  await browser.click("Keluar");
+  await browser.waitFor("location.pathname === '/login'");
+}
+
 async function samplePass(browser) {
   await browser.viewport(1440, 900);
   await shootAll(browser, "login", `${WEB}/login`, () => browser.hasText("Masuk lewat Portal INL"));
+  if (wanted("notif-partner")) {
+    // a transporter account: the delivery order sent to its company and a notice, unread
+    await browser.goto(`${WEB}/login`);
+    await browser.type('input[name="username"]', "transporter.contoh");
+    await browser.type('input[name="password"]', "contoh-123");
+    await browser.click('button[type="submit"]');
+    await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
+    await shootAll(browser, "notif-partner", `${WEB}/`, () => openBell(browser));
+    await browser.pressEscape();
+    await signOut(browser);
+  }
   await staff(browser);
+  await shootAll(browser, "notif-approver", `${WEB}/`, () => openBell(browser));
 
   await shootAll(browser, "beranda", `${WEB}/`, () => browser.waitFor(`document.querySelector('[aria-label="Truk per tahap"]')?.getAttribute('aria-busy') === 'false'`));
   await shootAll(browser, "kontrak", `${WEB}/kontrak`, (size) => browser.waitFor(listReady(size)));
@@ -167,8 +192,7 @@ async function samplePass(browser) {
   await browser.pressEscape();
   await browser.goto(`${WEB}/`);
   await browser.waitFor(`document.querySelector('[aria-label="Truk per tahap"]')?.getAttribute('aria-busy') === 'false'`);
-  await browser.click('[data-testid="approvals-bell"]');
-  await browser.waitFor(`Boolean(document.querySelector('[role="menu"]'))`);
+  await openBell(browser);
   await shoot(browser, "lonceng-dark-1440");
   await browser.pressEscape();
   await browser.goto(`${WEB}/kontrak`);

@@ -32,6 +32,7 @@ import { createServer } from "node:http";
 
 import { controlRoomRoutes } from "./mock-control-room.mjs";
 import { createGpsMock } from "./mock-gps.mjs";
+import { createNotificationsMock } from "./mock-notifications.mjs";
 import { historyRoutes } from "./mock-history.mjs";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -492,6 +493,8 @@ function publicVehicle(item) {
 
 /** The GPS part (dev/mock-gps.mjs), made once the seed trips exist; seeding reads vehicles before that. */
 let gpsMock = null;
+/** The inbox of dev/mock-notifications.mjs, made once the sample data exists. */
+let notificationsMock = null;
 
 const EMPTY_VEHICLE_BODY = {
   vehicleTypeCode: null,
@@ -3067,6 +3070,7 @@ const routes = {
       return invalid(request, response, { transporterId: "Transporter harus partner transporter." });
     }
     Object.assign(order, { transporterId, status: "SENT", sentAt: nowIso() });
+    notificationsMock?.deliveryOrderSent(order);
     return send(request, response, 200, { deliveryOrder: publicOrder(order) });
   },
 
@@ -3492,6 +3496,8 @@ Object.assign(routes, plantAndFileRoutes());
 Object.assign(routes, historyRoutes({ guard, send, fail, invalid, sendCsv, reportPage }));
 gpsMock = createGpsMock({ guard, send, fail, invalid, readJson, corsHeaders, plateKey, vehicles, trips, registrationOf, deliveryOrders, ref, webOrigin: WEB_ORIGIN });
 Object.assign(routes, gpsMock.routes);
+notificationsMock = createNotificationsMock({ authenticate, send, fail, invalid, users, can, exceptions, trips, deliveryOrders });
+Object.assign(routes, notificationsMock.routes);
 
 /**
  * Routes written with ":id" match one path segment in that place; a second

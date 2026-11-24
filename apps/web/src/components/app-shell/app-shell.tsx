@@ -5,9 +5,9 @@ import { usePathname } from "next/navigation";
 import { ChevronDown, ChevronRight, CircleAlert, Loader2, LogOut, Menu, PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 
 import { AppMark } from "@/components/app-mark";
-import { ApprovalsBell } from "@/components/app-shell/approvals-bell";
 import { CommandPalette } from "@/components/app-shell/command-palette";
 import { currentEntry } from "@/components/app-shell/nav-items";
+import { NotificationsBell } from "@/components/app-shell/notifications-bell";
 import { SidebarNav } from "@/components/app-shell/sidebar-nav";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -22,7 +22,6 @@ import {
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useAuth } from "@/features/auth/auth-provider";
 import { errorMessage } from "@/lib/messages";
-import { canSeeApprovals } from "@/lib/permissions";
 import { applySidebarMode, readSidebarMode, setSidebarMode, subscribeSidebar, type SidebarMode } from "@/lib/sidebar";
 import type { User } from "@/lib/types";
 
@@ -163,7 +162,7 @@ export function AppShell({ user, children }: { user: User; children: ReactNode }
             <kbd className="ml-auto hidden rounded-md border bg-card px-1.5 text-[0.6875rem] leading-5 md:inline">Ctrl K</kbd>
           </button>
 
-          {canSeeApprovals(user) ? <ApprovalsBell /> : null}
+          <NotificationsBell user={user} />
 
           <ThemeToggle className="shrink-0" />
 

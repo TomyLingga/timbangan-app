@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 
 import { DataList, type Column } from "@/components/data-list";
@@ -14,6 +15,7 @@ import { DifferenceFigure, PlateComparison } from "@/features/approvals/exceptio
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { formatNumber } from "@/lib/format";
+import { DECISION_PARAM } from "@/lib/notifications";
 import { canSeeApprovals } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { ExceptionView, User } from "@/lib/types";
@@ -72,9 +74,25 @@ function columns(now: number): ReadonlyArray<Column<ExceptionView>> {
   ];
 }
 
+/**
+ * The request open in the sheet, kept in the address bar (`?permintaan=7`) so the bell can link to one request.
+ * Writing it with history.replaceState and no state of our own lets Next.js update useSearchParams without a
+ * navigation, so the list keeps its filter.
+ */
+function useOpenRequest(): [string | null, (id: string | number | null) => void] {
+  const openId = useSearchParams().get(DECISION_PARAM) || null;
+  const setOpenId = (id: string | number | null) => {
+    const url = new URL(window.location.href);
+    if (id === null) url.searchParams.delete(DECISION_PARAM);
+    else url.searchParams.set(DECISION_PARAM, String(id));
+    window.history.replaceState(null, "", url);
+  };
+  return [openId, setOpenId];
+}
+
 function ApprovalsPage({ user }: { user: User }) {
   const [show, setShow] = useState<Show>("PENDING");
-  const [openId, setOpenId] = useState<string | number | null>(null);
+  const [openId, setOpenId] = useOpenRequest();
   const list = useApiQuery(
     `exceptions|${show}`,
     (signal) => api.request<{ items: ExceptionView[] }>("/api/exceptions", { query: { status: show === "PENDING" ? "PENDING" : undefined, limit: LIST_LIMIT }, signal }),

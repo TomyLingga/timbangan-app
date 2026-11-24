@@ -136,9 +136,20 @@ async function run(browser) {
       (await stat("GET /api/control-room/state")) === 0,
   );
   check(
-    "a partner's Beranda counts its own registrations",
-    Boolean(await browser.waitFor(`${pageText}.includes(' registrasi') && !document.querySelector('[data-testid="approvals-bell"]')`)),
+    "a partner's Beranda counts its own registrations, and its bell counts notifications, not requests waiting",
+    Boolean(await browser.waitFor(`${pageText}.includes(' registrasi') && document.querySelector('[data-testid="notifications-bell"]')?.dataset.mode === 'unread'`)),
   );
+  check(
+    "an empty inbox puts no number on the bell and says so in its label",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="notifications-bell"]')?.getAttribute('aria-label') === 'Pemberitahuan, semua sudah dibaca' && !document.querySelector('[data-testid="bell-badge"]')`)),
+  );
+  await browser.click('[data-testid="notifications-bell"]');
+  check(
+    "the empty inbox says so in one line",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="notifications-empty"]')?.innerText.trim() === 'Belum ada pemberitahuan.'`)),
+  );
+  await browser.pressEscape();
+  check("Escape closes the panel and gives focus back to the bell", Boolean(await browser.waitFor(`!document.querySelector('[data-testid="notifications-panel"]') && document.activeElement?.dataset.testid === 'notifications-bell'`)));
   check("access token is not in web storage", await browser.evaluate("JSON.stringify({...localStorage, ...sessionStorage}).length < 40"));
   await browser.screenshot("02-beranda-partner");
 
@@ -738,6 +749,71 @@ async function partnerSignIn(browser, username) {
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
 }
 
+/** An access token of a partner account, through the sign-in form's route. */
+async function partnerApiSession(username) {
+  const login = await fetch(`${API}/api/auth/login`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username, password: "contoh-123" }),
+  });
+  return (await login.json()).accessToken;
+}
+
+/** GET on the mock as the account of `token`. */
+const apiGet = async (token, route) => (await fetch(`${API}${route}`, { headers: { authorization: `Bearer ${token}` } })).json();
+
+const bellLabelText = `document.querySelector('[data-testid="notifications-bell"]')?.getAttribute('aria-label')`;
+const bellBadgeText = `(document.querySelector('[data-testid="bell-badge"]')?.innerText ?? '')`;
+/** Expression: the entry of the open panel whose text contains `needle`. */
+const panelEntry = (needle) =>
+  `[...document.querySelectorAll('[data-testid="notifications-panel"] [data-notification]')].find((node) => node.innerText.includes(${JSON.stringify(needle)}))`;
+
+/** The inbox of a transporter: the delivery order sent in step 23 is unread and leads to its page. */
+async function transporterInbox(browser, doNo) {
+  const token = await partnerApiSession("transporter.contoh");
+  const unread = (await apiGet(token, "/api/notifications?unread=true&limit=1")).unreadCount;
+  check(
+    "the bell of a transporter says its unread count in words",
+    unread >= 1 && Boolean(await browser.waitFor(`${bellLabelText} === '${unread} pemberitahuan belum dibaca' && ${bellBadgeText} === '${unread}'`)),
+    `${unread} unread`,
+  );
+  const listsBefore = await stat("GET /api/notifications");
+  await browser.click('[data-testid="notifications-bell"]');
+  check(
+    "opening the panel fetches the list, with the new delivery order unread and linked to its page",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const entry = ${panelEntry(doNo)};
+        return Boolean(entry) && entry.innerText.includes('Delivery order baru') && entry.dataset.unread === '1' && entry.tagName === 'A' && entry.getAttribute('href').startsWith('/delivery-order/');
+      })()`),
+    ) && (await stat("GET /api/notifications")) > listsBefore,
+  );
+  check(
+    "an entry of a type the web does not know is listed with its text and leads nowhere",
+    Boolean(await browser.waitFor(`(() => { const entry = ${panelEntry("Jam timbang berubah")}; return Boolean(entry) && entry.tagName !== 'A' && entry.innerText.includes('kalibrasi'); })()`)),
+  );
+  const shown = await browser.evaluate(`document.querySelectorAll('[data-testid="notifications-panel"] [data-notification]').length`);
+  await browser.click("Muat lagi");
+  check(
+    "Muat lagi adds the next page under the first",
+    Boolean(await browser.waitFor(`document.querySelectorAll('[data-testid="notifications-panel"] [data-notification]').length > ${shown}`)),
+    `${shown} first`,
+  );
+  await browser.screenshot("24a-lonceng-transporter-light");
+  const reads = await stat("POST /api/notifications/:id/read");
+  await browser.evaluate(`${panelEntry(doNo)}.setAttribute('data-smoke', 'follow'); true`);
+  await browser.click('[data-smoke="follow"]');
+  check(
+    "following the entry opens the delivery order and marks it read",
+    Boolean(await browser.waitFor(`location.pathname.startsWith('/delivery-order/') && document.body.innerText.includes(${JSON.stringify(doNo)})`)) &&
+      (await waitStat("POST /api/notifications/:id/read", reads + 1)),
+  );
+  check(
+    "the number on the bell drops by one",
+    Boolean(await browser.waitFor(`${bellLabelText} === '${unread - 1 === 0 ? "Pemberitahuan, semua sudah dibaca" : `${unread - 1} pemberitahuan belum dibaca`}'`)),
+  );
+}
+
 async function staffSignIn(browser, username) {
   await browser.goto(`${API}/api/auth/sso/start?as=${username}`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Akun yang sedang masuk')");
@@ -971,6 +1047,7 @@ async function phaseThree(browser) {
     transporterMenu.includes("/delivery-order") && transporterMenu.includes("/registrasi") && !transporterMenu.includes("/pos"),
     transporterMenu,
   );
+  await transporterInbox(browser, doNo);
   await browser.click('a[href="/delivery-order"]');
   await browser.waitFor(`${rowText(doNo)} !== ''`);
   check("the transporter sees only its own delivery orders, none in draft", (await browser.evaluate(visibleRows)) === 2 && !(await browser.evaluate(`document.querySelector('tbody').innerText.includes('Draf')`)));
@@ -1113,7 +1190,10 @@ async function phaseThree(browser) {
 async function phaseFour(browser) {
   // 27. An account without the modules of phase 4: no bell, no access to the reports.
   await staffSignIn(browser, "pos.contoh");
-  check("an account without approvals has no bell", !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="approvals-bell"]'))`)));
+  check(
+    "an account without approvals gets the bell of its unread notifications, not of the requests waiting",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="notifications-bell"]')?.dataset.mode === 'unread' && ${bellLabelText} === '1 pemberitahuan belum dibaca'`)),
+  );
   await browser.goto(`${WEB}/laporan`);
   check("/laporan refuses an account without the reports module", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && (await stat("GET /api/reports/contracts")) === 0);
   await browser.goto(`${WEB}/riwayat`);
@@ -1123,16 +1203,51 @@ async function phaseFour(browser) {
 
   // 28. The bell of a holder of approvals counts the requests waiting.
   await staffSignIn(browser, "admin.contoh");
+  const adminToken = await apiSession("admin.contoh");
+  const waitingNow = (await apiGet(adminToken, "/api/exceptions?status=PENDING&limit=50")).items.length;
+  const adminUnread = (await apiGet(adminToken, "/api/notifications?unread=true&limit=1")).unreadCount;
   check(
-    "the bell shows the number of requests waiting",
-    Boolean(await browser.waitFor(`document.querySelector('[data-testid="approvals-bell"]')?.getAttribute('aria-label') === 'Permintaan keputusan, 3 menunggu'`)),
+    "the bell shows the number of requests waiting, not the unread count",
+    waitingNow === 3 &&
+      adminUnread !== waitingNow &&
+      Boolean(
+        await browser.waitFor(
+          `document.querySelector('[data-testid="notifications-bell"]')?.dataset.mode === 'approvals' && ${bellLabelText} === '${waitingNow} permintaan menunggu keputusan' && ${bellBadgeText} === '${waitingNow}'`,
+        ),
+      ),
+    `${waitingNow} waiting, ${adminUnread} unread`,
   );
-  await browser.click('[data-testid="approvals-bell"]');
+  await browser.click('[data-testid="notifications-bell"]');
   check(
-    "the bell lists the waiting requests and leads to Keputusan",
-    Boolean(await browser.waitFor(`[...document.querySelectorAll('[role="menuitem"]')].some((item) => item.innerText.includes('Selisih bruto')) && Boolean(document.querySelector('[role="menu"] a[href="/keputusan"]'))`)),
+    "the bell lists the waiting requests and its first line leads to Keputusan",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const first = document.querySelector('[data-testid="notifications-panel"] [data-testid="bell-decisions"]');
+        const entry = ${panelEntry("Selisih bruto menunggu keputusan")};
+        return first?.getAttribute('href') === '/keputusan' && first.innerText.replace(/\\s+/g, ' ').includes('${waitingNow} permintaan menunggu keputusan') &&
+          Boolean(entry) && entry.innerText.includes('Menunggu keputusan') && entry.getAttribute('href')?.startsWith('/keputusan?permintaan=');
+      })()`),
+    ),
+  );
+  check(
+    "a request decided since says so",
+    Boolean(await browser.waitFor(`(${panelEntry("Selisih netto menunggu keputusan")})?.innerText.includes('Sudah diputuskan: disetujui')`)),
+  );
+  const adminReads = await stat("POST /api/notifications/:id/read");
+  await browser.evaluate(`${panelEntry("Selisih bruto menunggu keputusan")}.setAttribute('data-smoke', 'follow'); true`);
+  await browser.click('[data-smoke="follow"]');
+  check(
+    "following a request opens it on Keputusan and marks it read",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && location.search.startsWith('?permintaan=') && Boolean(document.querySelector('[data-testid="approval-decide"]'))`)) &&
+      (await waitStat("POST /api/notifications/:id/read", adminReads + 1)) &&
+      (await apiGet(adminToken, "/api/notifications?unread=true&limit=1")).unreadCount === adminUnread - 1,
+  );
+  check(
+    "after reading, the number on the bell is still the requests waiting",
+    Boolean(await browser.waitFor(`${bellLabelText} === '${waitingNow} permintaan menunggu keputusan'`)),
   );
   await browser.pressEscape();
+  check("closing the request takes it out of the address bar", Boolean(await browser.waitFor(`!document.querySelector('[role="dialog"]') && location.search === ''`)));
 
   // 29. Stasiun: list, a new weighbridge, its machine key shown once.
   await browser.click('a[href="/stasiun"]');
