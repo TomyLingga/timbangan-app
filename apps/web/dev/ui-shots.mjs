@@ -52,8 +52,14 @@ const SIZES = [
 ];
 const THEMES = ["dark", "light"];
 
+// SHOTS=riwayat,kendaraan takes only the pages with those names (and their "-rincian" shots), without the extra
+// states and the empty pass.
+const ONLY = process.env.SHOTS ? process.env.SHOTS.split(",").map((name) => name.trim()).filter(Boolean) : null;
+const wanted = (name) => !ONLY || ONLY.some((page) => name === page || name === `${page}-rincian`);
+
 /** Every theme and size of one page. `prepare` runs after each load. */
 async function shootAll(browser, name, url, prepare) {
+  if (!wanted(name)) return;
   for (const theme of THEMES) {
     await browser.colorScheme(theme);
     for (const size of SIZES) {
@@ -115,6 +121,13 @@ async function samplePass(browser) {
     await browser.click('button[aria-label^="Rincian ZZ 0004"]');
     await browser.waitFor(`Boolean(document.querySelector('[data-testid="trip-work"]'))`);
   });
+  await shootAll(browser, "riwayat", `${WEB}/riwayat`, (size) => browser.waitFor(listReady(size)));
+  await shootAll(browser, "riwayat-rincian", `${WEB}/riwayat`, async (size) => {
+    await browser.waitFor(listReady(size));
+    // the multi-contract truck: group, QC, unloading and a decision with its BA number
+    await browser.evaluate(`[...document.querySelectorAll('[data-history-open="1"]')].find((b) => b.offsetParent !== null).click(); true`);
+    await browser.waitFor(`Boolean(document.querySelector('[data-testid="history-detail"]'))`);
+  });
   await shootAll(browser, "kendaraan", `${WEB}/kendaraan`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "registrasi", `${WEB}/registrasi`, (size) => browser.waitFor(listReady(size)));
   await shootAll(browser, "supir", `${WEB}/supir`, (size) => browser.waitFor(listReady(size)));
@@ -130,6 +143,7 @@ async function samplePass(browser) {
   });
 
   // Extra states: a refused scan, the command palette, the phone drawer, the widened sidebar.
+  if (ONLY) return;
   await browser.colorScheme("dark");
   await browser.goto(`${WEB}/pos`);
   await browser.waitFor("document.activeElement?.id === 'gate-scan'");
@@ -212,7 +226,7 @@ await mkdir(outDir, { recursive: true });
 let failure = null;
 try {
   await withServers("sample", samplePass);
-  await withServers("empty", emptyPass);
+  if (!ONLY) await withServers("empty", emptyPass);
 } catch (error) {
   failure = error;
 } finally {

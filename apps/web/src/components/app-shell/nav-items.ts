@@ -7,6 +7,7 @@ import {
   Cylinder,
   LockKeyhole,
   FileText,
+  History,
   House,
   IdCard,
   Map,
@@ -40,6 +41,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
   "/tangki": { label: "Tangki", icon: Cylinder },
   "/segel": { label: "Segel", icon: LockKeyhole },
   "/laporan": { label: "Laporan", icon: BarChart3 },
+  "/riwayat": { label: "Riwayat lama", icon: History },
   "/stasiun": { label: "Stasiun", icon: Scale },
   "/pengguna": { label: "Pengguna", icon: UsersRound },
 };
@@ -52,7 +54,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly N
   { label: null, hrefs: ["/"] },
   { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/ruang-kontrol", "/keputusan"] },
   { label: "Data induk", hrefs: ["/kontrak", "/supir", "/kendaraan", "/kartu", "/tangki", "/segel"] },
-  { label: "Laporan", hrefs: ["/laporan"] },
+  { label: "Laporan", hrefs: ["/laporan", "/riwayat"] },
   { label: "Sistem", hrefs: ["/stasiun", "/pengguna"] },
 ];
 

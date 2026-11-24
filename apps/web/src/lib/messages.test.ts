@@ -9,9 +9,27 @@ import {
   syncErrorMessage,
   userAdminErrorMessage,
   vcfSyncErrorMessage,
+  verificationErrorMessage,
 } from "@/lib/messages";
 
 const error = (status: number, code: string) => new ApiError(status, code, "english text from the api");
+
+describe("verificationErrorMessage", () => {
+  it("says plainly that someone else already changed the vehicle", () => {
+    expect(verificationErrorMessage(error(409, "INVALID_STATE"), true, "ZZ 0005 CTH")).toBe(
+      "ZZ 0005 CTH sudah diverifikasi sebelumnya, mungkin oleh orang lain. Daftar dimuat ulang.",
+    );
+    expect(verificationErrorMessage(error(409, "INVALID_STATE"), false, "ZZ 0001 CTH")).toBe(
+      "Verifikasi ZZ 0001 CTH sudah dibatalkan sebelumnya, mungkin oleh orang lain. Daftar dimuat ulang.",
+    );
+  });
+
+  it("explains a vehicle that is gone and an account without the right", () => {
+    expect(verificationErrorMessage(error(404, "NOT_FOUND"), true, "ZZ 0005 CTH")).toBe("Kendaraan ZZ 0005 CTH tidak ditemukan lagi. Daftar dimuat ulang.");
+    expect(verificationErrorMessage(error(403, "FORBIDDEN"), true, "ZZ 0005 CTH")).toBe("Akun ini tidak punya izin mengubah verifikasi kendaraan.");
+    expect(verificationErrorMessage(error(0, "NETWORK_ERROR"), true, "ZZ 0005 CTH")).toBe("Server tidak bisa dihubungi. Periksa jaringan, lalu coba lagi.");
+  });
+});
 
 describe("errorMessage", () => {
   it("explains a network failure", () => {

@@ -241,7 +241,7 @@ async function run(browser) {
     // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
     // and since migration 0006 the plant masters: Tangki and Segel
     // Tujuan left the menu: the destination is typed on each DO (owner's decision, 22 November 2026)
-    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/stasiun'];
+    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/riwayat', '/stasiun'];
     return !dialog.innerText.includes('Belum tersedia') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
@@ -642,6 +642,7 @@ async function run(browser) {
   await phaseThree(browser);
   await phaseFour(browser);
   await phaseFive(browser);
+  await historyAndVerification(browser);
 }
 
 /**
@@ -1103,6 +1104,8 @@ async function phaseFour(browser) {
   check("an account without approvals has no bell", !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="approvals-bell"]'))`)));
   await browser.goto(`${WEB}/laporan`);
   check("/laporan refuses an account without the reports module", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && (await stat("GET /api/reports/contracts")) === 0);
+  await browser.goto(`${WEB}/riwayat`);
+  check("/riwayat refuses an account without the reports module", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && (await stat("GET /api/history/trips")) === 0);
   await browser.goto(`${WEB}/`);
   await signOut(browser);
 
@@ -1445,6 +1448,153 @@ async function phaseFive(browser) {
     await browser.goto(`${WEB}/`);
     await signOut(browser);
   }
+}
+
+// --- the archive of the old application, and vehicle verification ---------------------------------------------
+
+async function historyAndVerification(browser) {
+  const pagerText = textOf('[data-testid="pager"] [role="status"]');
+  const params = (key) => `new URLSearchParams(location.search).get(${JSON.stringify(key)})`;
+
+  // 39. Riwayat lama: the last 30 days by default, 50 rows a page, filters in the address bar.
+  await staffSignIn(browser, "admin.contoh");
+  await browser.colorScheme("dark");
+  await browser.viewport(1440, 900);
+  await browser.click('a[href="/riwayat"]');
+  check(
+    "/riwayat lists the archive of the last 30 days, 50 rows a page, with the totals in the header",
+    Boolean(await browser.waitFor(`location.pathname === '/riwayat' && ${visibleRows} === 50 && /^1–50 dari 60 baris$/.test(${pagerText})`)) &&
+      Boolean(await browser.hasText("Netto truk selesai")) &&
+      Boolean(await browser.hasText("Hanya bisa dibaca")),
+  );
+  check("the history table fits 1440 px without scrolling", await browser.evaluate(`[...document.querySelectorAll('[data-slot="table-container"]')].every((box) => box.offsetParent === null || box.scrollWidth <= box.clientWidth) && ${noHorizontalScroll}`));
+  check("a row of a multi-contract truck carries its mark", (await browser.evaluate(rowText("70001"))).includes("multi kontrak"));
+  await browser.screenshot("45-riwayat-dark");
+  await browser.click("Berikutnya");
+  check("the next page shows the rest and keeps its number in the address", Boolean(await browser.waitFor(`/^51–60 dari 60 baris$/.test(${pagerText}) && ${params("page")} === '2'`)));
+  await browser.goto(`${WEB}/riwayat${await browser.evaluate("location.search")}`);
+  check("a reload keeps the page", Boolean(await browser.waitFor(`/^51–60 /.test(${pagerText})`)));
+  await browser.fill('select[name="historyState"]', "REJECTED_QC");
+  check(
+    "the state filter goes into the address and back to page 1",
+    Boolean(await browser.waitFor(`${params("state")} === 'REJECTED_QC' && !new URLSearchParams(location.search).has('page') && ${visibleRows} === 1 && ${rowText("70004")}.includes('Ditolak QC')`)),
+  );
+  await browser.fill('select[name="historyState"]', "");
+  await browser.type('main input[type="search"]', "zz 9001", { perKey: true });
+  check("the search finds a plate typed with a space and keeps it in the address", Boolean(await browser.waitFor(`${params("q")} === 'zz 9001' && ${visibleRows} === 1`)));
+  await browser.fill('main input[type="search"]', "tidak-ada");
+  check("a search without rows says so", Boolean(await browser.hasText("Tidak ada data yang cocok")));
+  await browser.fill('main input[type="search"]', "");
+  await browser.waitFor(`!new URLSearchParams(location.search).has('q') && ${visibleRows} === 50`);
+
+  // the dialog of the multi-contract truck: its group, QC, the decision with its BA number, nothing to change
+  await browser.colorScheme("light");
+  await browser.click('tbody [data-history-open="1"]');
+  const dialogText = textOf('[data-testid="history-dialog"]');
+  check(
+    "a row opens everything about the truck: group, QC, the decision with its BA number",
+    Boolean(
+      await browser.waitFor(
+        `${dialogText}.includes('Satu truk, beberapa kontrak') && ${dialogText}.includes('0102/KONTRAK/REK/XI/2026') && ${dialogText}.includes('BA-REK/2026/0051') && ${dialogText}.includes('FFA') && ${dialogText}.includes('Kolom lain dari aplikasi lama')`,
+      ),
+    ),
+  );
+  check(
+    "the dialog has nothing to edit",
+    await browser.evaluate(`!document.querySelector('[data-testid="history-dialog"] input, [data-testid="history-dialog"] textarea, [data-testid="history-dialog"] select') && [...document.querySelectorAll('[data-testid="history-dialog"] button')].every((button) => ['Tutup', 'Coba lagi'].includes(button.innerText.trim()) || button.querySelector('.sr-only'))`),
+  );
+  await browser.screenshot("46-riwayat-rincian-light");
+  await browser.pressEscape();
+  check("Escape closes the dialog and gives the focus back to the row", Boolean(await browser.waitFor(`!document.querySelector('[data-testid="history-dialog"]') && document.activeElement?.getAttribute('data-history-open') === '1'`)));
+  await browser.click('tbody [data-history-open="7"]');
+  check(
+    "a value the import could not read shows its original text, marked",
+    Boolean(await browser.waitFor(`${dialogText}.includes('40.010 kg') && ${dialogText}.includes('teks asli') && ${dialogText}.includes('kemarin pagi')`)),
+  );
+  await browser.pressEscape();
+  await browser.waitFor(`!document.querySelector('[data-testid="history-dialog"]')`);
+  await browser.screenshot("47-riwayat-light");
+
+  const csvBefore = await stat("GET /api/history/trips");
+  await browser.click("Unduh CSV");
+  check("Unduh CSV fetches the filtered set without an error", (await waitStat("GET /api/history/trips", csvBefore + 1)) && !(await browser.evaluate("document.body.innerText.includes('CSV belum bisa diunduh')")));
+
+  await browser.viewport(390, 844, true);
+  await browser.goto(`${WEB}/riwayat`);
+  await browser.waitFor("[...document.querySelectorAll('main ul > li')].filter((li) => li.offsetParent !== null).length > 0");
+  check("/riwayat has no horizontal scroll on a phone", await browser.evaluate(noHorizontalScroll));
+  await browser.screenshot("48-riwayat-phone-light");
+  await browser.click('main ul > li [data-history-open="3"]');
+  await browser.waitFor(`${dialogText}.includes('Ditolak kebersihan')`);
+  check("the dialog fits a phone", await browser.evaluate(noHorizontalScroll));
+  await browser.screenshot("49-riwayat-rincian-phone-light");
+  await browser.pressEscape();
+  await browser.viewport(1440, 900);
+
+  // 40. Kendaraan: the badge, the filter, verify and cancel it with a confirmation naming the plate.
+  await browser.goto(`${WEB}/kendaraan`);
+  await browser.waitFor(`${rowText("ZZ 0005 CTH")} !== ''`);
+  const unverifiedRow = await browser.evaluate(rowText("ZZ 0005 CTH"));
+  check("an unverified vehicle carries the badge and the reason", unverifiedRow.includes("Belum diverifikasi") && unverifiedRow.includes("tarra belum jadi acuan"), unverifiedRow);
+  check("a verified vehicle has no badge", !(await browser.evaluate(rowText("ZZ 0001 CTH"))).includes("Belum diverifikasi"));
+  await browser.screenshot("50-kendaraan-verifikasi-light");
+  await browser.click('[aria-label="Saring menurut verifikasi"] button[aria-pressed="false"]');
+  check(
+    "the filter keeps the unverified vehicles, says why it matters, and goes into the address",
+    Boolean(
+      await browser.waitFor(
+        `${params("verifikasi")} === 'belum' && ${visibleRows} > 0 && [...document.querySelectorAll('tbody tr')].every((row) => row.innerText.includes('Belum diverifikasi')) && Boolean(document.querySelector('[data-testid="unverified-note"]'))`,
+      ),
+    ),
+  );
+  await browser.click('button[aria-label="Verifikasi ZZ 0005 CTH"]');
+  check("the confirmation names the plate", Boolean(await browser.waitFor(`${textOf('[role="dialog"]')}.includes('Verifikasi ZZ 0005 CTH') && ${textOf('[role="dialog"]')}.includes('belum punya tarra master')`)));
+  const verifies = await stat("POST /api/vehicles/:id/verify");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "verifying removes the vehicle from the filtered list",
+    Boolean(await browser.hasText("Kendaraan ZZ 0005 CTH diverifikasi.")) && (await stat("POST /api/vehicles/:id/verify")) === verifies + 1 && Boolean(await browser.waitFor(`${rowText("ZZ 0005 CTH")} === ''`)),
+  );
+  await browser.click('[aria-label="Saring menurut verifikasi"] button[aria-pressed="false"]');
+  await browser.waitFor(`!new URLSearchParams(location.search).has('verifikasi') && ${rowText("ZZ 0005 CTH")} !== ''`);
+  await browser.click('button[aria-label="Tindakan lain ZZ 0005 CTH"]');
+  await browser.click("Batalkan verifikasi");
+  await browser.waitFor(`${textOf('[role="dialog"]')}.includes('Batalkan verifikasi ZZ 0005 CTH')`);
+  await browser.click(inSheet('button[type="submit"]'));
+  check("cancelling the verification brings the badge back", Boolean(await browser.hasText("Verifikasi kendaraan ZZ 0005 CTH dibatalkan.")) && Boolean(await browser.waitFor(`${rowText("ZZ 0005 CTH")}.includes('Belum diverifikasi')`)));
+
+  // someone else verifies it meanwhile: the refusal is said in plain words and the list is reloaded
+  await browser.click('button[aria-label="Verifikasi ZZ 0005 CTH"]');
+  await browser.waitFor(`${textOf('[role="dialog"]')}.includes('Verifikasi ZZ 0005 CTH')`);
+  const other = await apiSession("super.contoh");
+  const vehicleId = (await (await fetch(`${API}/api/vehicles?q=zz0005cth`, { headers: { authorization: `Bearer ${other}` } })).json()).items[0].id;
+  await fetch(`${API}/api/vehicles/${vehicleId}/verify`, { method: "POST", headers: { authorization: `Bearer ${other}` } });
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "a vehicle verified meanwhile gives a plain refusal and the list catches up",
+    Boolean(await browser.hasText("ZZ 0005 CTH sudah diverifikasi sebelumnya, mungkin oleh orang lain.")) &&
+      Boolean(await browser.waitFor(`!${rowText("ZZ 0005 CTH")}.includes('Belum diverifikasi')`)),
+  );
+  await browser.click("Batal");
+  await fetch(`${API}/api/vehicles/${vehicleId}/unverify`, { method: "POST", headers: { authorization: `Bearer ${other}` } });
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+
+  // 41. A partner account: the badge on its own vehicles without any action, and no archive.
+  await partnerSignIn(browser, "transporter.contoh");
+  check("a partner account has no Riwayat lama in its menu", !(await menuLinks(browser)).includes("/riwayat"));
+  await browser.click('a[href="/kendaraan"]');
+  await browser.waitFor(`${rowText("ZZ 0005 CTH")} !== ''`);
+  check(
+    "the partner sees the badge on its own vehicle but no verification action",
+    (await browser.evaluate(rowText("ZZ 0005 CTH"))).includes("Belum diverifikasi") &&
+      !(await browser.evaluate(`Boolean(document.querySelector('button[aria-label^="Verifikasi"], button[aria-label^="Tindakan lain"]'))`)),
+  );
+  const historyReads = await stat("GET /api/history/trips");
+  await browser.goto(`${WEB}/riwayat`);
+  check("/riwayat refuses a partner account without asking the API", Boolean(await browser.hasText("Anda tidak punya akses ke halaman ini")) && (await stat("GET /api/history/trips")) === historyReads);
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
 }
 
 /** Waits until the mock has answered `route` at least `count` times. */

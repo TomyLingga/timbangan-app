@@ -1,16 +1,19 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { BadgeCheck, Ellipsis, Pencil, Plus } from "lucide-react";
 
+import { ActionSheet } from "@/components/action-sheet";
 import { DataList, type Column } from "@/components/data-list";
 import { ExpiryDate } from "@/components/expiry-date";
+import { FilterChips } from "@/components/filter-chips";
 import { CheckboxField, SelectField, TextAreaField, TextField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
 import { AccessDenied, ListEmpty, ListError, ListSkeleton, Notice, PageHeader, ResultCount, SearchField } from "@/components/page-parts";
 import { PartnerLookup } from "@/components/partner-lookup";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/features/auth/auth-provider";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
@@ -18,10 +21,12 @@ import { useUrlFilter } from "@/hooks/use-url-filter";
 import { refusedFields, useAction, useFormValues } from "@/hooks/use-form";
 import { formatNumber, formatQuantity } from "@/lib/format";
 import { EMPTY_VEHICLE, tareChanged, validateVehicle, vehiclePayload, type VehicleValues } from "@/lib/forms";
-import { saveErrorMessage } from "@/lib/messages";
+import { isApiError } from "@/lib/api-client";
+import { saveErrorMessage, verificationErrorMessage } from "@/lib/messages";
 import { canAddVehicle, canEditVehicle, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { expirySummary } from "@/lib/status";
+import { UNVERIFIED_NOTE, VERIFICATION_FILTERS, verificationText, verificationView, type VerificationFilter } from "@/lib/vehicle-verification";
 import type { Page, PartnerRef, Vehicle, VehicleType } from "@/lib/types";
 
 const LIST_LIMIT = 50;
@@ -228,6 +233,42 @@ function VehicleFormSheet({
   );
 }
 
+/** Confirmation of verify or unverify, naming the plate. A refusal is shown in the sheet in plain words. */
+function VerificationSheet({
+  vehicle,
+  verify,
+  onClose,
+  onDone,
+  onStale,
+}: {
+  vehicle: Vehicle;
+  verify: boolean;
+  onClose: () => void;
+  onDone: (message: string) => void;
+  /** The list no longer matches the server (someone else changed the vehicle); reload it. */
+  onStale: () => void;
+}) {
+  const text = verificationText(vehicle, verify);
+  return (
+    <ActionSheet
+      title={text.title}
+      description={text.description}
+      submitLabel={text.submitLabel}
+      onClose={onClose}
+      onConfirm={async () => {
+        try {
+          await api.request<{ vehicle: Vehicle }>(`/api/vehicles/${encodeURIComponent(String(vehicle.id))}/${verify ? "verify" : "unverify"}`, { method: "POST" });
+          onDone(text.done);
+          return null;
+        } catch (error) {
+          if (isApiError(error) && (error.code === "INVALID_STATE" || error.status === 404)) onStale();
+          return verificationErrorMessage(error, verify, vehicle.plateDisplay);
+        }
+      }}
+    />
+  );
+}
+
 export function VehiclesScreen() {
   const { state } = useAuth();
   const user = state.status === "authenticated" ? state.user : null;
@@ -241,6 +282,9 @@ export function VehiclesScreen() {
   const [saved, setSaved] = useState<string | null>(null);
   // undefined: sheet closed, null: new vehicle, otherwise the vehicle being edited
   const [editing, setEditing] = useState<Vehicle | null | undefined>(undefined);
+  const [verification, setVerification] = useUrlFilter("verifikasi");
+  // the vehicle waiting for a confirmation of verify (true) or unverify (false)
+  const [confirming, setConfirming] = useState<{ vehicle: Vehicle; verify: boolean } | null>(null);
 
   const search = useDebouncedValue(searchText.trim(), 300);
 
@@ -270,6 +314,11 @@ export function VehiclesScreen() {
               <span className="flex flex-wrap items-center gap-2">
                 <span className="plate text-[0.8125rem]">{vehicle.plateDisplay}</span>
                 {vehicle.isActive ? null : <StatusBadge info={{ label: "Nonaktif", tone: "neutral" }} />}
+                {vehicle.verified ? null : (
+                  <span title={UNVERIFIED_NOTE} data-testid="vehicle-unverified">
+                    <StatusBadge info={{ label: "Belum diverifikasi", tone: "neutral" }} />
+                  </span>
+                )}
               </span>
               <span className="mt-1 block text-xs text-muted-foreground">
                 {[vehicle.vehicleTypeCode ? (typeNames.get(vehicle.vehicleTypeCode) ?? vehicle.vehicleTypeCode) : null, vehicle.productionYear ? `tahun ${vehicle.productionYear}` : null]
@@ -304,6 +353,12 @@ export function VehiclesScreen() {
           <>
             <span className="block font-mono">{formatQuantity(vehicle.capacityKg, "Kg")}</span>
             <span className="block font-mono text-xs text-muted-foreground">tarra {formatQuantity(vehicle.tareKg, "Kg")}</span>
+            {/* the reason the badge matters, readable without hovering */}
+            {vehicle.verified ? null : (
+              <span className="block text-xs text-warning" title={UNVERIFIED_NOTE}>
+                tarra belum jadi acuan
+              </span>
+            )}
           </>
         ),
       },
@@ -324,6 +379,15 @@ export function VehiclesScreen() {
       },
     ];
   }, [typeItems]);
+
+  const filter: VerificationFilter = verification === "belum" ? "belum" : "";
+  const view = list.data ? verificationView(list.data.items, list.data.total, filter) : null;
+  const reload = () => setReloadToken((token) => token + 1);
+  function verificationDone(message: string) {
+    setConfirming(null);
+    setSaved(message);
+    reload();
+  }
 
   if (!user) return null;
   if (!mayView) return <AccessDenied module="vehicles" />;
@@ -361,17 +425,34 @@ export function VehiclesScreen() {
         {saved ? <Notice tone="success">{saved}</Notice> : null}
       </div>
 
-      <SearchField
-        id={`${ids}-search`}
-        label="Cari kendaraan"
-        placeholder="Nomor plat"
-        value={searchText}
-        onChange={setSearchText}
-      />
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-3">
+        <SearchField
+          id={`${ids}-search`}
+          label="Cari kendaraan"
+          placeholder="Nomor plat"
+          value={searchText}
+          onChange={setSearchText}
+        />
+        <FilterChips<VerificationFilter>
+          label="Saring menurut verifikasi"
+          caption="Verifikasi"
+          filters={VERIFICATION_FILTERS}
+          selected={filter}
+          counts={view?.counts}
+          onSelect={setVerification}
+        />
+      </div>
+
+      {filter === "belum" ? (
+        <p className="max-w-3xl text-sm text-muted-foreground" data-testid="unverified-note">
+          {UNVERIFIED_NOTE}
+          {view?.partial ? ` Saringan ini hanya memeriksa ${formatNumber(list.data?.items.length ?? 0)} kendaraan yang dimuat; cari plat untuk mempersempit.` : ""}
+        </p>
+      ) : null}
 
       {list.hasError ? (
         <ListError title="Daftar kendaraan belum bisa dimuat" error={list.error} onRetry={list.reload} />
-      ) : !list.data ? (
+      ) : !list.data || !view ? (
         <ListSkeleton label="Memuat daftar kendaraan" />
       ) : list.data.items.length === 0 ? (
         <ListEmpty
@@ -379,33 +460,65 @@ export function VehiclesScreen() {
           hint={search ? "Periksa lagi nomor plat yang dicari." : "Belum ada kendaraan yang terdaftar."}
           stale={list.isStale}
         />
+      ) : view.rows.length === 0 ? (
+        <ListEmpty title="Semua kendaraan yang dimuat sudah diverifikasi" hint="Pilih Semua untuk melihat seluruh daftar." stale={list.isStale} />
       ) : (
         <div className="flex flex-col gap-3">
-          <ResultCount shown={list.data.items.length} total={list.data.total} noun="kendaraan" />
+          <ResultCount shown={view.rows.length} total={filter === "belum" ? view.rows.length : list.data.total} noun="kendaraan" />
           <DataList
             columns={columns}
-            rows={list.data.items}
+            rows={view.rows}
             rowKey={(vehicle) => vehicle.id}
             stale={list.isStale}
             actions={
               mayEdit
                 ? (vehicle) => (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-10 md:h-8"
-                      onClick={() => setEditing(vehicle)}
-                      aria-label={`Ubah ${vehicle.plateDisplay}`}
-                    >
-                      <Pencil aria-hidden="true" />
-                      Ubah
-                    </Button>
+                    <span className="inline-flex items-center gap-1">
+                      {vehicle.verified ? null : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-10 md:h-8"
+                          onClick={() => setConfirming({ vehicle, verify: true })}
+                          aria-label={`Verifikasi ${vehicle.plateDisplay}`}
+                        >
+                          <BadgeCheck aria-hidden="true" />
+                          Verifikasi
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-10 md:h-8"
+                        onClick={() => setEditing(vehicle)}
+                        aria-label={`Ubah ${vehicle.plateDisplay}`}
+                      >
+                        <Pencil aria-hidden="true" />
+                        Ubah
+                      </Button>
+                      {vehicle.verified ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-10 w-10 md:h-8 md:w-8" aria-label={`Tindakan lain ${vehicle.plateDisplay}`}>
+                              <Ellipsis aria-hidden="true" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            <DropdownMenuItem className="min-h-11 md:min-h-9" onSelect={() => setConfirming({ vehicle, verify: false })}>
+                              Batalkan verifikasi
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : null}
+                    </span>
                   )
                 : undefined
             }
           />
         </div>
       )}
+
+      {confirming ? <VerificationSheet {...confirming} onClose={() => setConfirming(null)} onDone={verificationDone} onStale={reload} /> : null}
 
       {editing !== undefined ? (
         <VehicleFormSheet

@@ -225,3 +225,20 @@ export function stationErrorMessage(error: unknown): string {
   if (isApiError(error) && STATION_REFUSALS[error.code]) return STATION_REFUSALS[error.code];
   return errorMessage(error);
 }
+
+/**
+ * POST /api/vehicles/:id/verify and /unverify. The list is reloaded after INVALID_STATE and NOT_FOUND, so the
+ * message says so.
+ */
+export function verificationErrorMessage(error: unknown, verifying: boolean, plate: string): string {
+  if (isApiError(error)) {
+    if (error.code === "INVALID_STATE") {
+      return verifying
+        ? `${plate} sudah diverifikasi sebelumnya, mungkin oleh orang lain. Daftar dimuat ulang.`
+        : `Verifikasi ${plate} sudah dibatalkan sebelumnya, mungkin oleh orang lain. Daftar dimuat ulang.`;
+    }
+    if (error.status === 404) return `Kendaraan ${plate} tidak ditemukan lagi. Daftar dimuat ulang.`;
+    if (error.status === 403 && error.code !== "NO_ACCESS") return "Akun ini tidak punya izin mengubah verifikasi kendaraan.";
+  }
+  return errorMessage(error);
+}

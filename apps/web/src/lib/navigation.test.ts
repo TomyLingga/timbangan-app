@@ -64,7 +64,7 @@ describe("navigationFor", () => {
   });
 
   it("adds the weighing pages for the modules of phase 4", () => {
-    expect(navigationFor(staff({ approvals: "VIEW", reports: "VIEW", weighbridge: "EDIT" }))).toEqual(["/", "/keputusan", "/laporan", "/stasiun"]);
+    expect(navigationFor(staff({ approvals: "VIEW", reports: "VIEW", weighbridge: "EDIT" }))).toEqual(["/", "/keputusan", "/laporan", "/riwayat", "/stasiun"]);
     expect(navigationFor(staff({ dashboard: "VIEW" }))).toEqual(["/", "/ruang-kontrol"]);
     // the station list needs the edit level
     expect(navigationFor(staff({ weighbridge: "VIEW" }))).toEqual(["/"]);
@@ -73,7 +73,7 @@ describe("navigationFor", () => {
 
   it("adds the tank and seal pages for staff with plant_masters", () => {
     expect(navigationFor(staff({ plant_masters: "VIEW" }))).toEqual(["/", "/tangki", "/segel"]);
-    expect(navigationFor(staff({ rfid_cards: "VIEW", plant_masters: "EDIT", reports: "VIEW" }))).toEqual(["/", "/kartu", "/tangki", "/segel", "/laporan"]);
+    expect(navigationFor(staff({ rfid_cards: "VIEW", plant_masters: "EDIT", reports: "VIEW" }))).toEqual(["/", "/kartu", "/tangki", "/segel", "/laporan", "/riwayat"]);
     expect(navigationFor(partner({ plant_masters: "EDIT" }))).toEqual(["/"]);
   });
 

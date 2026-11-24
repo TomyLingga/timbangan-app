@@ -14,6 +14,7 @@
 //   MOCK_SSO       "off" makes the SSO exchange answer 503 NOT_CONFIGURED
 //   MOCK_VCF       "off" makes the driver registry sync answer 503, "fail" makes it answer 502
 //   MOCK_SYNC_MS   how long a sync takes (default 1200)
+//   MOCK_HISTORY   "off" makes the archive of the old application (dev/mock-history.mjs) answer 503
 //
 // Access follows docs/rancangan-hak-akses.md: every account holds a level per
 // module (VIEW, CREATE, EDIT), and each route checks the module and level that
@@ -30,6 +31,7 @@ import { randomBytes, randomInt } from "node:crypto";
 import { createServer } from "node:http";
 
 import { controlRoomRoutes } from "./mock-control-room.mjs";
+import { historyRoutes } from "./mock-history.mjs";
 
 const PORT = Number(process.env.PORT ?? 3100);
 const HOST = process.env.HOST ?? "localhost";
@@ -227,7 +229,8 @@ const vehicles = [
   vehicle("ZZ 0002 CTH", "TANGKI", partners.transporterA, { capacityKg: 20000, tareKg: 9000, kirValidUntil: daysFromNow(-10) }),
   vehicle("ZZ 0003 CTH", "BAK", partners.transporterB, { productionYear: 2015 }),
   vehicle("ZZ 0004 CTH", "KONTAINER", partners.transporterB, { isActive: false, stnkValidUntil: daysFromNow(-400), taxValidUntil: daysFromNow(-400) }),
-  vehicle("ZZ 0005 CTH", null, null, { capacityKg: null, productionYear: null, tareKg: null, verified: false }),
+  // not verified, and owned by the transporter of `transporter.contoh`, so a partner account sees the badge too
+  vehicle("ZZ 0005 CTH", null, partners.transporterA, { ownership: null, capacityKg: null, productionYear: null, tareKg: null, verified: false }),
 ];
 
 let nextDestinationId = 1;
@@ -465,6 +468,17 @@ function publicDriver(item) {
   delete rest.phone;
   delete rest.rejectsPush;
   return rest;
+}
+
+function setVerified(request, response, id, verified) {
+  if (!guard(request, response, [["vehicles", "EDIT"]], { staffOnly: true })) return 0;
+  const target = vehicles.find((item) => item.id === id);
+  if (!target) return fail(request, response, 404, "NOT_FOUND", "Kendaraan tidak ditemukan.");
+  if (target.verified === verified) {
+    return fail(request, response, 409, "INVALID_STATE", verified ? `Kendaraan ${target.plateDisplay} sudah diverifikasi.` : `Kendaraan ${target.plateDisplay} belum diverifikasi.`);
+  }
+  target.verified = verified;
+  return send(request, response, 200, { vehicle: publicVehicle(target) });
 }
 
 function publicVehicle(item) {
@@ -2801,6 +2815,10 @@ const routes = {
     return send(request, response, 200, { vehicle: publicVehicle(target) });
   },
 
+  // A verified vehicle's master tare is the reference of the tare check (apps/api src/vehicles/routes.ts).
+  "POST /api/vehicles/:id/verify": (request, response, url, id) => setVerified(request, response, id, true),
+  "POST /api/vehicles/:id/unverify": (request, response, url, id) => setVerified(request, response, id, false),
+
   // --- partners and destinations ---------------------------------------------
 
   "GET /api/partners": (request, response, url) => {
@@ -3448,6 +3466,7 @@ const routes = {
 
 Object.assign(routes, phaseFourRoutes());
 Object.assign(routes, plantAndFileRoutes());
+Object.assign(routes, historyRoutes({ guard, send, fail, invalid, sendCsv, reportPage }));
 
 /**
  * Routes written with ":id" match one path segment in that place; a second

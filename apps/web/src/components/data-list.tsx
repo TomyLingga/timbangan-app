@@ -28,10 +28,15 @@ interface DataListProps<T> {
   actions?: (row: T) => ReactNode;
   /** The rows belong to an earlier request; dim them while the new one loads. */
   stale?: boolean;
+  /**
+   * Opens a row with a pointer click anywhere on it. The row must also hold a button that does the same, since a
+   * table row cannot take the keyboard focus.
+   */
+  onRowClick?: (row: T) => void;
 }
 
 /** One column definition, two layouts: a table from 768 px up, cards below. */
-export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: DataListProps<T>) {
+export function DataList<T>({ columns, rows, rowKey, actions, stale = false, onRowClick }: DataListProps<T>) {
   const primary = columns.find((column) => column.primary) ?? columns[0];
   const details = columns.filter((column) => column !== primary);
 
@@ -64,7 +69,8 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-                className="transition-colors duration-150 hover:bg-muted/60"
+                className={cn("transition-colors duration-150 hover:bg-muted/60", onRowClick && "cursor-pointer")}
+                onClick={onRowClick ? () => onRowClick(row) : undefined}
               >
                 {columns.map((column) => (
                   <TableCell
@@ -92,7 +98,8 @@ export function DataList<T>({ columns, rows, rowKey, actions, stale = false }: D
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: MOTION_BASE, delay: rowDelay(index) }}
-            className="rounded-2xl border bg-card p-4 shadow-panel"
+            className={cn("rounded-2xl border bg-card p-4 shadow-panel", onRowClick && "cursor-pointer")}
+            onClick={onRowClick ? () => onRowClick(row) : undefined}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 text-[0.9375rem] wrap-break-word">{primary.cell(row)}</div>

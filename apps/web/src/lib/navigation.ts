@@ -18,6 +18,7 @@ export type NavHref =
   | "/tangki"
   | "/segel"
   | "/laporan"
+  | "/riwayat"
   | "/stasiun"
   | "/pengguna";
 
@@ -40,6 +41,8 @@ const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> 
   { href: "/tangki", visible: canSeePlantMasters },
   { href: "/segel", visible: canSeePlantMasters },
   { href: "/laporan", visible: canSeeReports },
+  // the archive of the old application has the rule of the reports (apps/api src/history/routes.ts)
+  { href: "/riwayat", visible: canSeeReports },
   // the station list itself needs weighbridge EDIT (apps/api stations/routes.ts)
   { href: "/stasiun", visible: canManageStations },
   { href: "/pengguna", visible: view("users") },
