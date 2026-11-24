@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Program icon: the scale mark of the window (src/renderer/src/icons.tsx, "scale") in the dark theme's mint on its
+       canvas colour. build/icon.ico is made from this file by `npm run icon`. -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="oklch(0.185 0.013 195)" />
+  <g transform="translate(32 32) scale(8)" fill="none" stroke="oklch(0.84 0.11 172)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 18h16M6 18l1-6h10l1 6M12 12V6M9 6h6" />
+  </g>
+</svg>

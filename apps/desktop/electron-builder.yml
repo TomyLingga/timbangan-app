@@ -1,0 +1,50 @@
+# Windows installer of the weighbridge program (`npm run dist`). Options as documented for electron-builder 26.18:
+# https://www.electron.build/configuration, /contents, /win, /nsis.
+
+# Never change appId: the NSIS installer derives its registry GUID from it, so a new id installs a second program
+# beside the old one instead of updating it.
+appId: timbangan-registrasi.desktop
+productName: Timbangan
+# version comes from package.json
+
+directories:
+  output: dist
+  buildResources: build
+
+# electron-vite has bundled main, preload and window into out/; package.json and the production node_modules
+# (serialport among them) are always added by electron-builder.
+files:
+  - out/**/*
+
+# serialport 13 loads @serialport/bindings-cpp from its N-API prebuilds (prebuilds/win32-x64), which work in any
+# Electron without compiling; nothing to rebuild. The .node file is unpacked from app.asar by smart unpack (on by
+# default); the pattern says so explicitly.
+npmRebuild: false
+asarUnpack:
+  - node_modules/@serialport/bindings-cpp/prebuilds/win32-x64/**
+
+publish: null
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+  # no certificate: skip signing, keep editing the executable's icon and version resources
+  signExecutable: false
+
+nsis:
+  # One click, per user: installs into the user's own program folder (%LOCALAPPDATA%\Programs) without administrator
+  # rights, and the same user runs and updates it. Settings and the station key are per user anyway (DPAPI).
+  oneClick: true
+  perMachine: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Timbangan
+  uninstallDisplayName: Timbangan
+  # settings and logs stay after uninstalling and updating; `Uninstall Timbangan.exe --delete-app-data` removes them
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  installerLanguages: [id_ID]
+  language: "1057"
+  artifactName: Timbangan-Setup-${version}-x64.${ext}

@@ -40,7 +40,11 @@ npm run typecheck    # tsc untuk proses utama dan jendela
 npm test             # Vitest: modul murni, klien API terhadap API tiruan, uji ujung ke ujung tanpa jendela
 npm run build        # build produksi ke out/ (bukan installer)
 npm start            # menjalankan hasil build
+npm run dist         # build lalu installer Windows x64: dist/Timbangan-Setup-<versi>-x64.exe
+npm run icon         # membuat ulang build/icon.ico dari build/icon.svg
 ```
+
+Pengaturan installer ada di `electron-builder.yml`. Unduhan electron-builder (NSIS) disimpan di folder cache; arahkan ke drive lain dengan `ELECTRON_BUILDER_CACHE` bila drive C sempit. Installer tidak ditandatangani karena belum ada sertifikat.
 
 ## Cek suara
 
@@ -54,6 +58,28 @@ npm run speech:check -- --autoplay-policy document-user-activation-required   # 
 ```
 
 Kunci stasiun diambil dari `SPEECH_CHECK_STATION_KEY`. Bila kosong, cek masuk dengan `DEV_ADMIN_USERNAME` dan `DEV_ADMIN_PASSWORD` dari `../api/.env` (`--api-env` untuk berkas lain), memakai stasiun `WB-CEK-SUARA` (dibuat sekali, nonaktif di luar cek), memberinya kunci baru, menyalakannya selama cek, lalu mematikannya dan keluar. Tidak ada yang ditimbang atau didaftarkan. Hasil build cek ada di folder temp (`timbangan-speech-check`), bukan di `out/`.
+
+## Memasang di PC timbangan
+
+Berkas pemasang: `Timbangan-Setup-<versi>-x64.exe` (Windows 10 atau 11, 64-bit).
+
+1. Masuk ke Windows dengan akun yang nanti menjalankan program timbangan. Program dipasang untuk akun itu saja dan tidak perlu hak administrator.
+2. Salin berkas pemasang ke PC (flashdisk atau folder bersama), lalu klik dua kali.
+3. Berkas ini belum ditandatangani, jadi Windows bisa menampilkan layar biru "Windows melindungi PC Anda" (bahasa Inggris: "Windows protected your PC") dengan penerbit tidak dikenal. Klik **Info selengkapnya** (More info), lalu **Tetap jalankan** (Run anyway). Bila peramban menahan unduhan, pilih simpan atau pertahankan berkas.
+4. Pemasang tidak bertanya apa-apa dan selesai dalam satu sampai dua menit. Ia menyalin program ke `%LOCALAPPDATA%\Programs\timbangan-registrasi-desktop`, membuat pintasan **Timbangan** di desktop dan menu Start, lalu membuka program.
+
+Pertama kali dibuka, program tampil layar penuh dan belum punya kunci stasiun. Tekan F2: Pengaturan terbuka tanpa PIN. Isi alamat server, tempel kunci stasiun dari halaman Stasiun di web, isi alamat pembaca plat, pilih sambungan timbangan (Serial untuk RS-232, lalu port COM), simpan. Setelah kunci tersimpan, Pengaturan hanya terbuka dengan PIN stasiun. Arti tiap isian ada di bagian "Arti pengaturan".
+
+Letak data di PC (untuk akun Windows yang memakai program):
+
+- Pengaturan: `%APPDATA%\timbangan-registrasi-desktop\settings.json`; kunci stasiun terenkripsi di `station-key.bin` dalam folder yang sama.
+- Log: `%APPDATA%\timbangan-registrasi-desktop\logs`, satu berkas per hari.
+
+Folder itu bisa dibuka dengan mengetik alamatnya di File Explorer.
+
+Memperbarui: tutup program (Alt+F4), lalu jalankan pemasang versi baru dengan akun Windows yang sama. Program lama diganti, pengaturan dan log tetap. Bila program masih terbuka, pemasang mencoba menutupnya sendiri.
+
+Menghapus: buka Settings Windows, Apps (atau Control Panel, Programs and Features), pilih **Timbangan**, Uninstall, lalu jawab ya. Program dan pintasan hilang; pengaturan, kunci stasiun, dan log tetap ada supaya bisa dipakai lagi bila dipasang ulang. Untuk menghapus semuanya, hapus juga folder `%APPDATA%\timbangan-registrasi-desktop`.
 
 ## Memakai API dan timbangan sungguhan
 
