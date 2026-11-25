@@ -5,6 +5,8 @@ import type { Orm } from "../db/client.js";
 import { deliveryOrderFiles, files, tripFiles, users } from "../db/schema.js";
 
 export const SLIP_LABEL = "SLIP_TIMBANG";
+/** The scanned surat pengantar or delivery order a walk-in registration was made from, linked to its truck. */
+export const SCAN_LABEL = "SCAN_DOKUMEN";
 
 export interface AttachedFile {
   id: number;

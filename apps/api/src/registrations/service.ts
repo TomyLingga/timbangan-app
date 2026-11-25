@@ -140,6 +140,7 @@ export function splitQuantity(total: number, trucks: number): number[] | null {
  * Writes the content of a registration as a draft: new when `existing` is absent, else in place of the
  * draft's allocations and trips. Vehicles and drivers entered in place are created. Throws 400, 403-like
  * refusals (409) and leaves the transaction to roll back. Answers the registration id and the new drivers.
+ * `createdVia` marks a new registration made another way than the form: "SCAN" for a walk-in from a scanned letter.
  */
 export async function writeRegistration(
   tx: Orm,
@@ -147,6 +148,7 @@ export async function writeRegistration(
   body: RegistrationInput,
   now: Date,
   existing?: { id: number; regNo: string; createdBy: number },
+  createdVia?: "SCAN",
 ): Promise<{ id: number; newDrivers: number[] }> {
   const fields: Field[] = [];
   const keys = body.allocations.map((allocation) => (body.direction === "IN" ? allocation.contractId : allocation.deliveryOrderId));
@@ -389,7 +391,7 @@ export async function writeRegistration(
   } else {
     const [created] = await tx
       .insert(registrations)
-      .values({ ...values, regNo: await nextDocumentNo(tx, "REG", site.code, now), createdVia: isStaff ? "OPERATOR" : "PORTAL", createdBy: account.id, createdAt: now })
+      .values({ ...values, regNo: await nextDocumentNo(tx, "REG", site.code, now), createdVia: createdVia ?? (isStaff ? "OPERATOR" : "PORTAL"), createdBy: account.id, createdAt: now })
       .returning({ id: registrations.id });
     if (!created) throw new Error("The registration was not created.");
     registrationId = created.id;
@@ -481,12 +483,7 @@ export async function submitRegistration(tx: Orm, registrationId: number, actor:
   const [registration] = await tx.select().from(registrations).where(eq(registrations.id, registrationId)).for("update");
   if (!registration) throw new Error(`Registration ${registrationId} does not exist.`);
   if (registration.status !== "DRAFT") throw invalidState("Hanya registrasi berstatus DRAFT yang bisa dikirim.");
-  if (registration.direction === "OUT") {
-    const missing: Field[] = [];
-    if (registration.closeCargo === null) missing.push({ field: "closeCargo", message: "Close cargo wajib dijawab sebelum dikirim." });
-    if (registration.flexiBag === null) missing.push({ field: "flexiBag", message: "Flexi bag wajib dijawab sebelum dikirim." });
-    if (missing.length) throw fail(missing);
-  }
+  // close cargo and flexi bag are no longer asked here: the post marks them per truck at check-in (0015)
   const findings = await checkRegistration(tx, registrationId, now);
   const review = (await readSetting<Record<string, string>>(tx, registration.siteId, "registration_review"))?.[registration.flowCode] ?? "ON_FAILED_CHECK";
   const needsReview = review === "ALWAYS" || (review !== "NEVER" && findings.length > 0);

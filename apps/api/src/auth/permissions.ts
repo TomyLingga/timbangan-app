@@ -14,6 +14,7 @@ export type ModuleCode =
   | "delivery_orders"
   | "registrations"
   | "gate"
+  | "gate_emergency"
   | "rfid_cards"
   | "users"
   | "weighbridge"

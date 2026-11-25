@@ -37,7 +37,7 @@ async function uploaderOf(orm: Orm, fileId: number) {
 }
 
 /** Whether the file is linked to any truck or delivery order already. */
-async function linkedAnywhere(orm: Orm, fileId: number): Promise<boolean> {
+export async function linkedAnywhere(orm: Orm, fileId: number): Promise<boolean> {
   const [onTrip] = await orm.select({ n: count() }).from(tripFiles).where(eq(tripFiles.fileId, fileId));
   const [onDo] = await orm.select({ n: count() }).from(deliveryOrderFiles).where(eq(deliveryOrderFiles.fileId, fileId));
   return (onTrip?.n ?? 0) + (onDo?.n ?? 0) > 0;

@@ -70,12 +70,12 @@ function reject(label: string, sql: string) {
 
 describe("migrated schema", () => {
   it("has the tables, indexes and reference rows of the design", async () => {
-    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(59);
-    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(163);
+    expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(60);
+    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(164);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
-    expect(await count("select count(*) n from modules")).toBe(21);
-    // 0007 switched on the dashboard, 0009 switched off destinations, 0011 added gps
-    expect(await count("select count(*) n from modules where is_active")).toBe(20);
+    expect(await count("select count(*) n from modules")).toBe(22);
+    // 0007 switched on the dashboard, 0009 switched off destinations, 0011 added gps, 0015 gate_emergency
+    expect(await count("select count(*) n from modules where is_active")).toBe(21);
     expect(await count("select count(*) n from flow_steps where performer_module is not null")).toBe(22);
     expect(await count("select count(*) n from zones")).toBe(9);
     expect(await count("select count(*) n from flow_steps where wait_zone_id is null or work_zone_id is null")).toBe(0);
@@ -204,12 +204,8 @@ describe("constraint scenarios", () => {
     insert into delivery_orders (site_id, do_no, do_date, partner_id, product_id, qty, destination_id, delivery_from, created_by)
     values (${site}, '551/DO-LOG/XYZ/XI/2026', '2026-11-20', ${CUSTOMER}, ${product("prod2")}, 30000, ${destination}, '2026-11-21', ${OPERATOR})`,
   );
-  reject(
-    "outgoing request submitted without close cargo / flexi bag",
-    `
-    insert into registrations (site_id, reg_no, direction, flow_code, partner_id, status, created_via, created_by)
-    values (${site}, 'REG-2', 'OUT', 'OUT_BULK', ${CUSTOMER}, 'SUBMITTED', 'PORTAL', ${TRANSPORTER_USER})`,
-  );
+  // 0015 dropped the check that an outgoing registration is sent with close cargo and flexi bag answered:
+  // the post marks both per truck at check-in
   ok(
     "transporter's truck list for the delivery order",
     `
@@ -293,7 +289,7 @@ describe("constraint scenarios", () => {
   reject("zone colour that is not a hex colour", `insert into zones (site_id, code, name, kind, color) values (${site}, 'X', 'x', 'QC', 'merah')`);
 
   it("ends with the state the scenarios describe", async () => {
-    expect(scenarios).toBe(53);
+    expect(scenarios).toBe(52);
     const split = await database.query<{ total: number; net: number }>(
       `select sum(net_kg)::int total, (select net_kg from trips where id = ${trip(1)}) net from trip_allocations where trip_id = ${trip(1)}`,
     );

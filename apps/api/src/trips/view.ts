@@ -45,6 +45,9 @@ export interface TripView {
   docGrossKg: number | null;
   docTareKg: number | null;
   docNetKg: number | null;
+  /** Outgoing: as the post marked the truck at check-in (before that, what the registration carries); null otherwise. */
+  closeCargo: boolean | null;
+  flexiBag: boolean | null;
   allocations: {
     seq: number;
     qtyPlanned: number | null;
@@ -73,6 +76,8 @@ export async function loadTrips(orm: Orm, ids: number[]): Promise<TripView[]> {
       trip: trips,
       direction: registrations.direction,
       flowCode: registrations.flowCode,
+      registeredCloseCargo: registrations.closeCargo,
+      registeredFlexiBag: registrations.flexiBag,
       partnerId: partners.id,
       partnerName: partners.name,
       transporterId: transporterOf.id,
@@ -139,6 +144,8 @@ export async function loadTrips(orm: Orm, ids: number[]): Promise<TripView[]> {
       docGrossKg: trip.docGrossKg,
       docTareKg: trip.docTareKg,
       docNetKg: trip.docNetKg,
+      closeCargo: trip.closeCargo ?? row.registeredCloseCargo,
+      flexiBag: trip.flexiBag ?? row.registeredFlexiBag,
       allocations: allocationRows
         .filter((allocation) => allocation.tripId === trip.id)
         .map((allocation) => ({

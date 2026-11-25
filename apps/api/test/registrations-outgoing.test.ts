@@ -124,18 +124,16 @@ describe("outgoing registration", () => {
     expect(late.findings.find((finding: { code: string }) => finding.code === "OUTSIDE_DELIVERY_WINDOW")).toMatchObject({ tripSeq: 1, allocationSeq: 1 });
   });
 
-  it("needs close cargo and flexi bag at submit, not in a draft", async () => {
-    const { acceptedDo, register, registerOk, outgoing, call } = await setup();
-    const order = await acceptedDo(30_000);
-    const missing = await register(outgoing([{ deliveryOrderId: order.id }], 1, { closeCargo: undefined, flexiBag: undefined }));
-    expect(missing.statusCode).toBe(400);
-    expect(missing.json().error.fields.map((field: { field: string }) => field.field)).toEqual(["closeCargo", "flexiBag"]);
+  it("is sent without close cargo and flexi bag, which the post marks at check-in, and keeps them when given", async () => {
+    const { acceptedDo, registerOk, outgoing, call } = await setup();
+    const order = await acceptedDo(60_000);
+    const unmarked = await registerOk(outgoing([{ deliveryOrderId: order.id, qtyPlanned: 30_000 }], 1, { closeCargo: undefined, flexiBag: undefined }));
+    expect(unmarked).toMatchObject({ status: "APPROVED", closeCargo: null, flexiBag: null });
 
-    const draft = await registerOk(outgoing([{ deliveryOrderId: order.id }], 1, { closeCargo: undefined, flexiBag: undefined, submit: false }));
+    const draft = await registerOk(outgoing([{ deliveryOrderId: order.id, qtyPlanned: 30_000 }], 1, { closeCargo: undefined, flexiBag: undefined, submit: false }));
     expect(draft.status).toBe("DRAFT");
-    expect((await call("POST", `/api/registrations/${draft.id}/submit`, "angkut1")).statusCode).toBe(400);
-    const filled = await call("PUT", `/api/registrations/${draft.id}`, "angkut1", outgoing([{ deliveryOrderId: order.id }], 1, { closeCargo: false, flexiBag: true }));
-    expect(filled.statusCode).toBe(200);
+    const filled = await call("PUT", `/api/registrations/${draft.id}`, "angkut1", outgoing([{ deliveryOrderId: order.id, qtyPlanned: 30_000 }], 1, { closeCargo: false, flexiBag: true }));
+    expect(filled.statusCode, filled.body).toBe(200);
     expect(filled.json().registration).toMatchObject({ status: "APPROVED", closeCargo: false, flexiBag: true });
   });
 

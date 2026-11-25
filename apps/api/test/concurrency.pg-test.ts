@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import type { Database, SqlRunner } from "../src/db/client.js";
 import { phase3App, seedCard, seedContract, seedDriver, seedVehicle } from "./helpers/fixtures.js";
+import { walkInApp } from "./helpers/walk-in.js";
 import { weighingApp } from "./helpers/weighing.js";
 
 interface Answer {
@@ -38,7 +39,7 @@ async function together(database: Database, hold: (tx: SqlRunner) => Promise<unk
   return running;
 }
 
-const outcome = (answer: Answer) => (answer.statusCode === 200 ? "OK" : `${answer.statusCode} ${answer.json().error?.code}`);
+const outcome = (answer: Answer) => (answer.statusCode === 200 || answer.statusCode === 201 ? "OK" : `${answer.statusCode} ${answer.json().error?.code}`);
 
 async function gateSetup() {
   const context = await phase3App();
@@ -94,6 +95,29 @@ describe("two check-ins at the same moment", () => {
     expect(await database.query("select status from rfid_cards where uid in ('AB0000009002', 'AB0000009003') order by uid")).toEqual(
       expect.arrayContaining([{ status: "IN_USE" }, { status: "AVAILABLE" }]),
     );
+  });
+});
+
+describe("two walk-ins at the same moment", () => {
+  it("with the same scan: one registers and checks in, the other is refused SCAN_ALREADY_USED and leaves nothing", async () => {
+    const { database, scanOk, walkIn, vehicles, drivers } = await walkInApp();
+    const proposal = await scanOk("IN");
+    const [truck] = proposal.registration.trips;
+    const body = (cardUid: string, vehicle: number, driver: number) => ({
+      scanFileId: proposal.scan.fileId,
+      cardUid,
+      registration: { ...proposal.registration, trips: [{ ...truck, vehicle: { id: vehicle }, driver: { id: driver } }] },
+    });
+
+    // two trucks, two cards, one paper: both wait for the row of the scan the third connection holds
+    const answers = await together(database, (tx) => tx.query("select id from files where id = $1 for update", [proposal.scan.fileId]), [
+      () => walkIn(body("AB0000000001", vehicles.letter, drivers.letter)),
+      () => walkIn(body("AB0000000002", vehicles.other, drivers.other)),
+    ]);
+    expect(answers.map(outcome).sort()).toEqual(["409 SCAN_ALREADY_USED", "OK"]);
+    expect(await database.query("select count(*)::int as n from registrations")).toEqual([{ n: 1 }]);
+    expect(await database.query("select count(*)::int as n from trip_files")).toEqual([{ n: 1 }]);
+    expect(await database.query("select count(*)::int as n from rfid_cards where status = 'IN_USE'")).toEqual([{ n: 1 }]);
   });
 });
 

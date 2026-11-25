@@ -1,6 +1,7 @@
 // Uploaded files: photos from the phones, the DO letter, and weighbridge slips. One file per request: a PDF up to
 // 10 MB or an image (JPEG, PNG, WebP) up to 5 MB, typed by its first bytes and kept below the storage root under a
-// random key. Forms and attachments then refer to the file by its id.
+// random key. Forms and attachments then refer to the file by its id. The scan of a letter at the registration
+// post comes in through POST /api/gate/scan-document (kind SCAN, larger limit) and is kept the same way.
 //
 // Who reads a file: staff read every file. A partner account reads the uploads of its own company, and a staff
 // upload once it is linked to that company's DO (sent to it) or to a truck slip of a registration it may see.
@@ -38,7 +39,44 @@ export const fileTypeOf = (bytes: Buffer) => FILE_TYPES.find((type) => type.matc
 /** The image type of these bytes; null for anything else (a PDF too). */
 export const imageTypeOf = (bytes: Buffer) => FILE_TYPES.find((type) => type.image && type.matches(bytes)) ?? null;
 
-const notMultipart = () => invalid("file", "Kirim satu berkas sebagai multipart/form-data.");
+/**
+ * Keeps the bytes below the storage root under a random key and records the file; answers its id. The type is the
+ * one the bytes themselves show (fileTypeOf), never what the client claimed.
+ */
+export async function storeFile(
+  context: Pick<AppContext, "config" | "database">,
+  file: { bytes: Buffer; type: { mime: string; ext: string }; originalName: string | null; kind: "PHOTO" | "SCAN" | "PDF"; uploadedBy: number },
+  now: Date,
+): Promise<number> {
+  const { yyyy, mm } = plantDateParts(now);
+  const storageKey = `${yyyy}/${mm}/${randomBytes(16).toString("hex")}.${file.type.ext}`;
+  const path = join(context.config.files.dir, storageKey);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, file.bytes, { flag: "wx" });
+  try {
+    const [row] = await context.database.db
+      .insert(files)
+      .values({
+        storageKey,
+        originalName: file.originalName,
+        mimeType: file.type.mime,
+        sizeBytes: file.bytes.length,
+        sha256: createHash("sha256").update(file.bytes).digest("hex"),
+        kind: file.kind,
+        uploadedBy: file.uploadedBy,
+        createdAt: now,
+      })
+      .returning({ id: files.id });
+    if (!row) throw new Error("The file was not recorded.");
+    return row.id;
+  } catch (error) {
+    // a file without its row would never be found again
+    await unlink(path).catch(() => undefined);
+    throw error;
+  }
+}
+
+export const notMultipart = () => invalid("file", "Kirim satu berkas sebagai multipart/form-data.");
 const tooLarge = () => new AppError(413, "FILE_TOO_LARGE", "Berkas paling besar 10 MB, gambar paling besar 5 MB.");
 
 /** `inline` with an ASCII fallback name and the exact name in UTF-8 (RFC 6266). */
@@ -108,33 +146,8 @@ export async function registerFileRoutes(app: FastifyInstance, context: AppConte
     // a picture from a partner is a scan of a paper, never a photo a field form may take
     const kind = !type.image ? "PDF" : account.kind === "INTERNAL" ? "PHOTO" : "SCAN";
 
-    const now = context.now();
-    const { yyyy, mm } = plantDateParts(now);
-    const storageKey = `${yyyy}/${mm}/${randomBytes(16).toString("hex")}.${type.ext}`;
-    const path = join(context.config.files.dir, storageKey);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, bytes, { flag: "wx" });
-    try {
-      const [row] = await orm
-        .insert(files)
-        .values({
-          storageKey,
-          originalName,
-          mimeType: type.mime,
-          sizeBytes: bytes.length,
-          sha256: createHash("sha256").update(bytes).digest("hex"),
-          kind,
-          uploadedBy: account.id,
-          createdAt: now,
-        })
-        .returning({ id: files.id });
-      if (!row) throw new Error("The file was not recorded.");
-      return reply.code(201).send({ id: row.id, originalName, mimeType: type.mime, sizeBytes: bytes.length });
-    } catch (error) {
-      // a file without its row would never be found again
-      await unlink(path).catch(() => undefined);
-      throw error;
-    }
+    const id = await storeFile(context, { bytes, type, originalName, kind, uploadedBy: account.id }, context.now());
+    return reply.code(201).send({ id, originalName, mimeType: type.mime, sizeBytes: bytes.length });
   });
 
   app.get("/api/files/:id", { preHandler: [guards.authenticate, mayAsk] }, async (request, reply) => {

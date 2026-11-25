@@ -22,6 +22,8 @@ interface Row {
   staffOnly: boolean;
   /** Open to every signed-in account, also a staff account without any permission; it touches only the caller's rows. */
   anyAccount?: boolean;
+  /** Needed besides one of `needs`: every one of these. */
+  and?: Need[];
 }
 
 const row = (method: Method, url: string, needs: Need[], staffOnly = false): Row => ({ method, url, needs, staffOnly });
@@ -86,6 +88,9 @@ const ROUTES: Row[] = [
   row("GET", "/api/gate/spj/NOTATOKEN", [["gate", "VIEW"]]),
   row("POST", "/api/gate/check-in", [["gate", "CREATE"]]),
   row("POST", "/api/gate/replace-card", [["gate", "EDIT"]]),
+  // a truck without an SPJ: its paper is scanned, then it is registered and checked in with one request
+  row("POST", "/api/gate/scan-document", [["gate", "CREATE"]], true),
+  { ...row("POST", "/api/gate/walk-in", [["gate", "CREATE"]], true), and: [["registrations", "CREATE"]] },
 
   row("GET", "/api/rfid-cards", [["rfid_cards", "VIEW"]]),
   row("POST", "/api/rfid-cards", [["rfid_cards", "CREATE"]]),
@@ -230,8 +235,10 @@ describe("route permissions", () => {
   );
 
   it.each(ROUTES.filter((route) => !route.anyAccount).map((route) => [label(route), route] as const))("%s refuses below its level and lets its level pass", async (_name, route) => {
+    // what the route needs besides one of the alternatives is held throughout, so each check is about the alternatives
+    const also = Object.fromEntries(route.and ?? []) as Permissions;
     // one level below every alternative at once; an account needs some permission to get past NO_ACCESS
-    const below: Permissions = {};
+    const below: Permissions = { ...also };
     for (const [moduleCode, level] of route.needs) {
       const lower = BELOW[level];
       if (lower) below[moduleCode] = lower;
@@ -243,10 +250,21 @@ describe("route permissions", () => {
       expect(refused.json().error.code).toBe("FORBIDDEN");
     }
 
-    const alternatives = route.needs.length > 0 ? route.needs.map(([code, level]) => ({ [code]: level })) : [{ gate: "VIEW" } as Permissions];
+    const alternatives = route.needs.length > 0 ? route.needs.map(([code, level]) => ({ ...also, [code]: level })) : [{ gate: "VIEW" } as Permissions];
     for (const exact of alternatives) {
       const allowed = await send(route, await holding(exact));
       expect(allowed.statusCode, `${label(route)} with ${JSON.stringify(exact)}: ${allowed.body}`).not.toBe(403);
+    }
+
+    // and each of the permissions it needs besides: one level lower, with an alternative in place, is refused
+    for (const [moduleCode, level] of route.and ?? []) {
+      const held: Permissions = { ...alternatives[0] };
+      const lower = BELOW[level];
+      if (lower) held[moduleCode] = lower;
+      else delete held[moduleCode];
+      const refused = await send(route, await holding(held));
+      expect(refused.statusCode, `${label(route)} with ${JSON.stringify(held)}`).toBe(403);
+      expect(refused.json().error.code).toBe("FORBIDDEN");
     }
 
     const partner = await send(route, partnerHeaders);

@@ -51,6 +51,7 @@ describe("Drizzle definitions against the migrated database", () => {
       "field_submissions",
       "files",
       "flow_steps",
+      "gate_scans",
       "gps_sources",
       "gps_unknown_devices",
       "handlings",

@@ -75,8 +75,9 @@ export async function loadWeighContext(orm: Orm, tripId: number, directions: ("I
     trip: row.trip,
     direction: row.direction,
     flowCode: row.flowCode,
-    closeCargo: row.closeCargo ?? false,
-    flexiBag: row.flexiBag ?? false,
+    // as marked by the post at check-in; a truck checked in before 0015 has the answers of its registration
+    closeCargo: row.trip.closeCargo ?? row.closeCargo ?? false,
+    flexiBag: row.trip.flexiBag ?? row.flexiBag ?? false,
     vehicle: vehicle ?? null,
     step: ready,
     stage,

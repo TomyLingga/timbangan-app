@@ -397,6 +397,9 @@ export const trips = pgTable("trips", {
   // added by 0006
   deliveryNoteNo: text("delivery_note_no"),
   outSpecLetterNo: text("out_spec_letter_no"),
+  // added by 0015: marked by the post at check-in; null for incoming and for trucks checked in before it
+  closeCargo: boolean("close_cargo"),
+  flexiBag: boolean("flexi_bag"),
 });
 
 export const tripAllocations = pgTable("trip_allocations", {
@@ -706,6 +709,16 @@ export const tripFiles = pgTable("trip_files", {
   label: text("label"),
   addedBy: bigint("added_by", { mode: "number" }),
   addedAt: timestamptz("added_at"),
+});
+
+/** What the reading service made of a scan of the registration post (0015). NOT_READ: the service did not answer. */
+export const GATE_SCAN_OUTCOMES = ["READ", "UNREADABLE", "NOT_READ"] as const;
+export const gateScans = pgTable("gate_scans", {
+  fileId: bigint("file_id", { mode: "number" }).primaryKey(),
+  direction: text("direction", { enum: ["IN", "OUT"] }).notNull(),
+  outcome: text("outcome", { enum: GATE_SCAN_OUTCOMES }).notNull(),
+  fieldsFound: smallint("fields_found"),
+  fieldsTotal: smallint("fields_total"),
 });
 
 export const deliveryOrderFiles = pgTable("delivery_order_files", {

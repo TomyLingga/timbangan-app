@@ -19,6 +19,7 @@ import { registerExceptionRoutes } from "./exceptions/routes.js";
 import { registerAttachmentRoutes } from "./attachments/routes.js";
 import { registerFileRoutes } from "./files/routes.js";
 import { registerGateRoutes } from "./gate/routes.js";
+import { registerWalkInRoutes } from "./gate/walk-in-routes.js";
 import { registerGpsIntakeRoutes } from "./gps/intake-routes.js";
 import { registerGpsMasterRoutes } from "./gps/master-routes.js";
 import { registerGpsReadRoutes } from "./gps/read-routes.js";
@@ -180,6 +181,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerPlantMasterRoutes(app, context, guards);
   await registerFileRoutes(app, context, guards);
   registerAttachmentRoutes(app, context, guards);
+  // after the file routes: the scan upload uses the multipart parser they register
+  registerWalkInRoutes(app, context, guards);
   registerWorkRoutes(app, context, guards);
   registerFormRoutes(app, context, guards);
   registerControlRoomRoutes(app, context, guards);

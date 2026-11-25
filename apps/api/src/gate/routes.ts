@@ -1,6 +1,6 @@
 // The registration desk at the gate: scan the SPJ, check the truck in with a card, replace a card.
 import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
@@ -18,11 +18,24 @@ import { normaliseToken } from "../trips/spj.js";
 import { ARRIVED_STATUSES, expireDueTrips, INSIDE_STATUSES, loadTrips } from "../trips/view.js";
 import { finishStep, loadSteps, readyStep } from "../weighing/steps.js";
 
-const uidField = z
+export const uidField = z
   .string("UID kartu wajib diisi.")
   .transform(normaliseUid)
   .pipe(z.string().regex(/^[0-9A-F]{8,20}$/, "UID kartu harus 8 sampai 20 digit heksadesimal."));
-const checkInBody = z.object({ token: z.string("Token SPJ wajib diisi.").trim().min(1, "Token SPJ wajib diisi.").max(40, "Token SPJ terlalu panjang."), cardUid: uidField });
+/** What the operator of the post marks on an outgoing truck when it checks in. */
+export const cargoMarks = {
+  closeCargo: z.boolean("closeCargo harus true atau false.").optional(),
+  flexiBag: z.boolean("flexiBag harus true atau false.").optional(),
+};
+export interface CargoMarks {
+  closeCargo?: boolean | undefined;
+  flexiBag?: boolean | undefined;
+}
+const checkInBody = z.object({
+  token: z.string("Token SPJ wajib diisi.").trim().min(1, "Token SPJ wajib diisi.").max(40, "Token SPJ terlalu panjang."),
+  cardUid: uidField,
+  ...cargoMarks,
+});
 const replaceBody = z.object({
   tripId: idNumber,
   cardUid: uidField,
@@ -76,6 +89,94 @@ async function availableCard(orm: Orm, uid: string) {
   return card;
 }
 
+/**
+ * Checks the truck of this SPJ in: locks the trip, refuses what the desk may not let in, binds the card, numbers
+ * the trip and copies the steps of its flow. Runs in the caller's transaction and answers the trip id. Used by
+ * the check-in by SPJ and by the walk-in, so both apply the same rules and write the same audit entry.
+ *
+ * `marks` are close cargo and flexi bag as the operator marked them. A bulk outgoing truck needs both, because
+ * the net weight check at the second weighing depends on them; a registration made before 0015 still carries
+ * the answers of the transporter, which then count.
+ */
+export async function checkInWithCard(tx: Orm, request: FastifyRequest, now: Date, spj: typeof spjDocuments.$inferSelect, cardUid: string, marks: CargoMarks = {}): Promise<number> {
+  const account = accountOf(request);
+  const [current] = await tx.select().from(trips).where(eq(trips.id, spj.tripId)).for("update");
+  if (!current) throw spjNotFound();
+  if (spj.revokedAt !== null) throw refuse("SPJ_REVOKED");
+  if (ARRIVED_STATUSES.includes(current.status)) throw refuse("ALREADY_CHECKED_IN");
+  if (current.status === "EXPIRED" || (spj.validUntil !== null && spj.validUntil < now)) throw refuse("SPJ_EXPIRED");
+  if (current.status !== "ISSUED") throw invalidState("Truk ini belum siap check-in.");
+
+  const registration = await registrationOf(tx, current.registrationId);
+  const outgoing = registration.direction === "OUT";
+  const closeCargo = outgoing ? (marks.closeCargo ?? registration.closeCargo) : null;
+  const flexiBag = outgoing ? (marks.flexiBag ?? registration.flexiBag) : null;
+  if (registration.flowCode === "OUT_BULK") {
+    const unmarked: { field: string; message: string }[] = [];
+    if (closeCargo === null) unmarked.push({ field: "closeCargo", message: "Tandai close cargo: ya atau tidak." });
+    if (flexiBag === null) unmarked.push({ field: "flexiBag", message: "Tandai flexi bag: ya atau tidak." });
+    if (unmarked.length) throw new AppError(400, "VALIDATION", "Data yang dikirim tidak valid.", unmarked);
+  }
+
+  const [driver] = current.driverId === null ? [] : await tx.select().from(drivers).where(eq(drivers.id, current.driverId));
+  if (driver) {
+    const verdict = registryVerdict(await driverPolicy(tx, current.siteId), driver.registryStatus, driver.fullName);
+    if (verdict?.level === "BLOCK") throw refused(verdict.code, verdict.message);
+    if (await isDriverBlocked(tx, driver.id, now)) throw refused("DRIVER_BLOCKED", `Supir ${driver.fullName} sedang diblokir.`);
+  }
+  const card = await availableCard(tx, cardUid);
+  const inside = await insideElsewhere(tx, current);
+  if (inside.vehicle) throw refuse("VEHICLE_INSIDE");
+  if (inside.driver) throw refuse("DRIVER_INSIDE");
+
+  const site = await siteById(tx, current.siteId);
+  const steps = await tx
+    .select()
+    .from(flowSteps)
+    .where(and(eq(flowSteps.siteId, current.siteId), eq(flowSteps.flowCode, registration.flowCode)))
+    .orderBy(asc(flowSteps.seq));
+  const nextStep = steps.find((step) => step.stepCode !== "CHECK_IN" && !step.isOptional && step.seq > (steps.find((item) => item.stepCode === "CHECK_IN")?.seq ?? 0));
+  await tx
+    .update(trips)
+    .set({ status: "CHECKED_IN", checkedInAt: now, tripNo: await nextDocumentNo(tx, "TRIP", site.code, now), currentStep: nextStep?.stepCode ?? null, closeCargo, flexiBag, updatedAt: now })
+    .where(eq(trips.id, current.id));
+  await tx.insert(cardAssignments).values({ cardId: card.id, tripId: current.id, assignedBy: account.id, assignedAt: now });
+  await tx.update(rfidCards).set({ status: "IN_USE" }).where(eq(rfidCards.id, card.id));
+  if (steps.length) {
+    await tx.insert(tripSteps).values(
+      steps.map((step) => {
+        const done = step.stepCode === "CHECK_IN";
+        const ready = step.stepCode === nextStep?.stepCode;
+        return {
+          tripId: current.id,
+          stepCode: step.stepCode,
+          seq: step.seq,
+          status: done ? ("DONE" as const) : ready ? ("READY" as const) : ("PENDING" as const),
+          result: done ? ("PASS" as const) : null,
+          performedBy: done ? account.id : null,
+          readyAt: done || ready ? now : null,
+          startedAt: done ? now : null,
+          finishedAt: done ? now : null,
+        };
+      }),
+    );
+  }
+  await writeAudit(tx, request, now, {
+    action: "TRIP_CHECKED_IN",
+    entityType: "trip",
+    entityId: current.id,
+    before: { status: current.status },
+    after: { status: "CHECKED_IN", cardUid: card.uid, ...(outgoing ? { closeCargo, flexiBag } : {}) },
+  });
+  return current.id;
+}
+
+/** The refusal behind a unique index that stopped a check-in racing another one; null for any other error. */
+export function checkInRefusal(error: unknown): AppError | null {
+  const code = uniqueViolation(error);
+  return code ? refuse(code) : null;
+}
+
 export function registerGateRoutes(app: FastifyInstance, context: AppContext, guards: Guards): void {
   const orm = context.database.db;
 
@@ -124,72 +225,18 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
   app.post("/api/gate/check-in", { preHandler: [guards.authenticate, guards.requirePermission("gate", "CREATE")] }, async (request) => {
     const body = checkInBody.parse(request.body);
     const token = normaliseToken(body.token);
-    const account = accountOf(request);
     const now = context.now();
     await expireDueTrips(orm, now);
     try {
       const trip = await orm.transaction(async (tx) => {
         const [spj] = await tx.select().from(spjDocuments).where(eq(spjDocuments.barcodeToken, token));
         if (!spj) throw spjNotFound();
-        const [current] = await tx.select().from(trips).where(eq(trips.id, spj.tripId)).for("update");
-        if (!current) throw spjNotFound();
-        if (spj.revokedAt !== null) throw refuse("SPJ_REVOKED");
-        if (ARRIVED_STATUSES.includes(current.status)) throw refuse("ALREADY_CHECKED_IN");
-        if (current.status === "EXPIRED" || (spj.validUntil !== null && spj.validUntil < now)) throw refuse("SPJ_EXPIRED");
-        if (current.status !== "ISSUED") throw invalidState("Truk ini belum siap check-in.");
-
-        const [driver] = current.driverId === null ? [] : await tx.select().from(drivers).where(eq(drivers.id, current.driverId));
-        if (driver) {
-          const verdict = registryVerdict(await driverPolicy(tx, current.siteId), driver.registryStatus, driver.fullName);
-          if (verdict?.level === "BLOCK") throw refused(verdict.code, verdict.message);
-          if (await isDriverBlocked(tx, driver.id, now)) throw refused("DRIVER_BLOCKED", `Supir ${driver.fullName} sedang diblokir.`);
-        }
-        const card = await availableCard(tx, body.cardUid);
-        const inside = await insideElsewhere(tx, current);
-        if (inside.vehicle) throw refuse("VEHICLE_INSIDE");
-        if (inside.driver) throw refuse("DRIVER_INSIDE");
-
-        const site = await siteById(tx, current.siteId);
-        const steps = await tx
-          .select()
-          .from(flowSteps)
-          .where(and(eq(flowSteps.siteId, current.siteId), eq(flowSteps.flowCode, await flowOf(tx, current.registrationId))))
-          .orderBy(asc(flowSteps.seq));
-        const nextStep = steps.find((step) => step.stepCode !== "CHECK_IN" && !step.isOptional && step.seq > (steps.find((item) => item.stepCode === "CHECK_IN")?.seq ?? 0));
-        await tx
-          .update(trips)
-          .set({ status: "CHECKED_IN", checkedInAt: now, tripNo: await nextDocumentNo(tx, "TRIP", site.code, now), currentStep: nextStep?.stepCode ?? null, updatedAt: now })
-          .where(eq(trips.id, current.id));
-        await tx.insert(cardAssignments).values({ cardId: card.id, tripId: current.id, assignedBy: account.id, assignedAt: now });
-        await tx.update(rfidCards).set({ status: "IN_USE" }).where(eq(rfidCards.id, card.id));
-        if (steps.length) {
-          await tx.insert(tripSteps).values(
-            steps.map((step) => {
-              const done = step.stepCode === "CHECK_IN";
-              const ready = step.stepCode === nextStep?.stepCode;
-              return {
-                tripId: current.id,
-                stepCode: step.stepCode,
-                seq: step.seq,
-                status: done ? ("DONE" as const) : ready ? ("READY" as const) : ("PENDING" as const),
-                result: done ? ("PASS" as const) : null,
-                performedBy: done ? account.id : null,
-                readyAt: done || ready ? now : null,
-                startedAt: done ? now : null,
-                finishedAt: done ? now : null,
-              };
-            }),
-          );
-        }
-        await writeAudit(tx, request, now, { action: "TRIP_CHECKED_IN", entityType: "trip", entityId: current.id, before: { status: current.status }, after: { status: "CHECKED_IN", cardUid: card.uid } });
-        return tripView(tx, current.id);
+        return tripView(tx, await checkInWithCard(tx, request, now, spj, body.cardUid, body));
       });
       return { trip };
     } catch (error) {
       // two check-ins at the same moment: the unique indexes stop the second one
-      const code = uniqueViolation(error);
-      if (code) throw refuse(code);
-      throw error;
+      throw checkInRefusal(error) ?? error;
     }
   });
 
@@ -247,8 +294,11 @@ export function registerGateRoutes(app: FastifyInstance, context: AppContext, gu
   });
 }
 
-async function flowOf(orm: Orm, registrationId: number): Promise<string> {
-  const [row] = await orm.select({ flowCode: registrations.flowCode }).from(registrations).where(eq(registrations.id, registrationId));
+async function registrationOf(orm: Orm, registrationId: number) {
+  const [row] = await orm
+    .select({ direction: registrations.direction, flowCode: registrations.flowCode, closeCargo: registrations.closeCargo, flexiBag: registrations.flexiBag })
+    .from(registrations)
+    .where(eq(registrations.id, registrationId));
   if (!row) throw new Error(`Registration ${registrationId} does not exist.`);
-  return row.flowCode;
+  return row;
 }

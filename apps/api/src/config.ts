@@ -62,6 +62,10 @@ const envSchema = z.object({
   PUSH_PROVIDER: z.enum(["off", "fcm"], "must be off or fcm").default("off"),
   // fcm: the service account key file (JSON) of the Firebase project, kept outside git; required when PUSH_PROVIDER=fcm
   FCM_SERVICE_ACCOUNT_FILE: z.string().optional(),
+  // the service that reads a scanned letter for the registration post; without it the scan route answers 503
+  OCR_API_URL: baseUrl("OCR_API_URL").optional(),
+  // how long one reading may take before the scan route gives up
+  OCR_TIMEOUT_S: z.coerce.number("must be a number of seconds").int("must be a whole number of seconds").min(1, "must be 1 to 600").max(600, "must be 1 to 600").default(45),
 });
 
 export interface OdooConfig {
@@ -91,6 +95,12 @@ export type TtsConfig =
 
 export type PushConfig = { provider: "off" } | { provider: "fcm"; serviceAccountFile: string };
 
+export interface OcrConfig {
+  /** Base of the document reading service, without a trailing slash. */
+  url: string;
+  timeoutMs: number;
+}
+
 export interface Config {
   port: number;
   host: string;
@@ -116,6 +126,8 @@ export interface Config {
   /** "HH:MM" at the plant when the API pulls Odoo (full) and VCF each day; null: no daily pull. */
   syncDailyAt: string | null;
   push: PushConfig;
+  /** The service that reads scanned letters; null without OCR_API_URL: the scan route answers 503 NOT_CONFIGURED. */
+  ocr: OcrConfig | null;
 }
 
 /** Validates the environment. An empty value counts as absent, so `KEY=` in .env falls back to the default. */
@@ -155,6 +167,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     legacyDatabaseUrl: e.LEGACY_DATABASE_URL ?? null,
     syncDailyAt: e.SYNC_DAILY_AT ?? null,
     push: pushConfig(e),
+    ocr: e.OCR_API_URL ? { url: e.OCR_API_URL, timeoutMs: e.OCR_TIMEOUT_S * 1000 } : null,
   };
 }
 

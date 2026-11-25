@@ -28,7 +28,18 @@ describe("loadConfig", () => {
       legacyDatabaseUrl: null,
       syncDailyAt: null,
       push: { provider: "off" },
+      ocr: null,
     });
+  });
+
+  it("reads the document reading service, absent by default, with a timeout of 45 seconds unless told otherwise", () => {
+    expect(loadConfig({ ...base, OCR_API_URL: "http://ocr.example.test:8000/" }).ocr).toEqual({ url: "http://ocr.example.test:8000", timeoutMs: 45_000 });
+    expect(loadConfig({ ...base, OCR_API_URL: "http://ocr.example.test:8000", OCR_TIMEOUT_S: "120" }).ocr).toEqual({ url: "http://ocr.example.test:8000", timeoutMs: 120_000 });
+    // the timeout alone configures nothing
+    expect(loadConfig({ ...base, OCR_TIMEOUT_S: "120" }).ocr).toBeNull();
+    expect(loadConfig({ ...base, OCR_API_URL: "" }).ocr).toBeNull();
+    expect(() => loadConfig({ ...base, OCR_API_URL: "ocr-server" })).toThrow(/OCR_API_URL: OCR_API_URL must be a URL/);
+    for (const bad of ["0", "601", "1.5", "lama"]) expect(() => loadConfig({ ...base, OCR_API_URL: "http://ocr.example.test", OCR_TIMEOUT_S: bad }), bad).toThrow(/OCR_TIMEOUT_S/);
   });
 
   it("takes the daily pull time as HH:MM and refuses anything else", () => {
