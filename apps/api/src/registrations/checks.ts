@@ -1,6 +1,6 @@
 // The checks of a stored registration: hard refusals (thrown, nothing is saved) and findings (stored, and a
 // reason for a logistics admin to review the registration).
-import { and, eq, inArray, isNull, ne, notInArray, or, gt } from "drizzle-orm";
+import { and, eq, inArray, isNull, ne, notInArray, or, gt, type SQL } from "drizzle-orm";
 import type { Orm } from "../db/client.js";
 import {
   deliveryOrders,
@@ -8,8 +8,10 @@ import {
   drivers,
   erpContracts,
   type Finding,
+  partners,
   registrationAllocations,
   registrations,
+  shipmentRequests,
   tripAllocations,
   trips,
   vehicles,
@@ -169,13 +171,40 @@ export async function checkRegistration(orm: Orm, registrationId: number, now: D
     const { allocation } = row;
     const mine = shares.filter((share) => share.registrationAllocationId === allocation.id);
     if (allocation.contractId !== null && registration.direction === "IN") {
-      if (row.contractQty === null || !kgUnit(row.contractUom ?? "")) continue;
+      if (!kgUnit(row.contractUom ?? "")) continue;
       const own = mine.reduce((sum, share) => sum + (share.originNetKg ?? 0), 0);
       if (own === 0) continue;
-      const used = await heldByOthers(orm, registrationId, eq(registrationAllocations.contractId, allocation.contractId), "originNetKg");
-      const remaining = round3(row.contractQty - (row.contractOpening ?? 0) - used);
-      if (own > remaining) {
-        findings.push({ code: "OVER_CONTRACT", message: `Netto surat ${own} kg melebihi sisa kontrak ${allocation.contractNo} (${remaining} kg).`, tripSeq: 1, allocationSeq: allocation.seq });
+      if (row.contractQty !== null) {
+        const used = await heldByOthers(orm, registrationId, eq(registrationAllocations.contractId, allocation.contractId), "originNetKg");
+        const remaining = round3(row.contractQty - (row.contractOpening ?? 0) - used);
+        if (own > remaining) {
+          findings.push({ code: "OVER_CONTRACT", message: `Netto surat ${own} kg melebihi sisa kontrak ${allocation.contractNo} (${remaining} kg).`, tripSeq: 1, allocationSeq: allocation.seq });
+        }
+      }
+      // the mill's own share of the contract: what its open request asks for, less what its other trucks hold (0018)
+      const origin = registration.originPartnerId;
+      if (origin === null) continue;
+      const [request] = await orm
+        .select({ qtyPlanned: shipmentRequests.qtyPlanned, millName: partners.name })
+        .from(shipmentRequests)
+        .innerJoin(partners, eq(partners.id, shipmentRequests.supplierId))
+        .where(and(eq(shipmentRequests.contractId, allocation.contractId), eq(shipmentRequests.supplierId, origin), inArray(shipmentRequests.status, ["DRAFT", "SENT"])))
+        .limit(1);
+      if (!request || request.qtyPlanned === null) continue;
+      const usedByMill = await heldByOthers(
+        orm,
+        registrationId,
+        and(eq(registrationAllocations.contractId, allocation.contractId), eq(registrations.originPartnerId, origin)),
+        "originNetKg",
+      );
+      const left = round3(request.qtyPlanned - usedByMill);
+      if (own > left) {
+        findings.push({
+          code: "OVER_REQUEST",
+          message: `Netto surat ${own} kg melebihi sisa permintaan ${request.millName} pada kontrak ${allocation.contractNo} (${left} kg).`,
+          tripSeq: 1,
+          allocationSeq: allocation.seq,
+        });
       }
     }
     if (allocation.deliveryOrderId !== null && row.doQty !== null) {
@@ -191,12 +220,13 @@ export async function checkRegistration(orm: Orm, registrationId: number, now: D
 }
 
 /** Quantity of a contract or DO held by the trips of other registrations that still count. */
-async function heldByOthers(orm: Orm, registrationId: number, target: ReturnType<typeof eq>, column: "originNetKg" | "qtyPlanned"): Promise<number> {
+async function heldByOthers(orm: Orm, registrationId: number, target: SQL | undefined, column: "originNetKg" | "qtyPlanned"): Promise<number> {
   const rows = await orm
     .select({ value: tripAllocations[column] })
     .from(tripAllocations)
     .innerJoin(registrationAllocations, eq(registrationAllocations.id, tripAllocations.registrationAllocationId))
     .innerJoin(trips, eq(trips.id, tripAllocations.tripId))
+    .innerJoin(registrations, eq(registrations.id, trips.registrationId))
     .where(and(target, ne(trips.registrationId, registrationId), notInArray(trips.status, RELEASED_STATUSES)));
   return rows.reduce((sum, row) => sum + (row.value ?? 0), 0);
 }

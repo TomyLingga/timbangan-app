@@ -28,7 +28,7 @@ import { defaultSite, readSetting, siteById } from "../settings.js";
 import { issueSpj } from "../trips/spj.js";
 import { ARRIVED_STATUSES } from "../trips/view.js";
 import { SLIP_LABEL } from "../attachments/view.js";
-import { hasSentRequest } from "../shipment-requests/view.js";
+import { hasSentRequest, hasShownRequest } from "../shipment-requests/view.js";
 import { checkRegistration, doRemaining } from "./checks.js";
 
 type Field = { field: string; message: string };
@@ -95,6 +95,8 @@ export const registrationBody = z.object({
   transporterId: idNumber.optional(),
   plannedDate: dateText("Tanggal rencana").optional(),
   remark: text("Keterangan", 1000),
+  // asal PKS (incoming): set by staff, optional; a supplier account's registration always carries its own company
+  originPartnerId: idNumber.nullable().optional(),
   closeCargo: z.boolean("closeCargo harus true atau false.").optional(),
   flexiBag: z.boolean("flexiBag harus true atau false.").optional(),
   submit: z.boolean("submit harus true atau false."),
@@ -119,7 +121,8 @@ const requestNotSent = (contractNo: string) =>
 
 /**
  * Refuses a supplier account's incoming registration when one of its contracts no longer has a SENT shipment
- * request (closed or cancelled since the draft was written). Staff and outgoing registrations pass.
+ * request to the account's company (closed or cancelled since the draft was written). Staff and outgoing
+ * registrations pass.
  */
 export async function assertRequestsSent(tx: Orm, account: Account, registrationId: number): Promise<void> {
   if (account.kind !== "PARTNER") return;
@@ -135,6 +138,12 @@ export async function assertRequestsSent(tx: Orm, account: Account, registration
   }
 }
 
+const partnerMismatch = (items: { contractNo: string; partnerName: string }[]) =>
+  refused(
+    "CONTRACT_PARTNER_MISMATCH",
+    `Kontrak dalam satu registrasi harus dari partner yang sama: ${items.map((item) => `${item.contractNo} (${item.partnerName})`).join(", ")}.`,
+  );
+
 interface Resolved {
   id: number;
   contractNo: string;
@@ -142,6 +151,7 @@ interface Resolved {
   contractId: number | null;
   deliveryOrderId: number | null;
   partnerId: number;
+  partnerName: string;
   transporterId: number | null;
   siteId: number | null;
   category: string;
@@ -174,7 +184,7 @@ export async function writeRegistration(
   account: Account,
   body: RegistrationInput,
   now: Date,
-  existing?: { id: number; regNo: string; createdBy: number },
+  existing?: { id: number; regNo: string; createdBy: number; originPartnerId?: number | null },
   createdVia?: "SCAN",
 ): Promise<{ id: number; newDrivers: number[] }> {
   const fields: Field[] = [];
@@ -209,25 +219,30 @@ export async function writeRegistration(
   for (const key of keys as number[]) {
     if (body.direction === "IN") {
       const [row] = await tx
-        .select({ contract: erpContracts, category: products.category })
+        .select({ contract: erpContracts, category: products.category, partnerName: partners.name })
         .from(erpContracts)
         .innerJoin(products, eq(products.id, erpContracts.productId))
+        .innerJoin(partners, eq(partners.id, erpContracts.partnerId))
         .where(eq(erpContracts.id, key));
-      if (!row || row.contract.direction !== "IN" || row.contract.state !== "OPEN" || (own !== null && row.contract.partnerId !== own)) {
-        throw refused("CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan milik perusahaan Anda.");
+      // a supplier account reaches a contract of its own company or one INL sent it a request on, whoever the
+      // contract's partner is: a trader's contract is supplied by several mills (0018)
+      const reachable = row && (own === null || row.contract.partnerId === own || (await hasShownRequest(tx, row.contract.id, own)));
+      if (!row || !reachable || row.contract.direction !== "IN" || row.contract.state !== "OPEN") {
+        throw refused("CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan untuk perusahaan Anda.");
       }
       const { contract } = row;
       // a supplier registers trucks only on a contract INL sent it a request for; staff at the post are not bound
       if (own !== null && !(await hasSentRequest(tx, contract.id, own))) throw requestNotSent(contract.contractNo);
       resolved.push({
         id: contract.id, contractNo: contract.contractNo, doNo: null, contractId: contract.id, deliveryOrderId: null, partnerId: contract.partnerId,
-        transporterId: null, siteId: contract.siteId, category: row.category, uom: contract.uom, tolerancePct: contract.tolerancePct, qty: contract.qtyContract,
+        partnerName: row.partnerName, transporterId: null, siteId: contract.siteId, category: row.category, uom: contract.uom, tolerancePct: contract.tolerancePct, qty: contract.qtyContract,
       });
     } else {
       const [row] = await tx
-        .select({ order: deliveryOrders, category: products.category })
+        .select({ order: deliveryOrders, category: products.category, partnerName: partners.name })
         .from(deliveryOrders)
         .innerJoin(products, eq(products.id, deliveryOrders.productId))
+        .innerJoin(partners, eq(partners.id, deliveryOrders.partnerId))
         .where(eq(deliveryOrders.id, key))
         .for("update", { of: deliveryOrders });
       if (!row || row.order.status !== "ACCEPTED" || (own !== null && row.order.transporterId !== own)) {
@@ -236,12 +251,26 @@ export async function writeRegistration(
       const { order } = row;
       resolved.push({
         id: order.id, contractNo: order.contractNo ?? "-", doNo: order.doNo, contractId: null, deliveryOrderId: order.id, partnerId: order.partnerId,
-        transporterId: order.transporterId, siteId: order.siteId, category: row.category, uom: order.uom, tolerancePct: order.tolerancePct, qty: order.qty,
+        partnerName: row.partnerName, transporterId: order.transporterId, siteId: order.siteId, category: row.category, uom: order.uom, tolerancePct: order.tolerancePct, qty: order.qty,
       });
     }
   }
   const first = resolved[0];
   if (!first) throw new Error("A registration needs an allocation.");
+  // the registration carries one partner, taken from its contracts: a truck carrying several contracts carries
+  // contracts of one partner (owner's flow of 25 November 2026, incoming step 1.1)
+  if (body.direction === "IN" && new Set(resolved.map((item) => item.partnerId)).size > 1) throw partnerMismatch(resolved);
+
+  // asal PKS: the supplier account's own company; staff may name the mill, a draft keeps the one it had
+  let originPartnerId: number | null = null;
+  if (body.direction === "IN") {
+    const given = own ?? (body.originPartnerId !== undefined ? body.originPartnerId : (existing?.originPartnerId ?? null));
+    if (own === null && given !== null) {
+      const [mill] = await tx.select({ isSupplier: partners.isSupplier }).from(partners).where(eq(partners.id, given));
+      if (!mill?.isSupplier) throw invalid("originPartnerId", "Asal PKS harus partner supplier.");
+    }
+    originPartnerId = given;
+  } else if (body.originPartnerId != null) throw invalid("originPartnerId", "Asal PKS hanya untuk registrasi masuk.");
 
   // flow and site
   const site = first.siteId !== null ? await siteById(tx, first.siteId) : await defaultSite(tx);
@@ -401,6 +430,7 @@ export async function writeRegistration(
     direction: body.direction,
     flowCode: flowCode as "IN_CPO" | "IN_GOODS" | "OUT_BULK" | "OUT_PACKED",
     partnerId: first.partnerId,
+    originPartnerId,
     transporterId,
     status: "DRAFT" as const,
     plannedDate: body.plannedDate ?? null,

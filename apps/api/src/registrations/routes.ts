@@ -21,7 +21,7 @@ import {
   submitRegistration,
   writeRegistration,
 } from "./service.js";
-import { loadRegistrations, registrationsVisibleTo } from "./view.js";
+import { loadRegistrations, registrationsVisibleTo, registrationsWritableBy } from "./view.js";
 
 const STATUSES = ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "CANCELLED", "CLOSED"] as const;
 const listQuery = z.object({
@@ -46,9 +46,9 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     if (!registration) throw notFound("Registrasi");
     return registration;
   };
-  /** Locks the registration; 404 when the account may not see it. */
+  /** Locks the registration; 404 when the account may not change it (a trader reads a mill's trucks only). */
   const lock = async (db: Orm, id: number, account: Account) => {
-    const [row] = await db.select().from(registrations).where(and(eq(registrations.id, id), registrationsVisibleTo(account))).for("update");
+    const [row] = await db.select().from(registrations).where(and(eq(registrations.id, id), registrationsWritableBy(account))).for("update");
     if (!row) throw notFound("Registrasi");
     return row;
   };
@@ -73,6 +73,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
         ? or(
             ilike(registrations.regNo, pattern),
             ilike(partners.name, pattern),
+            sql`exists (select 1 from partners o where o.id = ${registrations.originPartnerId} and o.name ilike ${pattern})`,
             sql`exists (select 1 from registration_allocations ra where ra.registration_id = ${registrations.id} and (ra.contract_no ilike ${pattern} or ra.do_no ilike ${pattern}))`,
             plate
               ? sql`exists (select 1 from trips t join vehicles v on v.id = t.vehicle_id where t.registration_id = ${registrations.id} and v.plate_no like ${likeText(plate)})`

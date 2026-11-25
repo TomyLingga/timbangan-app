@@ -13,7 +13,7 @@ import { deliveryOrderFiles, deliveryOrders, files, registrations, shipmentReque
 import { deliveryOrderFilesOf, SLIP_LABEL, shipmentRequestFilesOf, tripSlipsOf } from "./view.js";
 import { duplicate, forbidden, invalid, invalidState, notFound, refused } from "../errors.js";
 import { idNumber, idParams } from "../http.js";
-import { registrationsVisibleTo } from "../registrations/view.js";
+import { registrationsWritableBy } from "../registrations/view.js";
 import { mayWrite } from "../registrations/service.js";
 
 export const MAX_DO_FILES = 5;
@@ -170,7 +170,7 @@ export function registerAttachmentRoutes(app: FastifyInstance, context: AppConte
    * draft; staff with registrations EDIT while the registration is open. 404 when the account cannot see it.
    */
   const lockTrip = async (tx: Orm, account: Account, id: number, tripId: number) => {
-    const [registration] = await tx.select().from(registrations).where(and(eq(registrations.id, id), registrationsVisibleTo(account))).for("update");
+    const [registration] = await tx.select().from(registrations).where(and(eq(registrations.id, id), registrationsWritableBy(account))).for("update");
     if (!registration) throw notFound("Registrasi");
     const [trip] = await tx.select({ id: trips.id }).from(trips).where(and(eq(trips.id, tripId), eq(trips.registrationId, id)));
     if (!trip) throw notFound("Truk");

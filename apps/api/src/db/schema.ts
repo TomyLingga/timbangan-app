@@ -345,6 +345,8 @@ export const registrations = pgTable("registrations", {
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
   // added by 0003
   checkFindings: jsonb("check_findings").$type<Finding[]>().notNull().default([]),
+  // added by 0018: asal PKS, the mill the truck comes from
+  originPartnerId: bigint("origin_partner_id", { mode: "number" }),
 });
 
 export const registrationAllocations = pgTable("registration_allocations", {
@@ -757,6 +759,8 @@ export const shipmentRequests = pgTable("shipment_requests", {
   cancelReason: text("cancel_reason"),
   createdAt: timestamptz("created_at").notNull().defaultNow(),
   updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+  // added by 0018: the mill the request is sent to (partnerId is the partner of the contract)
+  supplierId: bigint("supplier_id", { mode: "number" }).notNull(),
 });
 
 export const shipmentRequestFiles = pgTable("shipment_request_files", {

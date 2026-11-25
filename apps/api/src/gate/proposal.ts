@@ -5,7 +5,7 @@
 // rest with the field paths POST /api/registrations uses in its own messages.
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { Orm } from "../db/client.js";
-import { deliveryOrders, drivers, erpContracts, partners, products, qualityParameters, vehicles, vehicleTypes } from "../db/schema.js";
+import { deliveryOrders, drivers, erpContracts, partners, products, qualityParameters, shipmentRequests, vehicles, vehicleTypes } from "../db/schema.js";
 import { listDeliveryOrders } from "../delivery-orders/routes.js";
 import { lettersAndDigits, todayAtPlant } from "../http.js";
 import { registrationBody, type RegistrationInput } from "../registrations/service.js";
@@ -49,7 +49,10 @@ interface ContractView {
   qtyContract: number | null;
   uom: string;
   validUntil: string | null;
-  /** The contract is of the supplier the mill's name pointed to; null when no supplier was found for that name. */
+  /**
+   * The contract is of the supplier the mill's name pointed to, or INL sent that supplier a request on it (a mill
+   * supplying a trader's contract, 0018); null when no supplier was found for that name.
+   */
   supplierMatches: boolean | null;
 }
 type ContractCandidate = ContractView & { distance: number; lookalikeOnly: boolean };
@@ -82,6 +85,8 @@ export interface DraftRegistration {
   submit: true;
   plannedDate: string;
   transporterId?: number;
+  /** Asal PKS: the supplier the mill's name on the letter matched (incoming). */
+  originPartnerId?: number;
   allocations: { contractId?: number; deliveryOrderId?: number }[];
   trips: [
     {
@@ -181,7 +186,23 @@ const openContracts = (orm: Orm) =>
     .where(and(eq(erpContracts.direction, "IN"), eq(erpContracts.state, "OPEN")))
     .orderBy(asc(erpContracts.id));
 
-async function contractViews(orm: Orm, ids: number[], suppliers: Set<number> | null): Promise<Map<number, ContractView>> {
+/** The mills the letter's name pointed to, and the contracts INL sent them a request on (any status but cancelled). */
+interface Suppliers {
+  ids: Set<number>;
+  contracts: Set<number>;
+}
+const supplies = (suppliers: Suppliers, contract: { id: number; partnerId: number }) => suppliers.ids.has(contract.partnerId) || suppliers.contracts.has(contract.id);
+
+async function suppliersOf(orm: Orm, ids: number[]): Promise<Suppliers | null> {
+  if (ids.length === 0) return null;
+  const requested = await orm
+    .selectDistinct({ contractId: shipmentRequests.contractId })
+    .from(shipmentRequests)
+    .where(and(inArray(shipmentRequests.supplierId, ids), ne(shipmentRequests.status, "CANCELLED")));
+  return { ids: new Set(ids), contracts: new Set(requested.map((row) => row.contractId)) };
+}
+
+async function contractViews(orm: Orm, ids: number[], suppliers: Suppliers | null): Promise<Map<number, ContractView>> {
   if (ids.length === 0) return new Map();
   const rows = await orm
     .select({ contract: erpContracts, partnerName: partners.name, productName: products.name, productCategory: products.category })
@@ -200,7 +221,7 @@ async function contractViews(orm: Orm, ids: number[], suppliers: Set<number> | n
         qtyContract: contract.qtyContract,
         uom: contract.uom,
         validUntil: contract.validUntil,
-        supplierMatches: suppliers ? suppliers.has(contract.partnerId) : null,
+        supplierMatches: suppliers ? supplies(suppliers, contract) : null,
       },
     ]),
   );
@@ -214,7 +235,7 @@ async function matchContract(
   orm: Orm,
   read: string | null,
   open: Awaited<ReturnType<typeof openContracts>>,
-  suppliers: Set<number> | null,
+  suppliers: Suppliers | null,
 ): Promise<Match<ContractView, ContractCandidate>> {
   if (read === null) return none(read);
   const { equal, near } = compareNumbers(read, open, (row) => row.contractNo);
@@ -228,7 +249,7 @@ async function matchContract(
   // several lines with exactly this number: the choice is among them, not among numbers that only look like it
   const ranked = equal.length > 1 ? equal.map((item) => ({ item, distance: 0, lookalikeOnly: false })) : [...near];
   // the sort is stable: within the supplier's contracts and within the others the nearest stays first
-  if (suppliers) ranked.sort((a, b) => Number(suppliers.has(b.item.partnerId)) - Number(suppliers.has(a.item.partnerId)));
+  if (suppliers) ranked.sort((a, b) => Number(supplies(suppliers, b.item)) - Number(supplies(suppliers, a.item)));
   const kept = ranked.slice(0, MAX_CONTRACT_CANDIDATES);
   const views = await contractViews(orm, kept.map((row) => row.item.id), suppliers);
 
@@ -401,7 +422,7 @@ async function incomingProposal(orm: Orm, reading: OcrReading, today: string) {
 
   // contracts of the supplier found for the mill's name are offered first; a near name counts too
   const supplierIds = supplier.value ? [supplier.value.id] : supplier.candidates.map((candidate) => candidate.id);
-  const suppliers = supplierIds.length > 0 ? new Set(supplierIds) : null;
+  const suppliers = await suppliersOf(orm, supplierIds);
   // a reading without its rows still has the first row among the fields
   const firstRow: Record<string, OcrField> = {};
   for (const key of LINE_KEYS) {
@@ -439,6 +460,8 @@ async function incomingProposal(orm: Orm, reading: OcrReading, today: string) {
     submit: true,
     plannedDate: today,
     ...(transporter.value ? { transporterId: transporter.value.id } : {}),
+    // asal PKS: the mill named on the letter, when its name matched one supplier
+    ...(supplier.value ? { originPartnerId: supplier.value.id } : {}),
     allocations: contracts.map((match) => (match.value ? { contractId: match.value.id } : {})),
     trips: [
       {

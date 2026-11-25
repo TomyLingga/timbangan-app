@@ -36,7 +36,7 @@ describe("GET /api/partners", () => {
 
     const all = (await call("GET", "/api/partners")).json();
     expect(all.total).toBe(4);
-    expect(all.items[0]).toEqual({ id: ids.serba, name: "CV Serba Delta", code: null, isSupplier: true, isCustomer: true, isTransporter: true });
+    expect(all.items[0]).toEqual({ id: ids.serba, name: "CV Serba Delta", code: null, address: null, isSupplier: true, isCustomer: true, isTransporter: true, erpSystem: null });
     expect(await names("")).toEqual(["CV Serba Delta", "PT Angkut Gamma", "PT Kebun Alpha", "PT Pembeli Beta"]);
     expect(await names("?role=supplier")).toEqual(["CV Serba Delta", "PT Kebun Alpha"]);
     expect(await names("?role=customer")).toEqual(["CV Serba Delta", "PT Pembeli Beta"]);
@@ -56,6 +56,38 @@ describe("GET /api/partners", () => {
     expect(invalid.json().error.fields).toEqual([{ field: "role", message: "Role harus supplier, customer, atau transporter." }]);
     expect((await call("GET", "/api/partners", "angkut")).statusCode).toBe(403);
     expect((await call("GET", "/api/partners", null)).statusCode).toBe(401);
+  });
+});
+
+describe("POST /api/partners (a partner kept only here, 0018)", () => {
+  it("adds a mill that is not in the ERP, audited, and refuses the same name again", async () => {
+    const { database, call } = await setup();
+    await seedStaff(database, "permintaan", { shipment_requests: "CREATE" });
+    const created = await call("POST", "/api/partners", "permintaan", { name: "  PKS Contoh Lestari  ", address: "Jl. Kebun 1", isSupplier: true });
+    expect(created.statusCode, created.body).toBe(201);
+    const partner = created.json().partner;
+    expect(partner).toEqual({ id: expect.any(Number), name: "PKS Contoh Lestari", code: null, address: "Jl. Kebun 1", isSupplier: true, isCustomer: false, isTransporter: false, erpSystem: null });
+    expect((await call("GET", "/api/partners?role=supplier&q=lestari")).json().items.map((item: { id: number }) => item.id)).toEqual([partner.id]);
+    const audit = await database.query<{ action: string; entity_type: string; after: unknown }>("select action, entity_type, after from audit_log where entity_id = $1 and entity_type = 'partner'", [partner.id]);
+    expect(audit).toEqual([{ action: "PARTNER_CREATED", entity_type: "partner", after: { name: "PKS Contoh Lestari", address: "Jl. Kebun 1", isSupplier: true, isTransporter: false, isCustomer: false } }]);
+
+    // the same name, whatever the case and the spaces around it; also a name the ERP already brought
+    for (const name of ["pks contoh lestari", " PKS CONTOH LESTARI"]) {
+      const twice = await call("POST", "/api/partners", "permintaan", { name, isSupplier: true });
+      expect(twice.statusCode).toBe(409);
+      expect(twice.json().error).toEqual({ code: "PARTNER_EXISTS", message: "Partner dengan nama PKS Contoh Lestari sudah ada.", partnerId: partner.id });
+    }
+    expect((await call("POST", "/api/partners", "permintaan", { name: "pt kebun alpha", isSupplier: true })).json().error.code).toBe("PARTNER_EXISTS");
+    // a name that only looks like it is another partner: spelling variants are not merged here
+    expect((await call("POST", "/api/partners", "permintaan", { name: "PKS Contoh Lestari 2", isSupplier: true })).statusCode).toBe(201);
+
+    const noKind = await call("POST", "/api/partners", "permintaan", { name: "PKS Tanpa Jenis" });
+    expect(noKind.statusCode).toBe(400);
+    expect(noKind.json().error.fields).toEqual([{ field: "isSupplier", message: "Pilih minimal satu jenis partner: supplier, transporter, atau customer." }]);
+    expect((await call("POST", "/api/partners", "permintaan", { name: "P", isSupplier: true })).statusCode).toBe(400);
+    // a reader of the partners without the module, and a partner account, add nothing
+    expect((await call("POST", "/api/partners", "qc", { name: "PKS Lain", isSupplier: true })).statusCode).toBe(403);
+    expect((await call("POST", "/api/partners", "angkut", { name: "PKS Lain", isSupplier: true })).statusCode).toBe(403);
   });
 });
 

@@ -71,7 +71,7 @@ function reject(label: string, sql: string) {
 describe("migrated schema", () => {
   it("has the tables, indexes and reference rows of the design", async () => {
     expect(await count("select count(*) n from information_schema.tables where table_schema = 'public' and table_name <> 'schema_migrations'")).toBe(62);
-    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(169);
+    expect(await count("select count(*) n from pg_indexes where schemaname = 'public' and tablename <> 'schema_migrations'")).toBe(171);
     expect(await count("select count(*) n from flow_steps")).toBe(30);
     expect(await count("select count(*) n from modules")).toBe(23);
     // 0007 switched on the dashboard, 0009 switched off destinations, 0011 added gps, 0015 gate_emergency, 0017 shipment_requests

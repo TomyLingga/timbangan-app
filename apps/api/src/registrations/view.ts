@@ -1,5 +1,5 @@
 // How a registration is shown.
-import { and, asc, eq, inArray, or, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Account } from "../auth/guard.js";
 import type { Orm } from "../db/client.js";
@@ -7,17 +7,36 @@ import { deliveryOrders, erpContracts, partners, products, registrationAllocatio
 import { loadTrips } from "../trips/view.js";
 
 const transporterOf = alias(partners, "registration_transporter");
+const originOf = alias(partners, "registration_origin");
 const allocationPartner = alias(partners, "allocation_partner");
 const doContract = alias(erpContracts, "do_contract");
 
 /**
- * What a partner account may see and change: incoming registrations of its own company (the supplier) and
- * outgoing registrations it made as the transporter. Staff see every registration.
+ * What a partner account may see: incoming registrations from its own mill (origin_partner_id) or on its own
+ * contracts (partner_id: a trader sees the trucks of every mill supplying its contract), and outgoing registrations
+ * it made as the transporter. Staff see every registration.
  */
 export function registrationsVisibleTo(account: Account): SQL | undefined {
   if (account.kind !== "PARTNER") return undefined;
   const own = account.partner?.id ?? -1;
-  return or(and(eq(registrations.direction, "IN"), eq(registrations.partnerId, own)), and(eq(registrations.direction, "OUT"), eq(registrations.transporterId, own)));
+  return or(
+    and(eq(registrations.direction, "IN"), or(eq(registrations.partnerId, own), eq(registrations.originPartnerId, own))),
+    and(eq(registrations.direction, "OUT"), eq(registrations.transporterId, own)),
+  );
+}
+
+/**
+ * What a partner account may change: incoming registrations from its own mill, or written before 0018 (no origin)
+ * on its own contract, and outgoing registrations it made as the transporter. A trader reads the trucks of the
+ * mills on its contract but does not change them. Staff: every registration (the routes check their levels).
+ */
+export function registrationsWritableBy(account: Account): SQL | undefined {
+  if (account.kind !== "PARTNER") return undefined;
+  const own = account.partner?.id ?? -1;
+  return or(
+    and(eq(registrations.direction, "IN"), or(eq(registrations.originPartnerId, own), and(isNull(registrations.originPartnerId), eq(registrations.partnerId, own)))),
+    and(eq(registrations.direction, "OUT"), eq(registrations.transporterId, own)),
+  );
 }
 
 /** The registrations with these ids, in that order; with their trips unless `withTrips` is false (lists). */
@@ -28,11 +47,13 @@ export async function loadRegistrations(orm: Orm, ids: number[], withTrips = tru
       registration: registrations,
       partnerName: partners.name,
       transporterName: transporterOf.name,
+      originName: originOf.name,
       creatorName: users.fullName,
     })
     .from(registrations)
     .innerJoin(partners, eq(partners.id, registrations.partnerId))
     .leftJoin(transporterOf, eq(transporterOf.id, registrations.transporterId))
+    .leftJoin(originOf, eq(originOf.id, registrations.originPartnerId))
     .innerJoin(users, eq(users.id, registrations.createdBy))
     .where(inArray(registrations.id, ids));
   const allocationRows = await orm
@@ -59,7 +80,7 @@ export async function loadRegistrations(orm: Orm, ids: number[], withTrips = tru
   const tripViews = await loadTrips(orm, tripRows.map((row) => row.id));
 
   const views = new Map(
-    rows.map(({ registration: r, partnerName, transporterName, creatorName }) => [
+    rows.map(({ registration: r, partnerName, transporterName, originName, creatorName }) => [
       r.id,
       {
         id: r.id,
@@ -69,6 +90,8 @@ export async function loadRegistrations(orm: Orm, ids: number[], withTrips = tru
         status: r.status,
         partner: { id: r.partnerId, name: partnerName },
         transporter: r.transporterId !== null && transporterName !== null ? { id: r.transporterId, name: transporterName } : null,
+        // asal PKS (0018)
+        originPartner: r.originPartnerId !== null && originName !== null ? { id: r.originPartnerId, name: originName } : null,
         plannedDate: r.plannedDate,
         truckCount: r.truckCount,
         qtyTotal: r.qtyTotal,

@@ -34,7 +34,7 @@ afterEach(async () => {
 describe("migrate", () => {
   it("applies the project's migrations to an empty database and records them", async () => {
     const result = await migrate(database);
-    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql"], skipped: [] });
+    expect(result).toEqual({ applied: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql", "0018_mill_requests.sql"], skipped: [] });
 
     const tables = await publicTables();
     expect(tables).toContain("schema_migrations");
@@ -45,7 +45,7 @@ describe("migrate", () => {
     const recorded = await database.query<{ name: string; checksum: string; applied_at: Date }>(
       "select name, checksum, applied_at from schema_migrations order by name",
     );
-    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql"]);
+    expect(recorded.map((row) => row.name)).toEqual(["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql", "0018_mill_requests.sql"]);
     const text = (await readFile(join(MIGRATIONS_DIR, "0001_schema.sql"), "utf8")).replaceAll("\r\n", "\n");
     expect(recorded[0]?.checksum).toBe(createHash("sha256").update(text).digest("hex"));
     expect(recorded[0]?.applied_at).toBeInstanceOf(Date);
@@ -54,8 +54,8 @@ describe("migrate", () => {
   it("applies nothing on a second run", async () => {
     await migrate(database);
     const result = await migrate(database);
-    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql"] });
-    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 17 }]);
+    expect(result).toEqual({ applied: [], skipped: ["0001_schema.sql", "0002_seed.sql", "0003_registration.sql", "0004_module_permissions.sql", "0005_weighing.sql", "0006_field_steps.sql", "0007_control_room.sql", "0008_tanks_attachments.sql", "0009_reports_modules.sql", "0010_legacy_archive.sql", "0011_gps.sql", "0012_gps_partner_access.sql", "0013_do_destination_pin.sql", "0014_notifications.sql", "0015_gate_post.sql", "0016_decisions_ba_trip_notes.sql", "0017_shipment_requests.sql", "0018_mill_requests.sql"] });
+    expect(await database.query("select count(*)::int as n from schema_migrations")).toEqual([{ n: 18 }]);
     expect(await database.query("select count(*)::int as n from sites")).toEqual([{ n: 1 }]);
   });
 

@@ -105,6 +105,8 @@ describe("POST /api/gate/scan-document, incoming", () => {
       submit: true,
       plannedDate: "2026-11-20",
       transporterId: companies.transporter1,
+      // asal PKS from the mill's name on the letter (0018)
+      originPartnerId: companies.supplier1,
       allocations: [{ contractId: contracts.main }],
       trips: [
         {
@@ -124,7 +126,7 @@ describe("POST /api/gate/scan-document, incoming", () => {
     expect(await database.query("select count(*)::int as n from registrations")).toEqual([{ n: 0 }]);
     const registered = await call("POST", "/api/registrations", "pos", proposal.registration);
     expect(registered.statusCode, registered.body).toBe(201);
-    expect(registered.json().registration).toMatchObject({ status: "APPROVED", transporter: { id: companies.transporter1 }, trips: [{ docNetKg: 28090, allocations: [{ spbNo: "0456/MS/UJI/XI/2026", quality: { FFA: 3.58 } }] }] });
+    expect(registered.json().registration).toMatchObject({ status: "APPROVED", transporter: { id: companies.transporter1 }, originPartner: { id: companies.supplier1, name: "PT Sawit Satu" }, trips: [{ docNetKg: 28090, allocations: [{ spbNo: "0456/MS/UJI/XI/2026", quality: { FFA: 3.58 } }] }] });
   });
 
   it("offers the open contracts near a number that is two characters off, and leaves the choice to the operator", async () => {

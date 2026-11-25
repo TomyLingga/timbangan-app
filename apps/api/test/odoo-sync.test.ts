@@ -166,6 +166,23 @@ describe("syncOdoo", () => {
     ]);
   });
 
+  it("leaves a partner added in this application alone, also when the ERP has one of the same name (0018)", async () => {
+    const { database, sync } = await setup();
+    const local = await database.query<{ id: number }>(
+      "insert into partners (name, address, is_supplier) values ('PT PKS A', 'Jl. Pabrik Lokal', true) returning id::int as id",
+    );
+    const before = await database.query("select * from partners where erp_system is null");
+    await sync();
+    await sync();
+    expect(await database.query("select * from partners where erp_system is null")).toEqual(before);
+    // the ERP partner of the same name is a row of its own
+    expect(await database.query("select erp_ref, name from partners where name = 'PT PKS A' order by id")).toEqual([
+      { erp_ref: null, name: "PT PKS A" },
+      { erp_ref: "11", name: "PT PKS A" },
+    ]);
+    expect(local).toHaveLength(1);
+  });
+
   it("sets the product category only when the product is inserted", async () => {
     const { database, sync, header } = await setup();
     await sync();

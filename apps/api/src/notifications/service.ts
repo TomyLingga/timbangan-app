@@ -125,16 +125,16 @@ export async function notifyDeliveryOrderSent(orm: Orm, order: { id: number; doN
   );
 }
 
-/** A shipment request sent to its supplier: the active accounts of that company get one INFO notification. */
+/** A shipment request sent to its supplier (the mill): the active accounts of that company get one INFO notification. */
 export async function notifyShipmentRequestSent(
   orm: Orm,
-  request: { id: number; contractNo: string; siteId: number; partnerId: number },
+  request: { id: number; contractNo: string; siteId: number; supplierId: number },
   now: Date,
 ): Promise<number | null> {
   const accounts = await orm
     .select({ id: users.id })
     .from(users)
-    .where(and(eq(users.kind, "PARTNER"), eq(users.partnerId, request.partnerId), eq(users.isActive, true)))
+    .where(and(eq(users.kind, "PARTNER"), eq(users.partnerId, request.supplierId), eq(users.isActive, true)))
     .orderBy(asc(users.id));
   return createNotification(
     orm,

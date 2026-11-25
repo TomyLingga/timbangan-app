@@ -263,17 +263,20 @@ describe("registering incoming trucks against shipment requests", () => {
     const forSupplier = (await call("GET", "/api/contracts?direction=IN", "pks1")).json();
     const byNo = (list: { items: { contractNo: string; shipmentRequest: unknown }[] }) => Object.fromEntries(list.items.map((item) => [item.contractNo, item.shipmentRequest]));
     // the supplier does not see a draft
-    expect(byNo(forSupplier)).toEqual({ "PC-801/CONTOH": { id: sentId, status: "SENT", sentAt: expect.any(String) }, "PC-802/CONTOH": null });
+    expect(byNo(forSupplier)).toEqual({ "PC-801/CONTOH": { id: sentId, status: "SENT", sentAt: expect.any(String), qtyPlanned: null }, "PC-802/CONTOH": null });
+    expect(forSupplier.items.every((item: { requests: unknown }) => item.requests === null)).toBe(true);
     const onlySent = (await call("GET", "/api/contracts?direction=IN&requestSent=true", "pks1")).json();
     expect(onlySent.total).toBe(1);
     expect(onlySent.items.map((item: { id: number }) => item.id)).toEqual([purchase]);
     expect((await call("GET", "/api/contracts?direction=IN&requestSent=false", "pks1")).json().items.map((item: { id: number }) => item.id)).toEqual([other]);
 
+    // staff get no single request (a contract may have one per mill, 0018) but a summary of them all
     const forStaff = (await request("GET", "/api/contracts?direction=IN", "inl")).json();
-    expect(byNo(forStaff)).toEqual({
-      "PC-801/CONTOH": { id: sentId, status: "SENT", sentAt: expect.any(String) },
-      "PC-802/CONTOH": { id: draft.id, status: "DRAFT", sentAt: null },
-    });
+    const summary = Object.fromEntries(forStaff.items.map((item: { contractNo: string; requests: unknown }) => [item.contractNo, item.requests]));
+    expect(summary).toMatchObject({ "PC-801/CONTOH": { open: 1, sent: 1, qtyRequested: 0 }, "PC-802/CONTOH": { open: 1, sent: 0, qtyRequested: 0 } });
+    expect(forStaff.items.every((item: { shipmentRequest: unknown }) => item.shipmentRequest === null)).toBe(true);
+    expect((await request("GET", "/api/contracts?direction=IN&requestSent=true", "inl")).json().items.map((item: { id: number }) => item.id)).toEqual([purchase]);
+    expect(draft.status).toBe("DRAFT");
     expect((await call("GET", "/api/contracts?requestSent=maybe", "pks1")).statusCode).toBe(400);
   });
 });
