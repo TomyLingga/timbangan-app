@@ -16,6 +16,7 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   delivery_orders: "Delivery Order",
   registrations: "Registrasi",
   gate: "Pos registrasi",
+  gate_emergency: "Registrasi darurat di pos",
   rfid_cards: "Kartu RFID",
   users: "Pengguna dan hak akses",
   weighbridge: "Timbangan",
@@ -30,6 +31,7 @@ export const MODULE_LABELS: Readonly<Record<ModuleCode, string>> = {
   plant_masters: "Master pabrik",
   dashboard: "Dashboard",
   gps: "Lacak kendaraan",
+  shipment_requests: "Permintaan pengiriman",
 };
 
 export const LEVEL_LABELS: Readonly<Record<PermissionLevel, string>> = {
@@ -87,6 +89,15 @@ export const canManageDeliveryOrders = (user: MaybeUser) => isStaff(user) && can
 /** The transporter accepts a DO sent to its company; staff accept any. */
 export const canAcceptDeliveryOrder = (user: MaybeUser) => canEdit(user, "delivery_orders");
 
+// --- shipment requests (API migration 0017) ----------------------------------------
+
+/** GET /api/shipment-requests: staff see every request, a supplier account the ones sent to its company. */
+export const canSeeShipmentRequests = (user: MaybeUser) => canView(user, "shipment_requests");
+/** POST /api/shipment-requests and the files of a request: CREATE, staff only. */
+export const canCreateShipmentRequest = (user: MaybeUser) => isStaff(user) && canCreate(user, "shipment_requests");
+/** PATCH, send, close and cancel: EDIT, staff only. */
+export const canManageShipmentRequests = (user: MaybeUser) => isStaff(user) && canEdit(user, "shipment_requests");
+
 // --- registrations ----------------------------------------------------------------
 
 /** registrations CREATE, and for a partner account its company must be a supplier. */
@@ -94,10 +105,22 @@ export function canCreateIncoming(user: MaybeUser): boolean {
   return canCreate(user, "registrations") && (isStaff(user) || user?.partner?.isSupplier === true);
 }
 
-/** registrations CREATE, and for a partner account its company must be a transporter. */
+/**
+ * registrations CREATE, and for a partner account its company must be a transporter or a customer: a DO may be sent
+ * to its own customer, which then registers its trucks (owner's flow of 25 November 2026, outgoing step 1).
+ */
 export function canCreateOutgoing(user: MaybeUser): boolean {
-  return canCreate(user, "registrations") && (isStaff(user) || user?.partner?.isTransporter === true);
+  return canCreate(user, "registrations") && (isStaff(user) || user?.partner?.isTransporter === true || user?.partner?.isCustomer === true);
 }
+
+/**
+ * The typed form of a new registration is for partner accounts: the supplier and the transporter register their
+ * trucks ahead and the driver brings the barcode. Staff do not type registrations (owner's decision, 25 November
+ * 2026): a truck without a barcode is registered at the post from its scanned document. The API still lets staff
+ * write a registration, because the walk-in is one.
+ */
+export const canTypeIncoming = (user: MaybeUser) => !isStaff(user) && canCreateIncoming(user);
+export const canTypeOutgoing = (user: MaybeUser) => !isStaff(user) && canCreateOutgoing(user);
 
 /** Approve and reject: registrations EDIT, never a partner account. */
 export const canReviewRegistrations = (user: MaybeUser) => isStaff(user) && canEdit(user, "registrations");
@@ -161,6 +184,13 @@ export const canCompleteStep = (user: MaybeUser, performerModule: string | null)
   isStaff(user) && performerModule !== null && canCreate(user, performerModule as ModuleCode);
 /** POST /api/gate/check-out: gate CREATE. */
 export const canCheckOut = (user: MaybeUser) => canCreate(user, "gate");
+
+/** POST /api/gate/scan-document: gate CREATE, staff only. */
+export const canScanDocument = (user: MaybeUser) => isStaff(user) && canCreate(user, "gate");
+/** POST /api/gate/walk-in: gate CREATE and registrations CREATE together, staff only. */
+export const canWalkIn = (user: MaybeUser) => canScanDocument(user) && canCreate(user, "registrations");
+/** A walk-in without a document the reading service read (the emergency path): also the module gate_emergency. */
+export const canWalkInEmergency = (user: MaybeUser) => canWalkIn(user) && canView(user, "gate_emergency");
 
 /** POST /api/trips/:id/spj/reissue: gate EDIT. */
 export const canReissueSpj = (user: MaybeUser) => canEdit(user, "gate");

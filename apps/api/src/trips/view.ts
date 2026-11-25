@@ -40,6 +40,9 @@ export interface TripView {
   vehicle: { id: number; plateNo: string; plateDisplay: string; vehicleTypeCode: string } | null;
   driver: { id: number; fullName: string; licenceNo: string; registryStatus: string } | null;
   containerNo: string | null;
+  /** Outgoing: free text the transporter may add. */
+  extraSpbe: string | null;
+  passportNo: string | null;
   plannedArrival: string | null;
   qtyPlanned: number | null;
   docGrossKg: number | null;
@@ -139,6 +142,8 @@ export async function loadTrips(orm: Orm, ids: number[]): Promise<TripView[]> {
           ? { id: row.driverId, fullName: row.fullName, licenceNo: row.licenceNo, registryStatus: row.registryStatus }
           : null,
       containerNo: trip.containerNo,
+      extraSpbe: trip.extraSpbe,
+      passportNo: trip.passportNo,
       plannedArrival: trip.plannedArrival,
       qtyPlanned: trip.qtyPlanned,
       docGrossKg: trip.docGrossKg,

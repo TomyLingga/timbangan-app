@@ -12,6 +12,7 @@ import { idParams, lettersAndDigits, likeText, limitParam, searchParam } from ".
 import { expireDueTrips } from "../trips/view.js";
 import {
   approve,
+  assertRequestsSent,
   cancelTrips,
   hasArrived,
   mayWrite,
@@ -139,6 +140,7 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     const registration = await orm.transaction(async (tx) => {
       const current = await lock(tx, id, account);
       if (!mayWrite(account, current.direction)) throw forbidden();
+      await assertRequestsSent(tx, account, id);
       await submitRegistration(tx, id, account.id, now);
       return one(tx, id);
     });

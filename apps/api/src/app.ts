@@ -41,6 +41,7 @@ import { registerPlantMasterRoutes } from "./plant-masters/routes.js";
 import { registerRegistrationRoutes } from "./registrations/routes.js";
 import { registerReportRoutes } from "./reports/routes.js";
 import { registerRfidCardRoutes } from "./rfid-cards/routes.js";
+import { registerShipmentRequestRoutes } from "./shipment-requests/routes.js";
 import { registerStationRoutes } from "./stations/routes.js";
 import { runDailySync, scheduleDailySync } from "./sync/daily.js";
 import { SyncLock } from "./sync/lock.js";
@@ -169,6 +170,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   registerDestinationRoutes(app, context, guards);
   registerRfidCardRoutes(app, context, guards);
   registerDeliveryOrderRoutes(app, context, guards);
+  registerShipmentRequestRoutes(app, context, guards);
   registerRegistrationRoutes(app, context, guards);
   registerTripRoutes(app, context, guards);
   registerGateRoutes(app, context, guards);

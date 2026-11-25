@@ -45,6 +45,8 @@ describe("POST /api/delivery-orders", () => {
       deliveryUntil: "2026-11-30",
       transportTerms: "FRANCO",
       transporter: { id: companies.transporter1, name: "PT Angkut Satu" },
+      // a draft is not sent to anyone yet, even with a transporter picked
+      sentTo: null,
       truckCount: 4,
       truckCountBy: "ADMIN",
       qtyPlanned: 0,

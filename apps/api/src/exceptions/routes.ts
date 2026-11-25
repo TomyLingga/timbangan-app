@@ -1,15 +1,15 @@
 // Requests for a decision (exceptions) for the holders of `approvals`: list, detail, decide, report data.
-import { and, eq, inArray, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
-import { EXCEPTION_STATUSES, EXCEPTION_TYPES, exceptions, partners, registrations, sites, stations, trips, users, vehicles, weighings } from "../db/schema.js";
+import { cardAssignments, EXCEPTION_STATUSES, EXCEPTION_TYPES, exceptions, partners, registrations, sites, stations, trips, users, vehicles, weighings } from "../db/schema.js";
 import { notFound, refused } from "../errors.js";
 import { idParams, limitParam } from "../http.js";
 import { loadAllocations } from "../weighing/view.js";
-import { decideBody, decideException, REPORT_TITLE } from "./decide.js";
+import { decideBody, decideException, reportTitle } from "./decide.js";
 import { contextOf, expireStaleExceptions, loadExceptionViews, visibleTypes } from "./service.js";
 
 const listFilter = <T extends readonly [string, ...string[]]>(values: T, message: string) =>
@@ -103,10 +103,19 @@ export function registerExceptionRoutes(app: FastifyInstance, context: AppContex
     const { exception } = row;
     if (!exception.reportNo) throw refused("NO_REPORT", "Permintaan ini tidak punya Berita Acara.");
     const lines = await loadAllocations(orm, exception.tripId);
+    // signed by the operator of the post who checked the truck in, and by the approver (owner, 25 November 2026)
+    const [registrar] = await orm
+      .select({ id: users.id, fullName: users.fullName })
+      .from(cardAssignments)
+      .innerJoin(users, eq(users.id, cardAssignments.assignedBy))
+      .where(eq(cardAssignments.tripId, exception.tripId))
+      .orderBy(asc(cardAssignments.assignedAt))
+      .limit(1);
+    const stored = contextOf(exception);
     return {
       report: {
         reportNo: exception.reportNo,
-        title: REPORT_TITLE[exception.type] ?? "Berita Acara",
+        title: reportTitle(exception),
         type: exception.type,
         exceptionId: exception.id,
         site: { code: row.siteCode, name: row.siteName },
@@ -126,7 +135,12 @@ export function registerExceptionRoutes(app: FastifyInstance, context: AppContex
         raisedAt: exception.raisedAt,
         decidedAt: exception.decidedAt,
         decidedBy: exception.decidedBy === null ? null : { id: exception.decidedBy, fullName: row.deciderName },
-        masterTareUpdated: contextOf(exception).masterTareUpdated === true,
+        masterTareUpdated: stored.masterTareUpdated === true,
+        plate: exception.type === "PLATE" ? { read: stored.plateRead ?? null, registered: stored.plateDisplay ?? row.plateDisplay ?? row.plateNo } : null,
+        signers: [
+          { role: "REGISTRAR", title: "Dibuat oleh", position: "Operator registrasi", user: registrar ?? null },
+          { role: "APPROVER", title: "Disetujui oleh", position: "Penyetuju", user: exception.decidedBy === null ? null : { id: exception.decidedBy, fullName: row.deciderName } },
+        ],
       },
     };
   });

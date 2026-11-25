@@ -7,12 +7,12 @@ describe("weighing words", () => {
     expect(exceptionTypeLabel("GROSS_IN")).toBe("Selisih bruto");
     expect(exceptionTypeLabel("NEW_KIND")).toBe("NEW_KIND");
     expect(exceptionStatusInfo("PENDING")).toEqual({ label: "Menunggu", tone: "warning" });
-    expect(decisionLabel("ADD_LOAD")).toBe("Tambah muatan");
+    expect(decisionLabel("ADD_LOAD")).toBe("Isi lagi");
     expect(decisionLabel(null)).toBeNull();
   });
 
   it("asks a reason only for the three weight differences", () => {
-    expect(["GROSS_IN", "TARE_OUT", "NET_IN"].every(needsReason)).toBe(true);
+    expect(["GROSS_IN", "TARE_OUT", "NET_IN"].every((type) => needsReason(type))).toBe(true);
     expect(needsReason("PLATE")).toBe(false);
     expect(needsReason("NET_OUT")).toBe(false);
   });

@@ -5,7 +5,7 @@ import { isApiError } from "../../src/api/client";
 import { decisionErrorMessage, errorMessage } from "../../src/api/messages";
 import type { DecisionCode, ExceptionResponse, ExceptionView } from "../../src/api/types";
 import { canDecide } from "../../src/auth/permissions";
-import { decisionBody, decisionChoices, figureRows, plateRows, qcRows, REASON_MAX, reasonRequired, STATUS_TEXT, typeLabel, validateDecision } from "../../src/decisions/decision";
+import { decisionBody, decisionChoices, figureRows, plateRows, qcRows, REASON_MAX, reasonHint, reasonRequired, statusText, typeLabel, validateDecision } from "../../src/decisions/decision";
 import { clockTime, readyFor } from "../../src/lib/format";
 import { confirmIdentity } from "../../src/platform/deviceAuth";
 import { useQueue } from "../../src/state/queue";
@@ -64,7 +64,7 @@ function DecisionBody({ view, offline, fetchedAt, stale, reload }: { view: Excep
   const decide = async (code: DecisionCode) => {
     if (locked) return;
     const input = { decision: code, reason, updateMasterTare: masterTare };
-    const found = validateDecision(view.type, input);
+    const found = validateDecision(view, input);
     setErrors(found);
     if (Object.keys(found).length > 0) return;
     setTapped(code);
@@ -95,7 +95,7 @@ function DecisionBody({ view, offline, fetchedAt, stale, reload }: { view: Excep
         <View style={{ alignSelf: "flex-start", backgroundColor: colors.surface, borderColor: colors.lineStrong, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm }}>
           <Plate>{view.trip.plateDisplay ?? view.trip.plateNo ?? "Tanpa plat"}</Plate>
         </View>
-        {pendingNow ? <Badge label={`Menunggu ${readyFor(view.raisedAt)}`} tone="warn" icon="clock" /> : <Badge label={STATUS_TEXT[view.status] ?? view.status} tone={view.status === "APPROVED" ? "ok" : "bad"} />}
+        {pendingNow ? <Badge label={`Menunggu ${readyFor(view.raisedAt)}`} tone="warn" icon="clock" /> : <Badge label={statusText(view)} tone={view.status === "APPROVED" ? "ok" : "bad"} />}
         <T kind="muted">
           {qc ? "QC pass" : (view.station?.name ?? "Timbangan")}
           {view.stage ? ` · timbang ${view.stage}` : ""} · No Trip {view.trip.tripNo ?? "–"}
@@ -120,7 +120,7 @@ function DecisionBody({ view, offline, fetchedAt, stale, reload }: { view: Excep
           <T kind="heading">Sudah diputuskan</T>
           <Rows
             rows={[
-              { label: "Keputusan", value: STATUS_TEXT[view.status] ?? view.status },
+              { label: "Keputusan", value: statusText(view) },
               { label: "Oleh", value: view.decidedBy?.fullName ?? "–" },
               { label: "Pukul", value: view.decidedAt ? clockTime(view.decidedAt) : "–" },
               ...(view.reason ? [{ label: "Alasan", value: view.reason }] : []),
@@ -136,7 +136,7 @@ function DecisionBody({ view, offline, fetchedAt, stale, reload }: { view: Excep
             <Input
               value={reason}
               onChangeText={setReason}
-              placeholder={reasonRequired(view.type) ? "Wajib, minimal 3 huruf" : "Tidak wajib"}
+              placeholder={reasonHint(view)}
               multiline
               maxLength={REASON_MAX}
               style={{ minHeight: 88 }}
@@ -158,7 +158,7 @@ function DecisionBody({ view, offline, fetchedAt, stale, reload }: { view: Excep
           {errors.updateMasterTare ? <ErrorText>{errors.updateMasterTare}</ErrorText> : null}
           {noSignal ? <Banner tone="warn" icon="wifi-off" title="Tidak ada sinyal">Keputusan dikirim langsung, tidak lewat antrean. Tunggu sinyal kembali.</Banner> : null}
           <View style={{ gap: space.sm }}>
-            {decisionChoices(view.type).map((choice) => (
+            {decisionChoices(view).map((choice) => (
               <Button
                 key={choice.code}
                 label={noSignal ? `${choice.label} (tidak ada sinyal)` : choice.label}

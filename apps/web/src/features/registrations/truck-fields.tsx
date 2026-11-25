@@ -129,6 +129,7 @@ export function TruckFields({
   prefix,
   types,
   showHandover = false,
+  outgoingExtras = false,
 }: {
   truck: TruckValues;
   update: Update;
@@ -137,6 +138,8 @@ export function TruckFields({
   prefix: string;
   types: readonly VehicleType[];
   showHandover?: boolean;
+  /** The two free texts of an outgoing truck: SPBE tambahan, passport or travel letter. */
+  outgoingExtras?: boolean;
 }) {
   const error = (field: string) => errors[`${prefix}.${field}`];
   const set = <K extends keyof TruckValues>(field: K, value: TruckValues[K]) => update((t) => ({ ...t, [field]: value }));
@@ -356,6 +359,31 @@ export function TruckFields({
           value={truck.handoverNo}
           onChange={(value) => set("handoverNo", value)}
         />
+      ) : null}
+
+      {outgoingExtras ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <TextField
+            label="SPBE tambahan"
+            name={`${prefix}.extraSpbe`}
+            optional
+            maxLength={200}
+            value={truck.extraSpbe}
+            onChange={(value) => set("extraSpbe", value)}
+            error={error("extraSpbe")}
+            hint="Isi bila ada."
+          />
+          <TextField
+            label="Passport atau surat jalan"
+            name={`${prefix}.passportNo`}
+            optional
+            maxLength={200}
+            value={truck.passportNo}
+            onChange={(value) => set("passportNo", value)}
+            error={error("passportNo")}
+            hint="Nomor passport atau surat jalan, bila ada."
+          />
+        </div>
       ) : null}
     </div>
   );

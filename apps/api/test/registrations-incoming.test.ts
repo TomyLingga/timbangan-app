@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FAKE_ACCOUNT, startFakeVcf } from "./helpers/fake-vcf.js";
-import { phase3App, seedContract, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { phase3App, seedContract, seedDriver, seedVehicle, sendShipmentRequest, siteCode } from "./helpers/fixtures.js";
 import { seedStaff } from "./helpers/users.js";
 
 const TOKEN = /^[0-9A-HJKMNP-TV-Z]{12}$/;
@@ -17,6 +17,9 @@ async function setup(env: Record<string, string> = {}) {
     other: await seedContract(database, { no: "PC-201/CONTOH", partnerId: companies.supplier2, productId: products.cpo }),
     sale: await seedContract(database, { no: "SC-301/CONTOH", direction: "OUT", partnerId: companies.customer1, productId: products.olein }),
   };
+  // INL sent supplier 1 a request on each of its open contracts (0017); the supplier-2 contract has one too, so its
+  // refusal below comes from the ownership check
+  for (const id of [contracts.c1, contracts.c2, contracts.c3, contracts.goods, contracts.other]) await sendShipmentRequest(database, id);
   const vehicles = {
     ok: await seedVehicle(database, { plate: "BK 1001 AA", ownerId: companies.transporter1 }),
     second: await seedVehicle(database, { plate: "BK 1002 AA", ownerId: companies.transporter1 }),

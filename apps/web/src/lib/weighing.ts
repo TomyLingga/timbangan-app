@@ -34,14 +34,24 @@ export function exceptionStatusInfo(status: string): StatusInfo {
 /** The decision as words: what was chosen on a decided request. */
 export function decisionLabel(decision: string | null): string | null {
   if (!decision) return null;
-  return { APPROVE: "Disetujui", REJECT: "Ditolak", OK: "Sesuai", ADD_LOAD: "Tambah muatan", REDUCE_LOAD: "Kurangi muatan" }[decision] ?? decision;
+  return { APPROVE: "Disetujui", HOLD: "Mundur/hold", REJECT: "Ditolak", OK: "Sesuai", ADD_LOAD: "Isi lagi", REDUCE_LOAD: "Kurangi isi" }[decision] ?? decision;
 }
 
 /** The three weight differences: a written reason is required and an approval gets a Berita Acara. */
 export const DIFFERENCE_TYPES: readonly string[] = ["GROSS_IN", "TARE_OUT", "NET_IN"];
 
-export function needsReason(type: string): boolean {
-  return DIFFERENCE_TYPES.includes(type);
+/** A reason is required for the three weight differences, and to turn a truck away (decide.ts). */
+export function needsReason(type: string, decision: string | null = null): boolean {
+  return DIFFERENCE_TYPES.includes(type) || (decision === "REJECT" && type !== "QC_HOLD");
+}
+
+/** What a request offers when the server did not say: the same rules as allowedDecisions in the API. */
+export function decisionOptions(view: { type: string; stage: number | null; options?: string[] }): string[] {
+  if (view.options && view.options.length > 0) return view.options;
+  if (view.type === "NET_OUT") return ["OK", "ADD_LOAD", "REDUCE_LOAD"];
+  if (view.type === "QC_HOLD") return ["APPROVE", "REJECT"];
+  if (view.type === "NET_IN" || view.stage === 2) return ["APPROVE", "HOLD"];
+  return ["APPROVE", "HOLD", "REJECT"];
 }
 
 /** What the request compares, for its figures: the letter, the master tare, or nothing (plate). */

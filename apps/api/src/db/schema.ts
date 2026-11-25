@@ -400,6 +400,9 @@ export const trips = pgTable("trips", {
   // added by 0015: marked by the post at check-in; null for incoming and for trucks checked in before it
   closeCargo: boolean("close_cargo"),
   flexiBag: boolean("flexi_bag"),
+  // added by 0016: free text the transporter may add per outgoing truck
+  extraSpbe: text("extra_spbe"),
+  passportNo: text("passport_no"),
 });
 
 export const tripAllocations = pgTable("trip_allocations", {
@@ -568,7 +571,8 @@ export const exceptions = pgTable("exceptions", {
   qualityCheckId: bigint("quality_check_id", { mode: "number" }),
   type: text("type", { enum: EXCEPTION_TYPES }).notNull(),
   status: text("status", { enum: EXCEPTION_STATUSES }).notNull().default("PENDING"),
-  decisionCode: text("decision_code", { enum: ["OK", "ADD_LOAD", "REDUCE_LOAD"] }),
+  // NET_OUT: OK, ADD_LOAD, REDUCE_LOAD; other weighbridge requests decided REJECTED: HOLD or REJECT (0016)
+  decisionCode: text("decision_code", { enum: ["OK", "ADD_LOAD", "REDUCE_LOAD", "HOLD", "REJECT"] }),
   expectedValue: numeric("expected_value", { precision: 16, scale: 3, mode: "number" }),
   actualValue: numeric("actual_value", { precision: 16, scale: 3, mode: "number" }),
   diffValue: numeric("diff_value", { precision: 16, scale: 3, mode: "number" }),
@@ -723,6 +727,40 @@ export const gateScans = pgTable("gate_scans", {
 
 export const deliveryOrderFiles = pgTable("delivery_order_files", {
   deliveryOrderId: bigint("delivery_order_id", { mode: "number" }).notNull(),
+  fileId: bigint("file_id", { mode: "number" }).notNull(),
+  label: text("label"),
+  addedBy: bigint("added_by", { mode: "number" }).notNull(),
+  addedAt: timestamptz("added_at").notNull().defaultNow(),
+});
+
+export const SHIPMENT_REQUEST_STATUSES = ["DRAFT", "SENT", "CLOSED", "CANCELLED"] as const;
+
+/** Added by 0017: a request to a supplier to deliver on one purchase contract. */
+export const shipmentRequests = pgTable("shipment_requests", {
+  id: id(),
+  siteId: smallint("site_id").notNull(),
+  contractId: bigint("contract_id", { mode: "number" }).notNull(),
+  contractNo: text("contract_no").notNull(),
+  partnerId: bigint("partner_id", { mode: "number" }).notNull(),
+  qtyPlanned: numeric("qty_planned", { precision: 16, scale: 3, mode: "number" }),
+  deliveryFrom: date("delivery_from"),
+  deliveryUntil: date("delivery_until"),
+  remark: text("remark"),
+  status: text("status", { enum: SHIPMENT_REQUEST_STATUSES }).notNull().default("DRAFT"),
+  createdBy: bigint("created_by", { mode: "number" }).notNull(),
+  sentBy: bigint("sent_by", { mode: "number" }),
+  sentAt: timestamptz("sent_at"),
+  closedBy: bigint("closed_by", { mode: "number" }),
+  closedAt: timestamptz("closed_at"),
+  cancelledBy: bigint("cancelled_by", { mode: "number" }),
+  cancelledAt: timestamptz("cancelled_at"),
+  cancelReason: text("cancel_reason"),
+  createdAt: timestamptz("created_at").notNull().defaultNow(),
+  updatedAt: timestamptz("updated_at").notNull().defaultNow(),
+});
+
+export const shipmentRequestFiles = pgTable("shipment_request_files", {
+  shipmentRequestId: bigint("shipment_request_id", { mode: "number" }).notNull(),
   fileId: bigint("file_id", { mode: "number" }).notNull(),
   label: text("label"),
   addedBy: bigint("added_by", { mode: "number" }).notNull(),

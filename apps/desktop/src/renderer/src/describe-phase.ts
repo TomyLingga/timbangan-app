@@ -43,8 +43,10 @@ export function describePhase(state: ScreenState): PhaseText {
       if (outcome?.kind === "SAVED") return text("Disetujui, tersimpan", "ok");
       if (outcome?.kind !== "NOT_SAVED") return text("Selesai", "idle");
       switch (outcome.reason) {
+        case "HOLD":
+          return text("Mundur, tidak disimpan", "warn");
         case "REJECTED":
-          return text("Ditolak", "bad");
+          return text("Truk ditolak", "bad");
         case "ADD_LOAD":
           return text("Tambah muatan", "warn");
         case "REDUCE_LOAD":

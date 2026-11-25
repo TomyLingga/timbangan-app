@@ -129,8 +129,9 @@ const AWAITING_REVIEW: StatusInfo = { label: "Menunggu tinjauan", tone: "warning
 
 const DELIVERY_ORDER_STATUSES: Record<string, StatusInfo> = {
   draft: DRAFT,
-  sent: { label: "Menunggu transporter", tone: "warning" },
-  accepted: { label: "Diterima transporter", tone: "success" },
+  // sent to a transporter or to the DO's own customer (API migration 0017); who it went to is shown apart
+  sent: { label: "Menunggu diterima", tone: "warning" },
+  accepted: { label: "Diterima", tone: "success" },
   closed: CLOSED,
   cancelled: CANCELLED,
 };

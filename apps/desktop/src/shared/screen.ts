@@ -21,7 +21,7 @@ export const SCREEN = {
 
 export type PhaseName = "idle" | "lookup" | "truck" | "settling" | "countdown" | "sending" | "saved" | "plateRetry" | "waiting" | "decided" | "refused";
 
-export type NotSavedReason = "REJECTED" | "ADD_LOAD" | "REDUCE_LOAD" | "CANCELLED" | "TRUCK_LEFT" | "OTHER";
+export type NotSavedReason = "HOLD" | "REJECTED" | "ADD_LOAD" | "REDUCE_LOAD" | "CANCELLED" | "TRUCK_LEFT" | "OTHER";
 
 export type Outcome =
   | { kind: "SAVED"; weighing: WeighingView; trip: TripView | null; afterDecision: boolean }
@@ -286,7 +286,7 @@ function tickWaiting(state: ScreenState, now: number): Step {
 }
 
 function notSavedReason(answer: HeartbeatAnswer): NotSavedReason {
-  if (answer.status === "REJECTED") return "REJECTED";
+  if (answer.status === "REJECTED") return answer.decision === "REJECT" ? "REJECTED" : "HOLD";
   if (answer.status === "RETRY" && (answer.decision === "ADD_LOAD" || answer.decision === "REDUCE_LOAD")) return answer.decision;
   if (answer.status === "CANCELLED" || answer.status === "EXPIRED") return "CANCELLED";
   return "OTHER";

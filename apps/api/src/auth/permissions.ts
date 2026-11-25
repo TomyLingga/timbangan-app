@@ -27,7 +27,8 @@ export type ModuleCode =
   | "sealing"
   | "reports"
   | "plant_masters"
-  | "gps";
+  | "gps"
+  | "shipment_requests";
 
 /** Module code to level, for the modules the account may open. */
 export type Permissions = Record<string, PermissionLevel>;
@@ -117,10 +118,13 @@ export function partnerDefaults(company: { isSupplier: boolean; isTransporter: b
   };
   if (company.isSupplier) {
     raise("contracts", "VIEW");
+    // the requests INL sent to the company: a supplier registers trucks only on those contracts (0017)
+    raise("shipment_requests", "VIEW");
     raise("registrations", "CREATE");
     raise("vehicles", "CREATE");
     raise("drivers", "CREATE");
   }
+  // a customer gets what a transporter gets: a DO may be sent to it, and it then registers its own trucks
   if (company.isTransporter || company.isCustomer) {
     raise("delivery_orders", "EDIT");
     raise("registrations", "CREATE");

@@ -278,6 +278,7 @@ describe("errors", () => {
     expect(error.status).toBe(409);
     expect(error.code).toBe("SYNC_RUNNING");
     expect(error.message).toBe("A sync is already running");
+    expect(error.details).toEqual({});
   });
 
   it("keeps the names of the fields the API refused", async () => {
@@ -413,6 +414,16 @@ describe("upload", () => {
     const client = createApiClient({ baseUrl: BASE, fetch: fakeFetch() as unknown as typeof fetch, xhr: xhr.make });
     client.setAccessToken("token");
     await expect(client.upload("/api/files", new Blob(["x"]), "a.png")).rejects.toMatchObject({ status: 413, code: "FILE_TOO_LARGE" });
+  });
+
+  it("sends text fields in the same body, and keeps the other keys of a refusal", async () => {
+    const xhr = fakeXhr([502, { error: { code: "OCR_UNAVAILABLE", message: "Layanan baca dokumen tidak dapat dihubungi.", scanFileId: 41 } }]);
+    const client = createApiClient({ baseUrl: BASE, fetch: fakeFetch() as unknown as typeof fetch, xhr: xhr.make });
+    client.setAccessToken("token");
+    const failure = (await client.upload("/api/gate/scan-document", new Blob(["x"]), "scan.jpg", { fields: { direction: "IN" } }).catch((e: unknown) => e)) as ApiError;
+    const body = xhr.sent[0]?.body as FormData;
+    expect([body.get("direction"), body.get("file") instanceof Blob]).toEqual(["IN", true]);
+    expect(failure).toMatchObject({ status: 502, code: "OCR_UNAVAILABLE", details: { scanFileId: 41 } });
   });
 });
 

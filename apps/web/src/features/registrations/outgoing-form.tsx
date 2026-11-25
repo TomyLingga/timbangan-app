@@ -17,7 +17,6 @@ import { registrationErrorMessage } from "@/lib/messages";
 import { planPerTruck, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
 import type { DeliveryOrder, DeliveryOrderDetail, Page, Registration, VehicleType } from "@/lib/types";
-import { cn } from "@/lib/utils";
 import {
   emptyTruck,
   outgoingFromDraft,
@@ -27,7 +26,6 @@ import {
   type FormErrors,
   type OutgoingValues,
   type TruckValues,
-  type YesNo,
 } from "@/lib/workflow-forms";
 
 /** Trucks the form starts with when the delivery order names no count. Larger counts are added by hand. */
@@ -37,49 +35,6 @@ let truckSerial = 0;
 const newTruck = () => emptyTruck(`truck-${(truckSerial += 1)}`);
 
 const remainingText = (order: DeliveryOrder) => (order.qtyRemaining > 0 ? String(Math.floor(order.qtyRemaining)) : "");
-
-function YesNoField({
-  legend,
-  name,
-  value,
-  onChange,
-  error,
-}: {
-  legend: string;
-  name: string;
-  value: YesNo;
-  onChange: (value: YesNo) => void;
-  error?: string;
-}) {
-  return (
-    <fieldset aria-invalid={error ? true : undefined} className="flex flex-col gap-2">
-      <legend className="text-sm font-medium">{legend}</legend>
-      <div className="flex gap-2">
-        {(["yes", "no"] as const).map((option) => (
-          <label
-            key={option}
-            className={cn(
-              "flex min-h-11 flex-1 cursor-pointer items-center justify-center gap-2 rounded-md border px-4 text-sm has-focus-visible:ring-3 has-focus-visible:ring-ring/50 sm:flex-none",
-              value === option ? "border-secondary bg-secondary text-secondary-foreground dark:border-primary dark:bg-primary dark:text-primary-foreground" : "bg-background",
-              error && value !== option && "border-destructive",
-            )}
-          >
-            <input
-              type="radio"
-              name={name}
-              value={option}
-              checked={value === option}
-              onChange={() => onChange(option)}
-              className="sr-only"
-            />
-            {option === "yes" ? "Ya" : "Tidak"}
-          </label>
-        ))}
-      </div>
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
-    </fieldset>
-  );
-}
 
 function OutgoingFormBody({
   initialOrder,
@@ -103,8 +58,6 @@ function OutgoingFormBody({
       initial?.trucks ??
       Array.from({ length: Math.min(Math.max(initialOrder?.truckCount ?? 1, 1), MAX_INITIAL_TRUCKS) }, newTruck),
   );
-  const [closeCargo, setCloseCargo] = useState<YesNo>(initial?.closeCargo ?? "");
-  const [flexiBag, setFlexiBag] = useState<YesNo>(initial?.flexiBag ?? "");
   const [plannedDate, setPlannedDate] = useState(initial?.plannedDate || plantToday());
   const [remark, setRemark] = useState(initial?.remark ?? "");
   const [addOrderId, setAddOrderId] = useState("");
@@ -148,8 +101,8 @@ function OutgoingFormBody({
   }, [initial]);
 
   async function save(submit: boolean) {
-    const values: OutgoingValues = { orders, trucks, closeCargo, flexiBag, plannedDate, remark };
-    const found = validateOutgoing(values, { types, parameters: [], currentYear: new Date().getFullYear() }, submit);
+    const values: OutgoingValues = { orders, trucks, plannedDate, remark };
+    const found = validateOutgoing(values, { types, parameters: [], currentYear: new Date().getFullYear() });
     setErrors(found);
     setFormError(null);
     if (Object.keys(found).length > 0) {
@@ -177,7 +130,7 @@ function OutgoingFormBody({
     <form noValidate onSubmit={(event) => event.preventDefault()} className="flex flex-col gap-5">
       <PageHeader
         title={draft ? `Ubah draf ${draft.regNo}` : "Registrasi outgoing"}
-        description="Daftar truk untuk delivery order yang sudah diterima. Quantity tiap DO dibagi rata ke semua truk."
+        description="Daftar truk untuk delivery order yang sudah diterima. Quantity tiap DO dibagi rata ke semua truk. Close cargo dan flexi bag ditandai petugas pos saat truk check-in."
       />
 
       <FormSection title="1. Delivery order">
@@ -324,6 +277,7 @@ function OutgoingFormBody({
                 prefix={`trucks.${index}`}
                 types={types}
                 showHandover
+                outgoingExtras
               />
             </li>
           ))}
@@ -342,32 +296,7 @@ function OutgoingFormBody({
         </Button>
       </section>
 
-      <FormSection title="4. Muatan" description="Wajib dijawab saat registrasi dikirim.">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <YesNoField
-            legend="Close cargo"
-            name="closeCargo"
-            value={closeCargo}
-            onChange={(value) => {
-              setCloseCargo(value);
-              setErrors((current) => dropErrors(current, "closeCargo"));
-            }}
-            error={errors.closeCargo}
-          />
-          <YesNoField
-            legend="Flexi bag"
-            name="flexiBag"
-            value={flexiBag}
-            onChange={(value) => {
-              setFlexiBag(value);
-              setErrors((current) => dropErrors(current, "flexiBag"));
-            }}
-            error={errors.flexiBag}
-          />
-        </div>
-      </FormSection>
-
-      <FormSection title="5. Catatan">
+      <FormSection title="4. Catatan">
         <TextAreaField label="Catatan" name="remark" optional rows={2} value={remark} onChange={setRemark} />
       </FormSection>
 

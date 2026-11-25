@@ -1,7 +1,7 @@
 // Files on delivery orders (the DO letter logistics sends to the transporter) and weighbridge slips per truck of an
 // incoming registration (the supplier's own scale). Who may upload, link, remove and read each file.
 import { describe, expect, it } from "vitest";
-import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle, sendShipmentRequest } from "./helpers/fixtures.js";
 import { multipart, PNG_BYTES } from "./helpers/field.js";
 import { bearer, seedStaff } from "./helpers/users.js";
 
@@ -43,6 +43,7 @@ async function setup() {
   };
 
   const purchase = await seedContract(database, { no: "PC-901/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 100_000 });
+  await sendShipmentRequest(database, purchase);
   const vehicle = await seedVehicle(database, { plate: "BK 9101 AA" });
   const driver = await seedDriver(database, { name: "Supir Contoh", licence: "SIM0009101" });
   const draft = async (submit = false) => {

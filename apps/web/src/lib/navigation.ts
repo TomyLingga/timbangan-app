@@ -7,6 +7,7 @@ import type { ModuleCode, User } from "@/lib/types";
 export type NavHref =
   | "/"
   | "/registrasi"
+  | "/permintaan-pengiriman"
   | "/delivery-order"
   | "/pos"
   | "/ruang-kontrol"
@@ -28,6 +29,8 @@ const view = (module: ModuleCode) => (user: User) => canView(user, module);
 const RULES: ReadonlyArray<{ href: NavHref; visible: (user: User) => boolean }> = [
   { href: "/", visible: () => true },
   { href: "/registrasi", visible: view("registrations") },
+  // staff see every request, a supplier the ones sent to it (apps/api src/shipment-requests/view.ts)
+  { href: "/permintaan-pengiriman", visible: view("shipment_requests") },
   { href: "/delivery-order", visible: view("delivery_orders") },
   // the lists of the post (GET /api/trips) are staff only
   { href: "/pos", visible: (user) => isStaff(user) && canView(user, "gate") },

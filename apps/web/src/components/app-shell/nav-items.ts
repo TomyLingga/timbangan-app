@@ -14,6 +14,7 @@ import {
   MapPinned,
   PackageCheck,
   ScanLine,
+  Send,
   Truck,
   UsersRound,
   type LucideIcon,
@@ -31,6 +32,7 @@ export interface NavItem {
 export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
   "/": { label: "Beranda", icon: House },
   "/registrasi": { label: "Registrasi", icon: ClipboardList },
+  "/permintaan-pengiriman": { label: "Permintaan pengiriman", icon: Send },
   "/delivery-order": { label: "Delivery Order", icon: PackageCheck },
   "/pos": { label: "Pos registrasi", icon: ScanLine },
   "/ruang-kontrol": { label: "Ruang kontrol", icon: Map },
@@ -54,7 +56,7 @@ export const NAV_ENTRIES: Readonly<Record<NavHref, NavItem>> = {
  */
 export const NAV_GROUPS: ReadonlyArray<{ label: string | null; hrefs: readonly NavHref[] }> = [
   { label: null, hrefs: ["/"] },
-  { label: "Operasional", hrefs: ["/registrasi", "/delivery-order", "/pos", "/ruang-kontrol", "/lacak", "/keputusan"] },
+  { label: "Operasional", hrefs: ["/registrasi", "/permintaan-pengiriman", "/delivery-order", "/pos", "/ruang-kontrol", "/lacak", "/keputusan"] },
   { label: "Data induk", hrefs: ["/kontrak", "/supir", "/kendaraan", "/kartu", "/tangki", "/segel"] },
   { label: "Laporan", hrefs: ["/laporan", "/riwayat"] },
   { label: "Sistem", hrefs: ["/stasiun", "/pengguna"] },

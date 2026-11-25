@@ -1,8 +1,8 @@
-// How the files of a delivery order and the weighbridge slips of a truck are shown. Kept apart from the routes so
+// How the files of a delivery order or a shipment request and the weighbridge slips of a truck are shown. Kept apart from the routes so
 // the trip view can list slips without importing the routes.
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { Orm } from "../db/client.js";
-import { deliveryOrderFiles, files, tripFiles, users } from "../db/schema.js";
+import { deliveryOrderFiles, files, shipmentRequestFiles, tripFiles, users } from "../db/schema.js";
 
 export const SLIP_LABEL = "SLIP_TIMBANG";
 /** The scanned surat pengantar or delivery order a walk-in registration was made from, linked to its truck. */
@@ -27,6 +27,26 @@ export async function deliveryOrderFilesOf(orm: Orm, deliveryOrderId: number): P
     .innerJoin(users, eq(users.id, deliveryOrderFiles.addedBy))
     .where(eq(deliveryOrderFiles.deliveryOrderId, deliveryOrderId))
     .orderBy(asc(deliveryOrderFiles.addedAt), asc(deliveryOrderFiles.fileId));
+  return rows.map(({ link, file, fullName }) => ({
+    id: file.id,
+    label: link.label,
+    originalName: file.originalName,
+    mimeType: file.mimeType,
+    sizeBytes: file.sizeBytes,
+    addedAt: link.addedAt,
+    addedBy: { id: link.addedBy, fullName },
+  }));
+}
+
+/** The files of a shipment request, oldest link first. */
+export async function shipmentRequestFilesOf(orm: Orm, shipmentRequestId: number): Promise<AttachedFile[]> {
+  const rows = await orm
+    .select({ link: shipmentRequestFiles, file: files, fullName: users.fullName })
+    .from(shipmentRequestFiles)
+    .innerJoin(files, eq(files.id, shipmentRequestFiles.fileId))
+    .innerJoin(users, eq(users.id, shipmentRequestFiles.addedBy))
+    .where(eq(shipmentRequestFiles.shipmentRequestId, shipmentRequestId))
+    .orderBy(asc(shipmentRequestFiles.addedAt), asc(shipmentRequestFiles.fileId));
   return rows.map(({ link, file, fullName }) => ({
     id: file.id,
     label: link.label,

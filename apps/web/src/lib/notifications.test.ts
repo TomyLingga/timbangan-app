@@ -40,6 +40,13 @@ describe("notificationTarget", () => {
     expect(notificationTarget(item({ type: "DO_SENT", data: { type: "DO_SENT" } }), partner)).toBeNull();
   });
 
+  it("leads a shipment request to its page", () => {
+    const sent = item({ type: "SHIPMENT_REQUEST_SENT", body: "PC-CONTOH-01", data: { type: "SHIPMENT_REQUEST_SENT", shipmentRequestId: 9 } });
+    expect(notificationTarget(sent, partner)).toBe("/permintaan-pengiriman/9");
+    expect(notificationTarget(item({ type: "SHIPMENT_REQUEST_SENT", data: { type: "SHIPMENT_REQUEST_SENT" } }), partner)).toBeNull();
+    expect(requestStateText(sent)).toBeNull();
+  });
+
   it("leads a request to Keputusan with that request open", () => {
     const raised = item({ type: "EXCEPTION_RAISED", severity: "ALARM", exceptionId: 7, data: { type: "EXCEPTION_RAISED", exceptionId: 7, tripId: 3 } });
     expect(notificationTarget(raised, staff)).toBe("/keputusan?permintaan=7");

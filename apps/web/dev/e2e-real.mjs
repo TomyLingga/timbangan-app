@@ -163,13 +163,6 @@ async function prepare() {
 
 // --- the flow in the browser ------------------------------------------------------
 
-async function pickOption(browser, inputSelector, text) {
-  await browser.type(inputSelector, text);
-  await browser.waitFor(`[...document.querySelectorAll('[role="option"]')].some((option) => option.innerText.includes(${JSON.stringify(text)}))`);
-  await browser.click('[role="option"]');
-  await browser.waitFor(`!document.querySelector('[role="option"]')`);
-}
-
 async function flow(browser, { pair, driver, permissions }) {
   const html = await (await fetch(`${WEB}/login`)).text();
   must("the build points at E2E_API_URL", html.includes(`${API}/api/auth/sso/start`));
@@ -183,25 +176,28 @@ async function flow(browser, { pair, driver, permissions }) {
   await browser.click('a[href="/kontrak"]');
   check("Kontrak lists contracts", Boolean(await browser.waitFor(`location.pathname === '/kontrak' && ${visibleRows} > 0`)));
 
+  // Staff do not type registrations in the web (owner's decision, 25 November 2026); the typed form is the
+  // partner's. The API still takes one from staff, so the registration of this test is written through it.
   await browser.goto(`${WEB}/registrasi/baru?arah=in`);
-  await browser.waitFor(`document.querySelector('input[name="contractLookup"]')`);
-  for (const contract of pair) await pickOption(browser, 'input[name="contractLookup"]', contract.contractNo);
-  must("two contracts are chosen", Boolean(await browser.waitFor(`document.querySelectorAll('[aria-label="Kontrak terpilih"] li').length === 2`)));
-
-  await browser.fill('input[name="truck.plate"]', created.vehicle.plateDisplay);
-  await browser.click('main button[aria-label="Periksa plat"]');
-  check("the test vehicle is found by its plate", Boolean(await browser.waitFor(`${textOf("main")}.includes('Surat kendaraan')`)));
-  await browser.fill('input[name="truck.licenceNo"]', driver.licenceNo);
-  await browser.click('main button[aria-label="Periksa nomor sim"]');
-  check("the driver is found by the licence number", Boolean(await browser.waitFor(`${textOf("main")}.includes('berlaku sampai')`)));
-  await browser.fill('input[name="plannedDate"]', plantToday());
-  await browser.fill('input[name="letters.0.originNetKg"]', "1000");
-  await browser.fill('input[name="letters.1.originNetKg"]', "1000");
-  await browser.click("Kirim registrasi");
-  const detail = await browser.waitFor("/^\\/registrasi\\/[^/]+$/.test(location.pathname) && !location.pathname.endsWith('/baru') && location.pathname");
-  if (!detail) await browser.screenshot("registration-refused");
-  must("the incoming registration with two contracts is sent", Boolean(detail));
-  created.registrationId = decodeURIComponent(detail.split("/").pop());
+  check("a staff account is refused the typed registration form", Boolean(await browser.hasText("Truk yang datang tanpa barcode didaftarkan di Pos registrasi lewat scan dokumen.")));
+  const written = await call("POST", "/api/registrations", {
+    direction: "IN",
+    submit: true,
+    plannedDate: plantToday(),
+    allocations: pair.map((contract) => ({ contractId: contract.id })),
+    trips: [
+      {
+        vehicle: { id: created.vehicle.id },
+        driver: { id: driver.id },
+        plannedArrival: plantToday(),
+        letters: pair.map((_, index) => ({ allocationSeq: index + 1, originNetKg: 1000 })),
+      },
+    ],
+  });
+  must("the incoming registration with two contracts is sent", written.status === 201 && Boolean(written.body?.registration?.id));
+  created.registrationId = String(written.body.registration.id);
+  await browser.goto(`${WEB}/registrasi/${encodeURIComponent(created.registrationId)}`);
+  check("the registration page lists both contracts", Boolean(await browser.waitFor(`${textOf("main")}.includes(${JSON.stringify(pair[0].contractNo)}) && ${textOf("main")}.includes(${JSON.stringify(pair[1].contractNo)})`)));
 
   if (await browser.waitFor("document.body.innerText.includes('Menunggu tinjauan')", 3000)) {
     must("the registration waits for review and the account may approve it", holds(permissions, "registrations", "EDIT"));

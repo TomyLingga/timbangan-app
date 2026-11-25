@@ -14,6 +14,7 @@ import { findRule } from "../weighing/rules.js";
 export const EXCEPTION_RAISED = "EXCEPTION_RAISED";
 export const EXCEPTION_CLOSED = "EXCEPTION_CLOSED";
 export const DO_SENT = "DO_SENT";
+export const SHIPMENT_REQUEST_SENT = "SHIPMENT_REQUEST_SENT";
 
 /** Pushes of one request at most, besides the first. */
 export const MAX_REMINDERS = 10;
@@ -35,6 +36,7 @@ export const EXCEPTION_TITLES: Record<ExceptionType, string> = {
 };
 export const CLOSED_TITLE = "Permintaan keputusan selesai";
 export const DO_SENT_TITLE = "Delivery order baru";
+export const SHIPMENT_REQUEST_SENT_TITLE = "Permintaan pengiriman baru";
 
 /** The body: the trip number only. */
 const tripText = (tripNo: string | null, tripId: number) => tripNo ?? `Trip #${tripId}`;
@@ -117,6 +119,33 @@ export async function notifyDeliveryOrderSent(orm: Orm, order: { id: number; doN
   return createNotification(
     orm,
     { siteId: order.siteId, type: DO_SENT, severity: "INFO", title: DO_SENT_TITLE, body: order.doNo, data: { type: DO_SENT, deliveryOrderId: order.id } },
+    accounts.map((account) => account.id),
+    { inApp: true },
+    now,
+  );
+}
+
+/** A shipment request sent to its supplier: the active accounts of that company get one INFO notification. */
+export async function notifyShipmentRequestSent(
+  orm: Orm,
+  request: { id: number; contractNo: string; siteId: number; partnerId: number },
+  now: Date,
+): Promise<number | null> {
+  const accounts = await orm
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.kind, "PARTNER"), eq(users.partnerId, request.partnerId), eq(users.isActive, true)))
+    .orderBy(asc(users.id));
+  return createNotification(
+    orm,
+    {
+      siteId: request.siteId,
+      type: SHIPMENT_REQUEST_SENT,
+      severity: "INFO",
+      title: SHIPMENT_REQUEST_SENT_TITLE,
+      body: request.contractNo,
+      data: { type: SHIPMENT_REQUEST_SENT, shipmentRequestId: request.id },
+    },
     accounts.map((account) => account.id),
     { inApp: true },
     now,

@@ -137,6 +137,20 @@ describe("outgoing registration", () => {
     expect(filled.json().registration).toMatchObject({ status: "APPROVED", closeCargo: false, flexiBag: true });
   });
 
+  it("keeps the extra SPBE and the passport number a transporter may add per truck, as typed", async () => {
+    const { acceptedDo, registerOk, outgoing, trucks } = await setup();
+    const order = await acceptedDo(60_000);
+    const shown = await registerOk(
+      outgoing([{ deliveryOrderId: order.id }], 2, {
+        trips: [...trucks(1, { extraSpbe: " SPBE-CONTOH 12 ", passportNo: "SJ/CONTOH/001" }), ...trucks(1, { extraSpbe: "", passportNo: "  " }, 1)],
+      }),
+    );
+    expect(shown.trips.map((trip: { extraSpbe: string | null; passportNo: string | null }) => [trip.extraSpbe, trip.passportNo])).toEqual([
+      ["SPBE-CONTOH 12", "SJ/CONTOH/001"],
+      [null, null],
+    ]);
+  });
+
   it("refuses the same truck or driver twice, a DO that is not accepted or not the transporter's, and a quantity too small to split", async () => {
     const { acceptedDo, register, outgoing, vehicles, drivers, companies, count } = await setup();
     const order = await acceptedDo(30_000);
@@ -159,7 +173,7 @@ describe("outgoing registration", () => {
     expect(await count("registrations")).toBe(0);
   });
 
-  it("keeps one flow per registration and is open to transporters and registration staff, not to suppliers", async () => {
+  it("keeps one flow per registration and is open to the company the DO was sent to and registration staff, not to others", async () => {
     const { acceptedDo, register, registerOk, outgoing, products, companies } = await setup();
     const bulk = await acceptedDo(30_000);
     const boxes = await acceptedDo(30, { product: products.packed });
@@ -167,7 +181,10 @@ describe("outgoing registration", () => {
     expect(mixed.statusCode).toBe(400);
     expect(mixed.json().error.fields[0].field).toBe("allocations");
 
-    expect((await register(outgoing([{ deliveryOrderId: bulk.id }], 1), "pks1")).statusCode).toBe(403);
+    // a supplier is no longer refused by its company kind: the DO decides, and this one was not sent to it
+    const bySupplier = await register(outgoing([{ deliveryOrderId: bulk.id }], 1), "pks1");
+    expect(bySupplier.statusCode).toBe(409);
+    expect(bySupplier.json().error.code).toBe("DO_NOT_AVAILABLE");
     const byStaff = await registerOk(outgoing([{ deliveryOrderId: bulk.id }], 1), "pos");
     expect(byStaff).toMatchObject({ createdVia: "OPERATOR", transporter: { id: companies.transporter1 } });
 

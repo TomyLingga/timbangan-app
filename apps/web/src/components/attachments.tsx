@@ -32,6 +32,8 @@ export function attachmentErrorMessage(error: unknown): string {
   if (isApiError(error)) {
     if (error.code === "FILE_TOO_LARGE") return "Berkas terlalu besar: PDF paling besar 10 MB, gambar 5 MB.";
     if (error.code === "TOO_MANY_FILES" || error.code === "INVALID_STATE" || error.code === "DUPLICATE") return error.message;
+    // a sent shipment request keeps one file: add the new one first
+    if (error.code === "FILE_REQUIRED") return "Permintaan yang sudah dikirim harus tetap punya satu lampiran. Tambah berkas baru dulu, lalu hapus yang lama.";
     if (error.code === "VALIDATION") return Object.values(error.fieldMessages)[0] ?? "Berkas ditolak. Pilih PDF atau gambar JPEG, PNG, atau WebP.";
     if (error.code === "NETWORK_ERROR") return "Server tidak bisa dihubungi. Periksa sambungan, lalu coba lagi.";
     if (error.code === "FORBIDDEN") return "Akun Anda tidak berhak mengubah lampiran ini.";

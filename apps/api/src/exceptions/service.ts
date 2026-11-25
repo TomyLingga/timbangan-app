@@ -150,8 +150,20 @@ export function pendingSpoken(row: ExceptionRow): Spoken {
 export function decisionOf(row: ExceptionRow): string | null {
   if (row.status === "RETRY") return row.decisionCode;
   if (row.status === "APPROVED") return row.type === "NET_OUT" ? "OK" : "APPROVE";
-  if (row.status === "REJECTED") return "REJECT";
+  // before 0016 a refused weighbridge request had no code: the truck could weigh again, which is a hold
+  if (row.status === "REJECTED") return row.decisionCode ?? (row.type === "QC_HOLD" ? "REJECT" : "HOLD");
   return null;
+}
+
+/**
+ * The decisions an approver may take on this request (owner, 25 November 2026). Hold: the weighing is not
+ * saved and the truck may weigh again. Reject: the truck is turned away, so only before it was first weighed.
+ */
+export function allowedDecisions(row: Pick<ExceptionRow, "type" | "context">): string[] {
+  if (row.type === "NET_OUT") return ["OK", "ADD_LOAD", "REDUCE_LOAD"];
+  if (row.type === "QC_HOLD") return ["APPROVE", "REJECT"];
+  if (row.type === "NET_IN") return ["APPROVE", "HOLD"];
+  return (row.context as Partial<ExceptionContext>).stage === 2 ? ["APPROVE", "HOLD"] : ["APPROVE", "HOLD", "REJECT"];
 }
 
 const decider = alias(users, "exception_decider");
@@ -184,6 +196,7 @@ export async function loadExceptionViews(orm: Orm, where: SQL | undefined, limit
       type: row.type,
       status: row.status,
       decision: decisionOf(row),
+      options: row.status === "PENDING" ? allowedDecisions(row) : [],
       trip: { id: row.tripId, tripNo: joined.tripNo, plateNo: joined.tripPlate, plateDisplay: joined.plateDisplay },
       station: joined.stationId === null ? null : { id: joined.stationId, code: joined.stationCode, name: joined.stationName },
       stage: context.stage ?? null,

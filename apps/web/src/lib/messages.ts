@@ -117,6 +117,31 @@ export function gateErrorMessage(error: unknown): string {
   return errorMessage(error);
 }
 
+/** The sentence when the API names no contract: a supplier registers trucks only on a contract INL sent to it. */
+export const SHIPMENT_REQUEST_REQUIRED_TEXT =
+  "Kontrak ini belum dikirim INL ke perusahaan Anda. Truk hanya bisa didaftarkan untuk kontrak yang sudah dikirim. Hapus kontrak itu, atau tunggu permintaan pengiriman dari INL.";
+
+const SHIPMENT_REQUEST_REFUSALS: Record<string, string> = {
+  SHIPMENT_REQUEST_EXISTS: "Kontrak ini sudah punya permintaan pengiriman yang masih terbuka. Buka permintaan itu, atau pilih kontrak lain.",
+  FILE_REQUIRED: "Lampirkan dokumen kontrak sebelum permintaan dikirim.",
+  INVALID_STATE: "Status permintaan ini sudah berubah. Muat ulang halaman, lalu coba lagi.",
+};
+
+/** Saving, sending, closing or cancelling a shipment request. */
+export function shipmentRequestErrorMessage(error: unknown): string {
+  if (isApiError(error)) {
+    if (SHIPMENT_REQUEST_REFUSALS[error.code]) return SHIPMENT_REQUEST_REFUSALS[error.code];
+    if (error.code === "VALIDATION" || error.status === 400) {
+      const first = Object.values(error.fieldMessages)[0];
+      return first ? `Server menolak isian ini: ${first}` : "Server menolak isian ini. Periksa kolom yang ditandai, lalu coba lagi.";
+    }
+    if (error.status === 403 && error.code !== "NO_ACCESS") return "Akun ini tidak punya izin untuk tindakan ini.";
+    const text = refusalText(error);
+    if (text) return text;
+  }
+  return errorMessage(error);
+}
+
 const REGISTRATION_REFUSALS: Record<string, string> = {
   DRIVER_BLACKLISTED: "Supir ini masuk daftar hitam VCF, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
   DRIVER_BLOCKED: "Supir ini sedang diblokir di pabrik, jadi registrasi tidak bisa disimpan. Ganti supirnya.",
@@ -134,6 +159,8 @@ const REGISTRATION_REFUSALS: Record<string, string> = {
 export function registrationErrorMessage(error: unknown, unplaced: readonly string[] = []): string {
   if (isApiError(error)) {
     if (REGISTRATION_REFUSALS[error.code]) return REGISTRATION_REFUSALS[error.code];
+    // the API's sentence names the contract: "Kontrak ... belum dikirim INL ke perusahaan Anda. ..."
+    if (error.code === "SHIPMENT_REQUEST_REQUIRED") return error.message.trim() || SHIPMENT_REQUEST_REQUIRED_TEXT;
     if (error.code === "VALIDATION" || error.status === 400) {
       return unplaced.length > 0
         ? `Server menolak isian ini: ${unplaced.join(" ")}`

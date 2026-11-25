@@ -22,6 +22,8 @@ interface ContractLookupProps {
   error?: string;
   hint?: string;
   className?: string;
+  /** Only contracts with a shipment request sent to the supplier (what a supplier account may register on). */
+  requestSent?: boolean;
 }
 
 /** Searchable choice of one open contract, from GET /api/contracts. */
@@ -38,6 +40,7 @@ export function ContractLookup({
   error,
   hint,
   className,
+  requestSent = false,
 }: ContractLookupProps) {
   const excluded = new Set(exclude.map(String));
   return (
@@ -49,10 +52,10 @@ export function ContractLookup({
       error={error}
       hint={hint}
       className={className}
-      scope={`${direction}|${[...excluded].join(",")}`}
+      scope={`${direction}|${requestSent}|${[...excluded].join(",")}`}
       search={async (text, signal) => {
         const page = await api.request<ContractList>("/api/contracts", {
-          query: { direction, q: text, limit: OPTION_LIMIT + excluded.size },
+          query: { direction, q: text, limit: OPTION_LIMIT + excluded.size, ...(requestSent ? { requestSent: "true" } : {}) },
           signal,
         });
         const items = page.items.filter((contract) => !excluded.has(String(contract.id))).slice(0, OPTION_LIMIT);

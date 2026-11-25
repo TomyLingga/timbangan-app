@@ -18,6 +18,7 @@ import { formatDateTime } from "@/lib/format";
 import {
   DO_SENT,
   EXCEPTION_RAISED,
+  SHIPMENT_REQUEST_SENT,
   WAITING_LIMIT,
   bellBadge,
   bellLabel,
@@ -60,7 +61,7 @@ function Entry({ item, href, now, onFollow }: { item: NotificationItem; href: st
   const unread = item.readAt === null;
   const state = requestStateText(item);
   // the body of the known types is a document or trip number
-  const codeBody = item.type === DO_SENT || item.type === EXCEPTION_RAISED;
+  const codeBody = item.type === DO_SENT || item.type === EXCEPTION_RAISED || item.type === SHIPMENT_REQUEST_SENT;
   const content = (
     <>
       <span

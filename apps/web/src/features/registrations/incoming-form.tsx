@@ -7,9 +7,10 @@ import { X } from "lucide-react";
 import { AttachmentList, type ListedFile } from "@/components/attachments";
 import { ContractLookup } from "@/components/contract-lookup";
 import { TextAreaField, TextField } from "@/components/form-fields";
-import { ListError, ListSkeleton, PageHeader } from "@/components/page-parts";
+import { ListError, ListSkeleton, Notice, PageHeader } from "@/components/page-parts";
 import { TransporterLookup } from "@/components/partner-lookup";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/features/auth/auth-provider";
 import { dropErrors, FormSection, SubmitBar, focusFirstInvalid } from "@/features/registrations/form-parts";
 import { lookUpDriver, lookUpVehicle, TruckFields } from "@/features/registrations/truck-fields";
 import { useApiQuery } from "@/hooks/use-api-query";
@@ -17,9 +18,10 @@ import { MAX_TRIP_SLIPS } from "@/lib/attachments";
 import { formatNumber, formatQuantity } from "@/lib/format";
 import { isApiError } from "@/lib/api-client";
 import { registrationErrorMessage } from "@/lib/messages";
+import { isStaff } from "@/lib/permissions";
 import { documentTotals, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
-import type { Contract, PartnerRef, QualityParameter, Registration, UploadedFile, VehicleType } from "@/lib/types";
+import type { Contract, ContractList, PartnerRef, QualityParameter, Registration, UploadedFile, VehicleType } from "@/lib/types";
 import {
   emptyLetter,
   emptyTruck,
@@ -36,7 +38,8 @@ export function plantToday(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
 }
 
-function LetterFields({
+/** The letter of the mill for one contract of an incoming truck; also filled from a scanned letter at the post. */
+export function LetterFields({
   index,
   contract,
   letter,
@@ -103,16 +106,25 @@ function IncomingFormBody({
   types,
   parameters,
   draft,
+  supplier,
+  chosenContract,
+  contractMissing,
 }: {
   types: VehicleType[];
   parameters: QualityParameter[];
   /** A draft to change with PUT; without it the form creates a registration. */
   draft: Registration | null;
+  /** A supplier account: only contracts with a shipment request sent to it are offered. */
+  supplier: boolean;
+  /** The contract of the shipment request the form was opened from (`?kontrak=`). */
+  chosenContract: Contract | null;
+  /** The address named a contract that is not offered any more. */
+  contractMissing: boolean;
 }) {
   const router = useRouter();
   const [initial] = useState(() => (draft ? incomingFromDraft(draft, parameters) : null));
-  const [contracts, setContracts] = useState<Contract[]>(initial?.contracts ?? []);
-  const [letters, setLetters] = useState<LetterValues[]>(initial?.letters ?? []);
+  const [contracts, setContracts] = useState<Contract[]>(initial?.contracts ?? (chosenContract ? [chosenContract] : []));
+  const [letters, setLetters] = useState<LetterValues[]>(initial?.letters ?? (chosenContract ? [emptyLetter(parameters)] : []));
   const [transporter, setTransporter] = useState<PartnerRef | null>(initial?.transporter ?? null);
   const [plannedDate, setPlannedDate] = useState(initial?.plannedDate || plantToday());
   const [truck, setTruck] = useState<TruckValues>(() => initial?.truck ?? emptyTruck("truck"));
@@ -191,13 +203,23 @@ function IncomingFormBody({
         description="Satu registrasi untuk satu truk. Truk boleh membawa beberapa kontrak dari partner yang sama."
       />
 
-      <FormSection title="1. Kontrak" description="Kontrak beli yang masih terbuka.">
+      <FormSection
+        title="1. Kontrak"
+        description={
+          supplier ? "Kontrak beli yang permintaan pengirimannya sudah dikirim INL ke perusahaan Anda." : "Kontrak beli yang masih terbuka."
+        }
+      >
+        {contractMissing ? (
+          <Notice tone="warning">Kontrak dari permintaan pengiriman ini tidak bisa dipakai lagi, mungkin permintaannya sudah ditutup. Pilih kontrak dari daftar.</Notice>
+        ) : null}
         <ContractLookup
           direction="IN"
           label="Tambah kontrak"
           name="contractLookup"
           placeholder="Cari nomor kontrak"
           value={null}
+          requestSent={supplier}
+          hint={supplier ? "Kontrak yang belum dikirim INL tidak muncul di sini." : undefined}
           exclude={contracts.map((contract) => contract.id)}
           error={errors.contracts}
           onSelect={(contract) => {
@@ -342,24 +364,51 @@ function IncomingFormBody({
   );
 }
 
-/** Loads the vehicle types and quality parameters the form depends on. */
-export function IncomingForm({ draft = null }: { draft?: Registration | null }) {
+/** Contracts with a shipment request sent to the supplier read at once to find the one named in the address. */
+const SENT_CONTRACT_LIMIT = 50;
+
+/**
+ * Loads the vehicle types and quality parameters the form depends on, and the contract named by `contractId`
+ * (a supplier opening the form from a shipment request).
+ */
+export function IncomingForm({ draft = null, contractId = null }: { draft?: Registration | null; contractId?: string | null }) {
+  const { state } = useAuth();
+  const supplier = state.status === "authenticated" && !isStaff(state.user);
   const types = useApiQuery("vehicle-types", (signal) => api.request<{ items: VehicleType[] }>("/api/vehicle-types", { signal }));
   const parameters = useApiQuery("quality-parameters", (signal) =>
     api.request<{ items: QualityParameter[] }>("/api/quality-parameters", { signal }),
   );
-  if (types.hasError || parameters.hasError) {
+  const named = contractId && !draft ? contractId : null;
+  const sent = useApiQuery(named ? `sent-contracts|${supplier}` : null, (signal) =>
+    api.request<ContractList>("/api/contracts", {
+      query: { direction: "IN", limit: SENT_CONTRACT_LIMIT, ...(supplier ? { requestSent: "true" } : {}) },
+      signal,
+    }),
+  );
+  const failure = types.hasError ? types.error : parameters.hasError ? parameters.error : sent.hasError ? sent.error : null;
+  if (failure) {
     return (
       <ListError
         title="Form registrasi belum bisa dibuka"
-        error={types.error ?? parameters.error}
+        error={failure}
         onRetry={() => {
           types.reload();
           parameters.reload();
+          sent.reload();
         }}
       />
     );
   }
-  if (!types.data || !parameters.data) return <ListSkeleton label="Menyiapkan form registrasi" />;
-  return <IncomingFormBody types={types.data.items} parameters={parameters.data.items} draft={draft} />;
+  if (!types.data || !parameters.data || (named && !sent.data)) return <ListSkeleton label="Menyiapkan form registrasi" />;
+  const chosen = named ? (sent.data?.items.find((contract) => String(contract.id) === named) ?? null) : null;
+  return (
+    <IncomingFormBody
+      types={types.data.items}
+      parameters={parameters.data.items}
+      draft={draft}
+      supplier={supplier}
+      chosenContract={chosen}
+      contractMissing={Boolean(named) && chosen === null}
+    />
+  );
 }

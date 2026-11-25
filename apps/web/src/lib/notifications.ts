@@ -9,7 +9,7 @@ export type NotificationSeverity = "INFO" | "WARNING" | "ALARM";
 
 export interface NotificationItem {
   id: number | string;
-  /** EXCEPTION_RAISED and DO_SENT today; any other value is shown as a plain entry. */
+  /** EXCEPTION_RAISED, DO_SENT and SHIPMENT_REQUEST_SENT today; any other value is shown as a plain entry. */
   type: string;
   severity: NotificationSeverity | string;
   title: string;
@@ -43,6 +43,8 @@ export interface NotificationsReadAll {
 
 export const EXCEPTION_RAISED = "EXCEPTION_RAISED";
 export const DO_SENT = "DO_SENT";
+/** A shipment request sent to the supplier's accounts (API migration 0017); its body is the contract number. */
+export const SHIPMENT_REQUEST_SENT = "SHIPMENT_REQUEST_SENT";
 
 /** The query parameter of /keputusan that opens one request. */
 export const DECISION_PARAM = "permintaan";
@@ -59,13 +61,17 @@ function dataValue(item: NotificationItem, key: string): string | number | null 
 }
 
 /**
- * The page an entry leads to, or null when it leads nowhere: a delivery order to its page, a request to where it
- * is decided (only for an account that may open Keputusan), anything else nowhere.
+ * The page an entry leads to, or null when it leads nowhere: a delivery order or a shipment request to its page, a
+ * request for a decision to where it is decided (only for an account that may open Keputusan), anything else nowhere.
  */
 export function notificationTarget(item: NotificationItem, access: { canOpenDecisions: boolean }): string | null {
   if (item.type === DO_SENT) {
     const id = dataValue(item, "deliveryOrderId");
     return id === null || id === "" ? null : `/delivery-order/${encodeURIComponent(String(id))}`;
+  }
+  if (item.type === SHIPMENT_REQUEST_SENT) {
+    const id = dataValue(item, "shipmentRequestId");
+    return id === null || id === "" ? null : `/permintaan-pengiriman/${encodeURIComponent(String(id))}`;
   }
   if (item.type === EXCEPTION_RAISED) {
     if (!access.canOpenDecisions) return null;

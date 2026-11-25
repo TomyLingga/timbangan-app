@@ -42,7 +42,7 @@ const permissionsOf = async (database: Database, id: number) =>
 const EVERY_ACTIVE_MODULE = {
   contracts: "EDIT", delivery_orders: "EDIT", drivers: "EDIT", gate: "EDIT", registrations: "EDIT", rfid_cards: "EDIT", users: "EDIT", vehicles: "EDIT",
   weighbridge: "EDIT", approvals: "EDIT", qc: "EDIT", qc_approvals: "EDIT", security_check: "EDIT", unloading: "EDIT", loading: "EDIT", sealing: "EDIT", reports: "VIEW", plant_masters: "EDIT",
-  dashboard: "VIEW", gps: "EDIT", gate_emergency: "VIEW",
+  dashboard: "VIEW", gps: "EDIT", gate_emergency: "VIEW", shipment_requests: "EDIT",
 };
 
 describe("createUser", () => {
@@ -73,7 +73,7 @@ describe("createUser", () => {
       (await createUser(database.db, { username, fullName: username, kind: "PARTNER", partnerId, password: "s3cret-s3cret" })).id;
 
     // every truck owner may follow its trucks (gps VIEW), whatever the kinds of its company
-    const supplier = { contracts: "VIEW", drivers: "CREATE", gps: "VIEW", registrations: "CREATE", vehicles: "CREATE" };
+    const supplier = { contracts: "VIEW", drivers: "CREATE", gps: "VIEW", registrations: "CREATE", shipment_requests: "VIEW", vehicles: "CREATE" };
     const deliveries = { delivery_orders: "EDIT", drivers: "CREATE", gps: "VIEW", registrations: "CREATE", vehicles: "CREATE" };
     expect(await permissionsOf(database, await make("pks", await company("PKS A", "is_supplier")))).toEqual(supplier);
     expect(await permissionsOf(database, await make("angkut", await company("Angkut T", "is_transporter")))).toEqual(deliveries);

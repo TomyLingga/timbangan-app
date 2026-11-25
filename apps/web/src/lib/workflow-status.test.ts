@@ -5,6 +5,8 @@ import {
   cardSaveErrorMessage,
   gateErrorMessage,
   registrationErrorMessage,
+  SHIPMENT_REQUEST_REQUIRED_TEXT,
+  shipmentRequestErrorMessage,
   transitionErrorMessage,
 } from "@/lib/messages";
 import {
@@ -22,8 +24,8 @@ const error = (status: number, code: string) => new ApiError(status, code, "engl
 describe("status labels", () => {
   it("labels every delivery order status", () => {
     expect(deliveryOrderStatusInfo("DRAFT")).toEqual({ label: "Draf", tone: "neutral" });
-    expect(deliveryOrderStatusInfo("SENT")).toEqual({ label: "Menunggu transporter", tone: "warning" });
-    expect(deliveryOrderStatusInfo("ACCEPTED")).toEqual({ label: "Diterima transporter", tone: "success" });
+    expect(deliveryOrderStatusInfo("SENT")).toEqual({ label: "Menunggu diterima", tone: "warning" });
+    expect(deliveryOrderStatusInfo("ACCEPTED")).toEqual({ label: "Diterima", tone: "success" });
     expect(deliveryOrderStatusInfo("CLOSED")).toEqual({ label: "Tutup", tone: "neutral" });
     expect(deliveryOrderStatusInfo("CANCELLED")).toEqual({ label: "Batal", tone: "destructive" });
   });
@@ -157,6 +159,12 @@ describe("registrationErrorMessage", () => {
     );
   });
 
+  it("says plainly that a contract was not sent by INL, with the contract the API names", () => {
+    const named = "Kontrak PC-CONTOH-01 belum dikirim INL ke perusahaan Anda. Truk hanya bisa didaftarkan untuk kontrak yang sudah dikirim.";
+    expect(registrationErrorMessage(new ApiError(409, "SHIPMENT_REQUEST_REQUIRED", named))).toBe(named);
+    expect(registrationErrorMessage(new ApiError(409, "SHIPMENT_REQUEST_REQUIRED", " "))).toBe(SHIPMENT_REQUEST_REQUIRED_TEXT);
+  });
+
   it("no longer knows the codes only the mock had", () => {
     for (const code of ["FLOW_MISMATCH", "TOO_MANY_ALLOCATIONS", "CONTRACT_NOT_OPEN", "DELIVERY_ORDER_NOT_OPEN", "DUPLICATE_IN_REGISTRATION"]) {
       expect(registrationErrorMessage(new ApiError(409, code, "Teks server."))).toBe("Teks server.");
@@ -188,5 +196,19 @@ describe("cardSaveErrorMessage", () => {
     expect(cardSaveErrorMessage(error(409, "INVALID_STATE"))).toBe(
       "Kartu ini sedang terikat ke truk, jadi statusnya belum bisa diubah.",
     );
+  });
+});
+
+describe("shipmentRequestErrorMessage", () => {
+  it("explains the refusals of a shipment request", () => {
+    expect(shipmentRequestErrorMessage(error(409, "SHIPMENT_REQUEST_EXISTS"))).toBe(
+      "Kontrak ini sudah punya permintaan pengiriman yang masih terbuka. Buka permintaan itu, atau pilih kontrak lain.",
+    );
+    expect(shipmentRequestErrorMessage(error(409, "FILE_REQUIRED"))).toBe("Lampirkan dokumen kontrak sebelum permintaan dikirim.");
+    expect(shipmentRequestErrorMessage(error(409, "INVALID_STATE"))).toBe("Status permintaan ini sudah berubah. Muat ulang halaman, lalu coba lagi.");
+    expect(shipmentRequestErrorMessage(new ApiError(400, "VALIDATION", "x", ["contractId"], { contractId: "Kontrak beli tidak ditemukan atau tidak terbuka." }))).toBe(
+      "Server menolak isian ini: Kontrak beli tidak ditemukan atau tidak terbuka.",
+    );
+    expect(shipmentRequestErrorMessage(error(403, "FORBIDDEN"))).toBe("Akun ini tidak punya izin untuk tindakan ini.");
   });
 });

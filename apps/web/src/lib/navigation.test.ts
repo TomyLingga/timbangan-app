@@ -58,6 +58,21 @@ describe("navigationFor", () => {
     ]);
   });
 
+  it("adds Permintaan pengiriman after Registrasi for staff and for a supplier with the module", () => {
+    expect(navigationFor(staff({ registrations: "VIEW", shipment_requests: "EDIT", delivery_orders: "VIEW" }))).toEqual([
+      "/",
+      "/registrasi",
+      "/permintaan-pengiriman",
+      "/delivery-order",
+    ]);
+    expect(navigationFor(partner({ contracts: "VIEW", shipment_requests: "VIEW", registrations: "CREATE" }))).toEqual([
+      "/",
+      "/registrasi",
+      "/permintaan-pengiriman",
+      "/kontrak",
+    ]);
+  });
+
   it("keeps the staff-only pages from partner accounts whatever their level", () => {
     // the driver list and the post list trips of every company, so the API refuses partners
     expect(navigationFor(partner({ drivers: "EDIT", gate: "EDIT" }))).toEqual(["/"]);

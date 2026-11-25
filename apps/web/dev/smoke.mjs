@@ -1,8 +1,11 @@
 // End-to-end smoke check of the built app against dev/mock-api.mjs, driven
 // through a headless Edge or Chrome over the DevTools protocol. No dependencies.
 //
-//   NEXT_PUBLIC_API_URL=http://localhost:3110 npm run build
+//   NEXT_PUBLIC_API_URL=http://localhost:3110 NEXT_PUBLIC_SCANNER_URL=http://127.0.0.1:3290 npm run build
 //   node dev/smoke.mjs
+//
+// SMOKE_ONLY=gps, SMOKE_ONLY=pos or SMOKE_ONLY=pengiriman runs one part alone against a fresh mock. The pos part plays the scanner
+// helper of the post PC on 127.0.0.1:3290 (SMOKE_SCANNER_PORT), with the protocol of the old application's helper.
 //
 // The script starts the mock API and `next start` on its own ports, so it does
 // not collide with a real API on 3100 or a dev server on 3000. Screenshots go
@@ -10,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdir, rm } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +25,8 @@ const WEB_PORT = Number(process.env.SMOKE_WEB_PORT ?? 3210);
 const API_PORT = Number(process.env.SMOKE_API_PORT ?? 3110);
 const WEB = `http://localhost:${WEB_PORT}`;
 const API = `http://localhost:${API_PORT}`;
+const SCANNER_PORT = Number(process.env.SMOKE_SCANNER_PORT ?? 3290);
+const SCANNER = `http://127.0.0.1:${SCANNER_PORT}`;
 // SMOKE_MODE=dev runs `next dev` instead of the build, which also exercises
 // React Strict Mode (every effect mounts twice). Pages compile on first visit,
 // so waits are longer.
@@ -88,6 +94,16 @@ async function run(browser) {
     await gpsTracking(browser);
     await driverSharing(browser);
     await destinationPins(browser);
+    return;
+  }
+  // SMOKE_ONLY=pos runs only the checks of the registration post without a barcode, against a fresh mock.
+  if (process.env.SMOKE_ONLY === "pos") {
+    await postWithoutBarcode(browser);
+    return;
+  }
+  // SMOKE_ONLY=pengiriman runs only the shipment requests, the DO to a customer and the Berita Acara print.
+  if (process.env.SMOKE_ONLY === "pengiriman") {
+    await shipmentAndCustomer(browser);
     return;
   }
   // 1. Server HTML of the sign-in page.
@@ -489,7 +505,7 @@ async function run(browser) {
   await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Sistem Contoh')");
   await browser.click('a[href="/pengguna"]');
-  check("/pengguna lists the accounts", (await browser.waitFor(visibleRows)) === 10);
+  check("/pengguna lists the accounts", (await browser.waitFor(visibleRows)) === 12);
   check("the page says what it is for", Boolean(await browser.hasText("belum punya hak akses")));
   await browser.type('input[type="search"]', "staf.baru", { perKey: true });
   await browser.waitFor(`${visibleRows} === 1 && ${rowText("Staf Baru Contoh")} !== ''`);
@@ -667,6 +683,7 @@ async function run(browser) {
   await gpsTracking(browser);
   await driverSharing(browser);
   await destinationPins(browser);
+  await shipmentAndCustomer(browser);
 }
 
 /**
@@ -1017,11 +1034,20 @@ async function phaseThree(browser) {
   check("a delivery order made from a contract gets a generated number", /^\d{3}\/DO\/CTH\/[IVX]+\/\d{4}$/.test(doNo), doNo);
   check("the new delivery order is listed as draft with its customer", (await browser.evaluate(rowText(doNo))).includes("Customer Contoh A") && (await browser.evaluate(rowText(doNo))).includes("Draf"));
   await browser.click(`button[aria-label="Tindakan ${doNo}"]`);
-  await browser.click("Kirim ke transporter");
+  await browser.click("Kirim DO");
+  check(
+    "the send sheet starts on Transporter with the transporter of the DO chosen",
+    Boolean(
+      await browser.waitFor(
+        `[...document.querySelectorAll('[role="dialog"] button[aria-pressed="true"]')].some((button) => button.innerText.trim() === 'Transporter') && (document.querySelector('[role="dialog"]')?.innerText ?? '').includes('Transporter Contoh A')`,
+      ),
+    ),
+  );
   await browser.click(inSheet('button[type="submit"]'));
   check(
     "the delivery order is sent to the transporter",
-    Boolean(await browser.hasText(`DO ${doNo} dikirim ke Transporter Contoh A.`)) && Boolean(await browser.waitFor(`${rowText(doNo)}.includes('Menunggu transporter')`)),
+    Boolean(await browser.hasText(`DO ${doNo} dikirim ke Transporter Contoh A.`)) &&
+      Boolean(await browser.waitFor(`${rowText(doNo)}.includes('Menunggu diterima') && ${rowText(doNo)}.includes('Transporter: Transporter Contoh A')`)),
   );
   await browser.screenshot("23-do-admin-light");
 
@@ -1075,15 +1101,10 @@ async function phaseThree(browser) {
     newDriver: { fullName: "Supir Uji Tiga" },
   });
   await fillTruck(browser, { scope: '[data-truck="4"]', prefix: "trucks.3", plate: "ZZ 9102 UJI", licence: "CONTOH0006", newVehicle: { type: "TANGKI" } });
-  const postsBefore = await stat("POST /api/registrations");
-  await browser.click("Kirim registrasi");
   check(
-    "close cargo and flexi bag are required when sending",
-    Boolean(await browser.waitFor(`document.querySelectorAll('fieldset[aria-invalid="true"]').length === 2`)) &&
-      (await stat("POST /api/registrations")) === postsBefore,
+    "the transporter's outgoing form asks neither close cargo nor flexi bag (the post marks them at check-in)",
+    !(await browser.evaluate(`Boolean(document.querySelector('input[name="closeCargo"], input[name="flexiBag"]'))`)),
   );
-  await browser.click('label:has(input[name="closeCargo"][value="yes"])');
-  await browser.click('label:has(input[name="flexiBag"][value="no"])');
   await browser.screenshot("25-registrasi-outgoing-light");
   await browser.click("Kirim registrasi");
   const outgoingRegistration = await browser.waitFor("location.pathname.startsWith('/registrasi/r-') && location.pathname");
@@ -1154,6 +1175,16 @@ async function phaseThree(browser) {
   await browser.pressEnter();
   check("an unknown SPJ is refused in plain words", Boolean(await browser.hasText("Kode SPJ ini tidak dikenal.")));
   await browser.click('button[aria-label="Periksa ZZ 9101 UJI"]');
+  check(
+    "a bulk outgoing truck the transporter registered asks the post for close cargo and flexi bag before the card",
+    Boolean(
+      await browser.waitFor(
+        `Boolean(document.querySelector('[data-testid="gate-marks"]')) && !document.querySelector('#gate-card') && document.activeElement?.name === 'closeCargo' && !document.querySelector('[data-testid="gate-marks"] input:checked')`,
+      ),
+    ),
+  );
+  await browser.click('[data-testid="gate-marks"] label:has(input[name="closeCargo"][value="yes"])');
+  await browser.click('[data-testid="gate-marks"] label:has(input[name="flexiBag"][value="no"])');
   await browser.waitFor("document.activeElement?.id === 'gate-card'");
   check(
     "a warning is shown apart from blocking checks",
@@ -1294,6 +1325,13 @@ async function phaseFour(browser) {
   check("the list refreshes by itself while the tab is visible", (await stat("GET /api/exceptions")) > listCalls);
   await browser.click('button[aria-label^="Rincian Selisih bruto"]');
   await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`);
+  const decideButtons = await browser.evaluate(`[...document.querySelectorAll('[data-testid="approval-decide"] button')].map((button) => button.innerText.trim()).join(' | ')`);
+  check("a request at the first weighing offers Setujui, Mundur/hold and Tolak truk", decideButtons === "Setujui | Mundur/hold | Tolak truk", decideButtons);
+  await browser.click("Tolak truk");
+  check(
+    "turning the truck away needs a reason before it is sent",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="approval-decide"]')}.includes('Isi alasan')`)) && (await stat("POST /api/exceptions/:id/decide")) === 0,
+  );
   await browser.click("Setujui");
   check("a weight difference needs a reason before it is sent", Boolean(await browser.hasText("Isi alasan, minimal 3 huruf.")) && (await stat("POST /api/exceptions/:id/decide")) === 0);
   await browser.fill(inSheet('textarea[name="decisionReason"]'), "Selisih karena hujan (uji)");
@@ -1301,6 +1339,10 @@ async function phaseFour(browser) {
   check(
     "the approval saves the weighing with a Berita Acara",
     Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Disetujui') && document.querySelector('[data-testid="approval-outcome"]').innerText.includes('BA-SELISIH-BRUTO')`)),
+  );
+  check(
+    "an approved request with a Berita Acara links to its print page",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="report-print-link"]')?.getAttribute('href') ?? '').startsWith('/berita-acara/')`)),
   );
   await browser.pressEscape();
   await browser.waitFor(`!document.querySelector('[role="dialog"]') && ${visibleRows} === 3`);
@@ -1312,14 +1354,14 @@ async function phaseFour(browser) {
   await fetch(`${API}/api/exceptions/${tare.id}/decide`, {
     method: "POST",
     headers: { authorization: `Bearer ${await apiSession("admin.contoh")}`, "content-type": "application/json" },
-    body: JSON.stringify({ decision: "REJECT", reason: "Diputuskan di tempat lain (uji)" }),
+    body: JSON.stringify({ decision: "HOLD", reason: "Diputuskan di tempat lain (uji)" }),
   });
   await browser.fill(inSheet('textarea[name="decisionReason"]'), "Tarra sesuai (uji)");
   await browser.click("Setujui");
   check(
     "a request decided elsewhere is refused in plain words and shows its decision",
     Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-refusal"]')?.innerText ?? '').includes('sudah diputuskan orang lain')`)) &&
-      Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Ditolak')`)),
+      Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Mundur/hold')`)),
   );
   await browser.screenshot("31-keputusan-ditolak-server-light");
   await browser.pressEscape();
@@ -2214,6 +2256,514 @@ async function driverSharing(browser) {
 }
 
 /** Waits until the mock has answered `route` at least `count` times. */
+// --- the registration post without a barcode: marks at check-in, scanned documents, the emergency path ----------
+
+/**
+ * Plays the scanner helper of the post PC (tools/scanner-helper of the old application): GET /status and
+ * GET /scan, with the same CORS headers. Records every request so the checks see what the browser sent.
+ */
+function startFakeScanner(jpeg) {
+  const requests = [];
+  const cors = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET, OPTIONS",
+    "access-control-allow-headers": "*",
+    "access-control-expose-headers": "X-Scan-Seconds",
+    "cache-control": "no-store",
+  };
+  const server = createServer((request, response) => {
+    requests.push(`${request.method} ${request.url}`);
+    if (request.method === "OPTIONS") {
+      response.writeHead(204, cors);
+      response.end();
+      return;
+    }
+    const url = new URL(request.url ?? "/", SCANNER);
+    const json = (status, body) => {
+      response.writeHead(status, { ...cors, "content-type": "application/json; charset=utf-8" });
+      response.end(JSON.stringify(body));
+    };
+    const device = { id: "uji-1", name: "Scanner Uji" };
+    if (url.pathname === "/status") {
+      json(200, { ok: true, version: "uji", dpi: 200, scanners: [device], selected: { ...device, feeder: true, feeder_ready: true }, scanner: device.name, feeder_ready: true });
+    } else if (url.pathname === "/scan") {
+      response.writeHead(200, { ...cors, "content-type": "image/jpeg", "x-scan-seconds": "1.2" });
+      response.end(jpeg);
+    } else {
+      json(404, { ok: false, message: "Endpoint tidak ada." });
+    }
+  });
+  return new Promise((resolve) => server.listen(SCANNER_PORT, "127.0.0.1", () => resolve({ requests, close: () => new Promise((done) => server.close(done)) })));
+}
+
+/** A made-up scanned page drawn in the browser, as JPEG bytes in base64. */
+const DRAW_SCAN = `(() => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 360;
+  canvas.height = 480;
+  const pen = canvas.getContext('2d');
+  pen.fillStyle = '#ffffff';
+  pen.fillRect(0, 0, 360, 480);
+  pen.fillStyle = '#222222';
+  pen.font = '18px sans-serif';
+  pen.fillText('DOKUMEN UJI', 24, 44);
+  for (let line = 0; line < 14; line += 1) pen.fillRect(24, 80 + line * 26, 180 + (line % 4) * 30, 8);
+  return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+})()`;
+
+/** Chooses a scanned page in the file picker of the post; the name picks what the mock's reading service answers. */
+async function chooseScan(browser, base64, name) {
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="scan-source"] input[type="file"]'))`);
+  await browser.evaluate(`(() => {
+    const input = document.querySelector('[data-testid="scan-source"] input[type="file"]');
+    const bytes = Uint8Array.from(atob(${JSON.stringify(base64)}), (char) => char.charCodeAt(0));
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([bytes], ${JSON.stringify(name)}, { type: "image/jpeg" }));
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  })()`);
+}
+
+async function apiCall(token, method, route, body) {
+  const response = await fetch(`${API}${route}`, {
+    method,
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const answer = await response.json();
+  if (!response.ok) throw new Error(`${method} ${route} answered ${response.status}: ${JSON.stringify(answer)}`);
+  return answer;
+}
+
+const walkInText = textOf('[data-testid="walk-in"]');
+
+/**
+ * The owner's flow of 25 November 2026 (API migrations 0016 and 0017): a shipment request sent to a supplier with the
+ * contract PDF, the supplier registering on that contract only, a DO sent to its customer and the customer's trucks
+ * with the two free texts, and the printed Berita Acara with two signers.
+ */
+async function shipmentAndCustomer(browser) {
+  let adminToken = await apiSession("admin.contoh");
+  const requestsBefore = (await apiGet(adminToken, "/api/shipment-requests?limit=50")).total;
+
+  // 60. Staff: a request on the kernel contract of PKS Contoh B, the PDF attached, then sent.
+  await staffSignIn(browser, "admin.contoh");
+  check("Permintaan pengiriman sits after Registrasi in the staff menu", (await menuLinks(browser)).includes("/registrasi /permintaan-pengiriman /delivery-order"));
+  await browser.click('a[href="/permintaan-pengiriman"]');
+  check(
+    "/permintaan-pengiriman lists the requests with their status",
+    Boolean(await browser.waitFor(`location.pathname === '/permintaan-pengiriman' && ${visibleRows} === ${requestsBefore} && ${rowText("0123/CONTOH")}.includes('Terkirim')`)),
+  );
+  await browser.click("Permintaan baru");
+  await pickOption(browser, inSheet('input[name="contractLookup"]'), "0126/CONTOH");
+  await browser.fill(inSheet('input[name="qtyPlanned"]'), "50000");
+  await browser.fill(inSheet('input[name="deliveryUntil"]'), isoDate(1));
+  await browser.click(inSheet('button[type="submit"]'));
+  const requestPath = await browser.waitFor("location.pathname.startsWith('/permintaan-pengiriman/sr-') && location.pathname");
+  check(
+    "a new request opens as a draft and asks for the contract PDF",
+    Boolean(requestPath) &&
+      Boolean(await browser.hasText("Permintaan dibuat sebagai draf. Lampirkan PDF kontrak, lalu kirim ke supplier.")) &&
+      (await browser.evaluate(textOf('[data-testid="request-facts"]'))).includes("PKS Contoh B"),
+  );
+  await browser.click("Kirim ke supplier");
+  check("only the send sheet is open: the form of the new request closed on the way", (await browser.waitFor(`document.querySelectorAll('[role="dialog"]').length`)) === 1);
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "a request without the PDF is not sent",
+    Boolean(await browser.waitFor(`(document.querySelector('[role="dialog"]')?.innerText ?? '').includes('Lampirkan dokumen kontrak sebelum permintaan dikirim.')`)) &&
+      (await stat("POST /api/shipment-requests/:id/send")) === 0,
+  );
+  await browser.pressEscape();
+  await browser.waitFor(`!document.querySelector('[role="dialog"]')`);
+  await chooseFile(browser, '[data-testid="request-files"]', { name: "kontrak-kernel-uji.pdf", type: "application/pdf", text: PDF_TEXT });
+  check(
+    "the contract PDF is attached like a DO letter",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="request-files"]')}.includes('kontrak-kernel-uji.pdf')`)) && (await stat("POST /api/shipment-requests/:id/files")) === 1,
+  );
+  await browser.click("Kirim ke supplier");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "the request is sent to the supplier",
+    Boolean(await browser.hasText("Permintaan 0126/CONTOH/PK/XI/2026 dikirim ke PKS Contoh B.")) && Boolean(await browser.waitFor(`${textOf("main")}.includes('Terkirim')`)),
+  );
+  await browser.screenshot("60-permintaan-pengiriman-light");
+  await signOut(browser);
+
+  // 61. Supplier: the bell leads to the request, the PDF opens, and the form offers only that contract.
+  await partnerSignIn(browser, "pks.contoh.b");
+  check("a supplier has Permintaan pengiriman in its menu", (await menuLinks(browser)).includes("/permintaan-pengiriman"));
+  await browser.click('[data-testid="notifications-bell"]');
+  check(
+    "the bell entry of the request leads to its page",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const entry = ${panelEntry("0126/CONTOH/PK/XI/2026")};
+        return Boolean(entry) && entry.innerText.includes('Permintaan pengiriman baru') && entry.tagName === 'A' && entry.getAttribute('href') === ${JSON.stringify(requestPath)};
+      })()`),
+    ),
+  );
+  await browser.evaluate(`${panelEntry("0126/CONTOH/PK/XI/2026")}.setAttribute('data-smoke', 'follow'); true`);
+  await browser.click('[data-smoke="follow"]');
+  check(
+    "the supplier sees the request with its PDF and a way to register trucks",
+    Boolean(await browser.waitFor(`location.pathname === ${JSON.stringify(requestPath)} && ${textOf('[data-testid="request-files"]')}.includes('kontrak-kernel-uji.pdf')`)) &&
+      Boolean(await browser.waitFor(`Boolean([...document.querySelectorAll('main a')].find((a) => a.innerText.trim() === 'Daftarkan truk'))`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="request-files"] button[aria-label^="Hapus"]'))`)),
+  );
+  const supplierToken = await partnerApiSession("pks.contoh.b");
+  const pdf = (await apiGet(supplierToken, `/api/shipment-requests/${requestPath.split("/").at(-1)}`)).files?.[0];
+  const pdfAnswer = await fetch(`${API}/api/files/${pdf?.id}`, { headers: { authorization: `Bearer ${supplierToken}` } });
+  check("the supplier may read the contract PDF", pdfAnswer.status === 200 && (await pdfAnswer.text()).startsWith("%PDF"));
+  await browser.click("Daftarkan truk");
+  check(
+    "the incoming form opens with the contract of the request chosen",
+    Boolean(await browser.waitFor(`location.search.includes('kontrak=') && (document.querySelector('[aria-label="Kontrak terpilih"]')?.innerText ?? '').includes('0126/CONTOH/PK/XI/2026')`)),
+  );
+  await browser.type('input[name="contractLookup"]', "CONTOH");
+  check("no other contract is offered: 0125 has no request sent", Boolean(await browser.waitFor(`document.body.innerText.includes('Tidak ada yang cocok.')`)));
+  await browser.pressEscape();
+  const offered = await apiGet(supplierToken, "/api/contracts?direction=IN&requestSent=true");
+  check("the API offers the supplier only the contract with a sent request", offered.items?.map((item) => item.contractNo).join() === "0126/CONTOH/PK/XI/2026");
+  await fillTruck(browser, { scope: "main", prefix: "truck", plate: "ZZ 0003 CTH", licence: "CONTOH0002" });
+  await browser.click("Kirim registrasi");
+  check(
+    "the supplier registers a truck on that contract",
+    Boolean(await browser.waitFor("location.pathname.startsWith('/registrasi/r-')")) && Boolean(await browser.hasText("0126/CONTOH/PK/XI/2026")),
+  );
+  const [other] = (await apiGet(supplierToken, "/api/contracts?direction=IN&q=0125/CONTOH")).items;
+  const refused = await fetch(`${API}/api/registrations`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${supplierToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ direction: "IN", submit: false, allocations: [{ contractId: other?.id }], trips: [{ vehicle: { id: "v-1" }, driver: { id: "d-1" }, letters: [{ allocationSeq: 1 }] }] }),
+  });
+  check("a contract INL did not send is refused with SHIPMENT_REQUEST_REQUIRED", refused.status === 409 && (await refused.json()).error?.code === "SHIPMENT_REQUEST_REQUIRED");
+  await signOut(browser);
+
+  // 62. Staff send a delivery order to its customer.
+  // signing out in the browser ends the sessions of the account, so a new token is taken
+  adminToken = await apiSession("admin.contoh");
+  const draft = (await apiGet(adminToken, "/api/delivery-orders?status=DRAFT&limit=50")).items.find((order) => order.partner.name === "Customer Contoh A");
+  const doNo = draft?.doNo ?? "";
+  await staffSignIn(browser, "admin.contoh");
+  await browser.click('a[href="/delivery-order"]');
+  await browser.waitFor(`${rowText(doNo)} !== ''`);
+  await browser.click(`button[aria-label="Tindakan ${doNo}"]`);
+  await browser.click("Kirim DO");
+  await browser.click("Customer");
+  check(
+    "the send sheet names the customer when Customer is chosen",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="send-to-customer"]')}.includes('Customer Contoh A')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[role="dialog"] input[name="sendTransporterLookup"]'))`)),
+  );
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "the DO is sent to its customer and the list says so",
+    Boolean(await browser.hasText(`DO ${doNo} dikirim ke Customer Contoh A.`)) && Boolean(await browser.waitFor(`${rowText(doNo)}.includes('Customer: Customer Contoh A')`)),
+  );
+  await browser.click(doNo);
+  check("the DO page says it went to the customer", Boolean(await browser.waitFor(`${textOf('[data-testid="do-sent-to"]')} === 'Customer: Customer Contoh A'`)));
+  await signOut(browser);
+
+  // 63. The customer accepts the DO and registers a truck with the extra SPBE and the passport.
+  await partnerSignIn(browser, "customer.contoh");
+  const customerMenu = await menuLinks(browser);
+  check("a customer account gets Delivery Order and Registrasi", customerMenu.includes("/delivery-order") && customerMenu.includes("/registrasi"), customerMenu);
+  await browser.click('a[href="/delivery-order"]');
+  await browser.waitFor(`${rowText(doNo)} !== ''`);
+  await browser.click(`button[aria-label="Terima ${doNo}"]`);
+  await browser.fill(inSheet('input[name="truckCount"]'), "1");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("the customer accepts the DO", Boolean(await browser.hasText(`DO ${doNo} diterima.`)) && Boolean(await browser.waitFor(`${rowText(doNo)}.includes('Diterima')`)));
+  await browser.click(`a[aria-label="Isi daftar truk ${doNo}"]`);
+  await browser.waitFor(`document.querySelectorAll('[data-truck]').length === 1`);
+  await fillTruck(browser, { scope: '[data-truck="1"]', prefix: "trucks.0", plate: "ZZ 0001 CTH", licence: "CONTOH0001" });
+  check(
+    "the outgoing form has the two free texts, both optional",
+    Boolean(await browser.waitFor(`Boolean(document.querySelector('input[name="trucks.0.extraSpbe"]')) && Boolean(document.querySelector('input[name="trucks.0.passportNo"]'))`)),
+  );
+  await browser.fill('input[name="trucks.0.extraSpbe"]', "SPBE Uji Satu");
+  await browser.fill('input[name="trucks.0.passportNo"]', "SJ-UJI-0001");
+  await browser.click("Kirim registrasi");
+  check(
+    "the customer's truck is saved with the extra SPBE and the passport, and the page shows them",
+    Boolean(await browser.waitFor("location.pathname.startsWith('/registrasi/r-')")) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="trip-1-extra-spbe"]')} === 'SPBE Uji Satu' && ${textOf('[data-testid="trip-1-passport"]')} === 'SJ-UJI-0001'`)),
+  );
+  const customerToken = await partnerApiSession("customer.contoh");
+  const saved = await apiGet(customerToken, `/api/registrations/${(await browser.evaluate("location.pathname")).split("/").at(-1)}`);
+  check(
+    "the API keeps both texts on the truck",
+    saved.registration?.trips?.[0]?.extraSpbe === "SPBE Uji Satu" && saved.registration.trips[0].passportNo === "SJ-UJI-0001" && saved.registration.transporter?.name === "Customer Contoh A",
+  );
+  await browser.screenshot("63-customer-truk-light");
+  await signOut(browser);
+
+  // 64. The Berita Acara print: the title of the API, the plates of a plate report, two signers only.
+  adminToken = await apiSession("admin.contoh");
+  const listed = (await apiGet(adminToken, "/api/exceptions?limit=50")).items;
+  const net = listed.find((item) => item.type === "NET_IN" && item.reportNo);
+  let plate = listed.find((item) => item.type === "PLATE" && item.status === "PENDING");
+  if (plate) plate = (await apiCall(adminToken, "POST", `/api/exceptions/${plate.id}/decide`, { decision: "APPROVE" })).exception;
+  else plate = listed.find((item) => item.type === "PLATE" && item.reportNo);
+  await staffSignIn(browser, "admin.contoh");
+  await browser.goto(`${WEB}/berita-acara/${encodeURIComponent(net?.id ?? "")}`);
+  const signers = `[...document.querySelectorAll('[data-testid="report-signer"]')].map((node) => node.innerText.replace(/\\s+/g, ' ').trim()).join(' | ')`;
+  check(
+    "the Berita Acara has the title of the API and exactly two signers: the post operator and the approver",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="report-title"]')} === 'Berita Acara Selisih Netto'`)) &&
+      (await browser.evaluate(signers)) === "Dibuat oleh Petugas Pos Contoh Operator registrasi | Disetujui oleh Admin Contoh Penyetuju" &&
+      !(await browser.evaluate("document.body.innerText.includes('Diketahui')")),
+    await browser.evaluate(signers),
+  );
+  check("a weight report lists the weights", (await browser.evaluate(textOf('[data-testid="report-figures"]'))).includes("Netto surat"));
+  await browser.screenshot("64-berita-acara-light");
+  await browser.goto(`${WEB}/berita-acara/${encodeURIComponent(plate?.id ?? "")}`);
+  check(
+    "a plate report names the plate read and the registered plate",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="report-title"]')} === 'Berita Acara Plat Tidak Sesuai'`)) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="report-figures"]')}.includes('Plat terbaca kamera ZZ0002CTN') && ${textOf('[data-testid="report-figures"]')}.includes('Plat terdaftar ZZ 0002 CTH')`)) &&
+      (await browser.evaluate(`document.querySelectorAll('[data-testid="report-signer"]').length`)) === 2 &&
+      String(plate?.reportNo ?? "").includes("BA-PLAT"),
+  );
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
+async function postWithoutBarcode(browser) {
+  // Setup through the API: a delivery order with room for more trucks, and one bulk truck registered ahead without
+  // the two marks, the way a transporter now registers.
+  const admin = await apiSession("admin.contoh");
+  const [sales] = (await apiCall(admin, "GET", "/api/contracts?direction=OUT&q=0046/CONTOH")).items;
+  const { deliveryOrder } = await apiCall(admin, "POST", "/api/delivery-orders", {
+    contractId: sales.id,
+    qty: 60000,
+    transporterId: "p-301",
+    doDate: new Date().toISOString().slice(0, 10),
+    deliveryFrom: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10),
+    destName: "Gudang Uji Pos",
+    destAddress: "Jalan Uji No. 9",
+    destDistrict: "Kecamatan Uji",
+    destRegency: "Kota Uji",
+    destProvince: "Provinsi Uji",
+  });
+  await apiCall(admin, "POST", `/api/delivery-orders/${deliveryOrder.id}/send`, {});
+  await apiCall(admin, "POST", `/api/delivery-orders/${deliveryOrder.id}/accept`, { truckCount: 3 });
+  const ahead = (
+    await apiCall(admin, "POST", "/api/registrations", {
+      direction: "OUT",
+      submit: true,
+      allocations: [{ deliveryOrderId: deliveryOrder.id, qtyPlanned: 5000 }],
+      trips: [
+        {
+          vehicle: { plateDisplay: "ZZ 9203 UJI", vehicleTypeCode: "TANGKI" },
+          driver: { licenceNo: "UJI9203", fullName: "Supir Uji Sembilan", licenceClass: "B2 UMUM", licenceValidUntil: isoDate(2) },
+        },
+      ],
+    })
+  ).registration;
+  const token = ahead.trips[0]?.spj?.barcodeToken ?? "";
+  const scanJpeg = await browser.evaluate(DRAW_SCAN);
+
+  // 50. Barcode check-in of a bulk outgoing truck: the post marks close cargo and flexi bag before the card.
+  await staffSignIn(browser, "pos.contoh");
+  await browser.goto(`${WEB}/registrasi/${ahead.id}`);
+  check(
+    "the registration detail shows close cargo and flexi bag per truck as not marked yet",
+    Boolean(await browser.waitFor(`${textOf("main li[data-trip-seq]")}.includes('Close cargo belum ditandai') && ${textOf("main li[data-trip-seq]")}.includes('Flexi bag belum ditandai')`)),
+  );
+  await browser.goto(`${WEB}/registrasi`);
+  await browser.waitFor(`location.pathname === '/registrasi' && ${visibleRows} > 0`);
+  check(
+    "staff get no button that opens the typed registration form",
+    !(await browser.evaluate("document.body.innerText.includes('Registrasi incoming') || document.body.innerText.includes('Registrasi outgoing')")),
+  );
+  await browser.goto(`${WEB}/registrasi/baru?arah=in`);
+  check("staff opening the typed form are sent to the post", Boolean(await browser.hasText("Truk yang datang tanpa barcode didaftarkan di Pos registrasi lewat scan dokumen.")));
+  await browser.goto(`${WEB}/pos`);
+  await browser.waitFor("document.activeElement?.id === 'gate-scan'");
+  await browser.typeFocused(token);
+  await browser.pressEnter();
+  check(
+    "the scan of a bulk outgoing SPJ asks for both marks first, with nothing chosen",
+    Boolean(
+      await browser.waitFor(
+        `Boolean(document.querySelector('[data-testid="gate-marks"]')) && !document.querySelector('#gate-card') && document.activeElement?.name === 'closeCargo' && !document.querySelector('[data-testid="gate-marks"] input:checked')`,
+      ),
+    ),
+  );
+  await browser.screenshot("50-pos-tanda-muatan-light");
+  await browser.click('[data-testid="gate-marks"] label:has(input[name="closeCargo"][value="yes"])');
+  check("one answer is not enough for the card", !(await browser.evaluate("Boolean(document.querySelector('#gate-card'))")));
+  await browser.click('[data-testid="gate-marks"] label:has(input[name="flexiBag"][value="no"])');
+  check("both answers open the card box with focus", Boolean(await browser.waitFor("document.activeElement?.id === 'gate-card'")));
+  const checkIns = await stat("POST /api/gate/check-in");
+  await browser.typeFocused("04a1b2c301");
+  await browser.pressEnter();
+  check(
+    "the truck checks in with the marks the post chose",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="gate-success"]')}.includes('Close cargo: ya. Flexi bag: tidak.')`)) && (await waitStat("POST /api/gate/check-in", checkIns + 1)),
+  );
+  const marked = (await apiCall(admin, "GET", `/api/registrations/${ahead.id}`)).registration.trips[0];
+  check("the API keeps the marks on the truck", marked.closeCargo === true && marked.flexiBag === false, JSON.stringify([marked.closeCargo, marked.flexiBag]));
+  await browser.goto(`${WEB}/registrasi/${ahead.id}`);
+  check("the registration detail shows the marks of the truck", Boolean(await browser.waitFor(`${textOf("main li[data-trip-seq]")}.includes('Close cargo Ya') && ${textOf("main li[data-trip-seq]")}.includes('Flexi bag Tidak')`)));
+
+  // 51. Without a barcode, as an operator without emergency access: the helper is off, the reading service is down.
+  await browser.goto(`${WEB}/pos`);
+  await browser.click("Tanpa barcode");
+  check(
+    "a helper that does not answer is said plainly, and the file picker is offered",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="scanner-status"]')}.includes('Pembantu scanner di PC ini tidak menjawab') && ${walkInText}.includes('Pilih berkas scan')`)) &&
+      (await browser.evaluate(`document.querySelector('[data-testid="scan-source"] button')?.disabled === true`)),
+  );
+  check(
+    "an operator without emergency access gets no typed registration without a scan",
+    !(await browser.evaluate(`${walkInText}.includes('Registrasi darurat tanpa scan')`)) &&
+      (await browser.evaluate(`${walkInText}.includes('Registrasi tanpa scan hanya untuk petugas dengan akses registrasi darurat.')`)),
+  );
+  await chooseScan(browser, scanJpeg, "surat-rusak.jpg");
+  check(
+    "a reading service that is down is said plainly, with what to do without emergency access",
+    Boolean(
+      await browser.waitFor(
+        `${textOf('[data-testid="walk-in-failed"]')}.includes('Layanan baca dokumen tidak bisa dihubungi.') && ${textOf('[data-testid="walk-in-failed"]')}.includes('Pindai lagi, atau panggil petugas dengan akses registrasi darurat.')`,
+      ),
+    ) && !(await browser.evaluate(`${textOf('[data-testid="walk-in-failed"]')}.includes('Registrasi darurat')`)),
+  );
+  await browser.screenshot("51-pos-layanan-mati-light");
+  await browser.click("Pindai lagi");
+  await chooseScan(browser, scanJpeg, "surat-buram.jpg");
+  check(
+    "an unreadable letter shows what was read, and only asks to scan again",
+    Boolean(await browser.waitFor(`${walkInText}.includes('Dokumen ini tidak terbaca dengan baik. Pindai lagi, atau panggil petugas dengan akses registrasi darurat.') && ${textOf('[data-testid="walk-in-read"]')}.includes('5 dari 12 isian ditemukan')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="walk-in-form"]'))`)),
+  );
+  await browser.click("Pindai lagi");
+
+  // 52. The scanner helper answers: an incoming letter is scanned, read cleanly, and the truck checks in.
+  const scanner = await startFakeScanner(Buffer.from(scanJpeg, "base64"));
+  try {
+    await browser.click("Periksa scanner");
+    check(
+      "the helper of the old application is found at its address",
+      Boolean(await browser.waitFor(`${textOf('[data-testid="scanner-status"]')}.includes('Scanner siap: Scanner Uji')`)),
+      scanner.requests.join(", ") || `nothing reached ${SCANNER}; rebuild with NEXT_PUBLIC_SCANNER_URL=${SCANNER}`,
+    );
+    await browser.click("Pindai dengan scanner");
+    check(
+      "the page is read through a plain GET of the helper, without a preflight",
+      Boolean(await browser.waitFor(`Boolean(document.querySelector('[data-testid="walk-in-read"]'))`)) &&
+        scanner.requests.some((line) => line.startsWith("GET /scan?dpi=200&device=uji-1")) &&
+        !scanner.requests.some((line) => line.startsWith("OPTIONS")),
+      scanner.requests.join(", "),
+    );
+  } finally {
+    await scanner.close();
+  }
+  check(
+    "the proposal shows the scan beside what was read, and every match found",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="walk-in-scan"]')?.naturalWidth > 0`)) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="walk-in-read"]')}.includes('12 dari 12 isian ditemukan')`)) &&
+      (await browser.evaluate(`['match-supplier', 'match-contract-1', 'match-vehicle', 'match-driver'].every((id) => document.querySelector('[data-testid="' + id + '"]')?.dataset.status === 'EXACT')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="walk-in-todo"]'))`)),
+  );
+  check(
+    "the plate and the licence of the letter are looked up as typed ones are",
+    Boolean(await browser.waitFor(`${walkInText}.includes('Surat kendaraan') && ${walkInText}.includes('Supir Contoh 02')`)) &&
+      (await browser.evaluate(`document.querySelector('input[name="letters.0.originNetKg"]')?.value === '24090'`)),
+  );
+  await browser.screenshot("52-pos-usulan-masuk-light");
+  await browser.click("Lanjut: tempel kartu");
+  await browser.waitFor("document.activeElement?.id === 'walk-in-card'");
+  const walkIns = await stat("POST /api/gate/walk-in");
+  await browser.typeFocused("04a1b2c302");
+  await browser.pressEnter();
+  check(
+    "a walk-in from a read letter checks the truck in at once",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="walk-in-done"]')}.includes('Check-in berhasil') && ${textOf('[data-testid="walk-in-done"]')}.includes('ZZ 0001 CTH') && ${textOf('[data-testid="walk-in-done"]')}.includes('dibuat dari scan dokumen')`)) &&
+      (await waitStat("POST /api/gate/walk-in", walkIns + 1)),
+  );
+  await browser.screenshot("53-pos-walk-in-masuk-light");
+
+  // 53. A letter whose driver has a warning: registered, but waiting for logistics, and no card used.
+  await browser.click("Truk berikutnya");
+  await chooseScan(browser, scanJpeg, "surat-warning.jpg");
+  await browser.waitFor(`${walkInText}.includes('Supir ini berstatus Warning di VCF.') && ${walkInText}.includes('Surat kendaraan')`);
+  await browser.click("Lanjut: tempel kartu");
+  await browser.waitFor("document.activeElement?.id === 'walk-in-card'");
+  await browser.typeFocused("04a1b2c303");
+  await browser.pressEnter();
+  check(
+    "a walk-in with a finding says plainly that it waits for review and the card is not used",
+    Boolean(
+      await browser.waitFor(
+        `${textOf('[data-testid="walk-in-review"]')}.includes('Menunggu tinjauan logistik') && ${textOf('[data-testid="walk-in-review"]')}.includes('Truk belum check-in dan kartu belum dipakai.') && ${textOf('[data-testid="walk-in-review"]')}.includes('berstatus peringatan di VCF')`,
+      ),
+    ) && (await apiCall(admin, "GET", "/api/rfid-cards")).items.find((card) => card.uid === "04A1B2C303")?.status === "AVAILABLE",
+  );
+  await browser.screenshot("54-pos-walk-in-tinjauan-light");
+
+  // 54. An outgoing delivery order on a phone: the operator picks the truck, the quantity and both marks.
+  await browser.click("Truk berikutnya");
+  await browser.viewport(390, 844, true);
+  await browser.click('[data-testid="walk-in"] [role="group"][aria-label="Arah truk"] button:nth-child(2)');
+  await chooseScan(browser, scanJpeg, "do-keluar.jpg");
+  check(
+    "the scanned delivery order is found, and the truck, the quantity and both marks are listed as open",
+    Boolean(await browser.waitFor(`document.querySelector('[data-testid="match-order"]')?.dataset.status === 'EXACT'`)) &&
+      (await browser.evaluate(`document.querySelectorAll('[data-testid="walk-in-todo"] li[data-done="0"]').length === 5`)),
+  );
+  check("the walk-in form has no horizontal scroll on a phone", await browser.evaluate(noHorizontalScroll));
+  await browser.screenshot("55-pos-walk-in-keluar-phone-light");
+  await browser.fill('input[name="qty"]', "12000");
+  await fillTruck(browser, { scope: '[data-testid="walk-in"]', prefix: "truck", plate: "ZZ 9201 UJI", licence: "CONTOH0001", newVehicle: { type: "TANGKI" } });
+  await browser.click('label:has(input[name="walkIn.closeCargo"][value="yes"])');
+  await browser.click('label:has(input[name="walkIn.flexiBag"][value="no"])');
+  check("every open item is ticked off as the form fills", Boolean(await browser.waitFor(`document.querySelectorAll('[data-testid="walk-in-todo"] li[data-done="1"]').length === 5`)));
+  await browser.viewport(1366, 900);
+  await browser.click("Lanjut: tempel kartu");
+  await browser.waitFor("document.activeElement?.id === 'walk-in-card'");
+  await browser.typeFocused("04a1b2c304");
+  await browser.pressEnter();
+  check(
+    "an outgoing walk-in checks the truck in with the marks of the post",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="walk-in-done"]')}.includes('ZZ 9201 UJI') && ${textOf('[data-testid="walk-in-done"]')}.includes('Close cargo: ya. Flexi bag: tidak.')`)),
+  );
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+
+  // 55. The reading service is down, as an officer with emergency access: the same form by hand, with a reason.
+  await staffSignIn(browser, "admin.contoh");
+  await browser.goto(`${WEB}/pos`);
+  await browser.click("Tanpa barcode");
+  check("an officer with emergency access may register without a scan", Boolean(await browser.waitFor(`${walkInText}.includes('Registrasi darurat tanpa scan')`)));
+  await chooseScan(browser, scanJpeg, "surat-rusak.jpg");
+  check(
+    "after the service fails, the officer is offered the emergency registration",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="walk-in-failed"]')}.includes('Isi datanya dengan tangan dan tulis alasannya')`)),
+  );
+  await browser.click("Registrasi darurat");
+  await browser.waitFor(`Boolean(document.querySelector('[data-testid="walk-in-emergency"]'))`);
+  await pickOption(browser, 'input[name="walkInContractLookup"]', "0125/CONTOH");
+  await browser.fill('input[name="letters.0.originNetKg"]', "21000");
+  await fillTruck(browser, { scope: '[data-testid="walk-in"]', prefix: "truck", plate: "ZZ 9202 UJI", licence: "UJI9202", newVehicle: { type: "TANGKI" }, newDriver: { fullName: "Supir Uji Darurat" } });
+  await browser.click("Lanjut: tempel kartu");
+  check("the emergency registration needs a reason", Boolean(await browser.hasText("Tulis alasan registrasi darurat.")) && !(await browser.evaluate("Boolean(document.querySelector('#walk-in-card'))")));
+  await browser.fill('textarea[name="reason"]', "Layanan baca dokumen mati");
+  await browser.screenshot("56-pos-darurat-light");
+  await browser.click("Lanjut: tempel kartu");
+  await browser.waitFor("document.activeElement?.id === 'walk-in-card'");
+  await browser.typeFocused("04a1b2c303");
+  await browser.pressEnter();
+  check(
+    "the emergency registration checks the truck in and says it was recorded as one",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="walk-in-done"]')}.includes('ZZ 9202 UJI') && ${textOf('[data-testid="walk-in-done"]')}.includes('dicatat sebagai registrasi darurat')`)),
+  );
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
 async function waitStat(route, count) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     if ((await stat(route)) >= count) return true;
@@ -2240,7 +2790,7 @@ try {
     env: { ...process.env, PORT: String(API_PORT), WEB_ORIGIN: WEB, MOCK_SYNC_MS: "400" },
   });
   start(process.execPath, ["node_modules/next/dist/bin/next", DEV_MODE ? "dev" : "start", "-p", String(WEB_PORT)], {
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", ...(DEV_MODE ? { NEXT_PUBLIC_API_URL: API } : {}) },
+    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1", ...(DEV_MODE ? { NEXT_PUBLIC_API_URL: API, NEXT_PUBLIC_SCANNER_URL: SCANNER } : {}) },
   });
   await waitForHttp(`${API}/api/health`, "mock API");
   await waitForHttp(`${WEB}/login`, "web app");

@@ -22,7 +22,8 @@ describe("describePhase", () => {
 
   it.each([
     [{ kind: "SAVED", weighing: weighing(41_480), trip: null, afterDecision: true } as const, "Disetujui, tersimpan", "ok"],
-    [{ kind: "NOT_SAVED", reason: "REJECTED" } as const, "Ditolak", "bad"],
+    [{ kind: "NOT_SAVED", reason: "REJECTED" } as const, "Truk ditolak", "bad"],
+    [{ kind: "NOT_SAVED", reason: "HOLD" } as const, "Mundur, tidak disimpan", "warn"],
     [{ kind: "NOT_SAVED", reason: "ADD_LOAD" } as const, "Tambah muatan", "warn"],
     [{ kind: "NOT_SAVED", reason: "REDUCE_LOAD" } as const, "Kurangi muatan", "warn"],
     [{ kind: "NOT_SAVED", reason: "TRUCK_LEFT" } as const, "Dibatalkan", "bad"],

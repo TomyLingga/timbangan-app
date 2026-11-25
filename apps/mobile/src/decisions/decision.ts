@@ -22,6 +22,18 @@ const TYPE_LABELS: Record<string, string> = {
 };
 export const typeLabel = (type: string) => TYPE_LABELS[type] ?? type;
 
+/** What became of a decided request; a refused one says whether the truck backed off or was turned away. */
+export function statusText(view: Pick<ExceptionView, "type" | "status" | "decision">): string {
+  if (view.status === "REJECTED" && view.type !== "QC_HOLD") return view.decision === "REJECT" ? "Truk ditolak" : "Mundur/hold";
+  return STATUS_TEXT[view.status] ?? view.status;
+}
+
+/** The hint under the reason field before a decision is tapped. */
+export function reasonHint(view: Pick<ExceptionView, "type" | "stage" | "options">): string {
+  if (reasonRequired(view.type)) return "Wajib, minimal 3 huruf";
+  return decisionChoices(view).some((choice) => choice.code === "REJECT") && view.type !== "QC_HOLD" ? "Wajib bila truk ditolak" : "Tidak wajib";
+}
+
 /** What became of a request that no longer waits. */
 export const STATUS_TEXT: Record<string, string> = {
   APPROVED: "Disetujui",
@@ -31,22 +43,35 @@ export const STATUS_TEXT: Record<string, string> = {
   EXPIRED: "Kedaluwarsa",
 };
 
-/** The three weight differences need a written reason (DIFFERENCE_TYPES in decide.ts). */
+/** The three weight differences need a written reason, and so does turning a truck away (decide.ts). */
 const REASON_TYPES = ["GROSS_IN", "TARE_OUT", "NET_IN"];
-export const reasonRequired = (type: string) => REASON_TYPES.includes(type);
+export const reasonRequired = (type: string, decision: DecisionCode | null = null) =>
+  REASON_TYPES.includes(type) || (decision === "REJECT" && type !== "QC_HOLD");
 
-export function decisionChoices(type: string): DecisionChoice[] {
-  if (type === "NET_OUT") {
-    return [
-      { code: "OK", label: "Sesuai", tone: "ok" },
-      { code: "ADD_LOAD", label: "Tambah muatan", tone: "warn" },
-      { code: "REDUCE_LOAD", label: "Kurangi muatan", tone: "warn" },
-    ];
-  }
-  return [
-    { code: "APPROVE", label: "Setujui", tone: "ok" },
-    { code: "REJECT", label: "Tolak", tone: "bad" },
-  ];
+const CHOICE: Record<DecisionCode, DecisionChoice> = {
+  APPROVE: { code: "APPROVE", label: "Setujui", tone: "ok" },
+  HOLD: { code: "HOLD", label: "Mundur/hold", tone: "warn" },
+  REJECT: { code: "REJECT", label: "Tolak truk", tone: "bad" },
+  OK: { code: "OK", label: "Sesuai", tone: "ok" },
+  ADD_LOAD: { code: "ADD_LOAD", label: "Isi lagi", tone: "warn" },
+  REDUCE_LOAD: { code: "REDUCE_LOAD", label: "Kurangi isi", tone: "warn" },
+};
+
+/** What the request offers when the server did not say (an older API): the same rules as allowedDecisions. */
+function fallbackOptions(type: string, stage: number | null): DecisionCode[] {
+  if (type === "NET_OUT") return ["OK", "ADD_LOAD", "REDUCE_LOAD"];
+  if (type === "QC_HOLD") return ["APPROVE", "REJECT"];
+  if (type === "NET_IN" || stage === 2) return ["APPROVE", "HOLD"];
+  return ["APPROVE", "HOLD", "REJECT"];
+}
+
+export function decisionChoices(view: Pick<ExceptionView, "type" | "stage" | "options">): DecisionChoice[] {
+  const codes = view.options && view.options.length > 0 ? view.options : fallbackOptions(view.type, view.stage);
+  return codes.map((code) => {
+    const choice = CHOICE[code] ?? { code, label: code, tone: "warn" as Tone };
+    // a QC hold that is refused is a spec reject, not a truck turned away at the weighbridge
+    return view.type === "QC_HOLD" && code === "REJECT" ? { ...choice, label: "Tolak" } : choice;
+  });
 }
 
 export interface DecisionInput {
@@ -57,10 +82,11 @@ export interface DecisionInput {
 
 export const REASON_MAX = 300;
 
-export function validateDecision(type: string, input: DecisionInput): Record<string, string> {
+export function validateDecision(view: Pick<ExceptionView, "type" | "stage" | "options">, input: DecisionInput): Record<string, string> {
+  const type = view.type;
   const errors: Record<string, string> = {};
-  if (!input.decision || !decisionChoices(type).some((choice) => choice.code === input.decision)) errors.decision = "Pilih salah satu keputusan.";
-  if (reasonRequired(type) && input.reason.trim().length < 3) errors.reason = "Alasan wajib diisi, minimal 3 huruf.";
+  if (!input.decision || !decisionChoices(view).some((choice) => choice.code === input.decision)) errors.decision = "Pilih salah satu keputusan.";
+  if (reasonRequired(type, input.decision) && input.reason.trim().length < 3) errors.reason = "Alasan wajib diisi, minimal 3 huruf.";
   if (input.reason.trim().length > REASON_MAX) errors.reason = `Alasan paling panjang ${REASON_MAX} huruf.`;
   if (input.updateMasterTare && !(type === "TARE_OUT" && input.decision === "APPROVE")) {
     errors.updateMasterTare = "Tarra master hanya bisa diganti saat selisih tarra disetujui.";

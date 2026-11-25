@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CircleAlert, Loader2, RefreshCw } from "lucide-react";
+import Link from "next/link";
+import { CircleAlert, Loader2, Printer, RefreshCw } from "lucide-react";
 
 import { CheckboxField, TextAreaField } from "@/components/form-fields";
 import { Notice } from "@/components/page-parts";
@@ -17,21 +18,25 @@ import { decisionErrorMessage, errorMessage } from "@/lib/messages";
 import { canDecide, deciderText } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { ExceptionView, User } from "@/lib/types";
-import { decisionLabel, exceptionStatusInfo, exceptionTypeLabel, needsReason, referenceLabel, waitedFor } from "@/lib/weighing";
+import { decisionLabel, decisionOptions, exceptionStatusInfo, exceptionTypeLabel, needsReason, referenceLabel, waitedFor } from "@/lib/weighing";
 
-type Decision = "APPROVE" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
+type Decision = "APPROVE" | "HOLD" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
 
-const CHOICES: Record<"default" | "NET_OUT", ReadonlyArray<{ value: Decision; label: string; variant: "default" | "outline" | "destructive" }>> = {
-  default: [
-    { value: "APPROVE", label: "Setujui", variant: "default" },
-    { value: "REJECT", label: "Tolak", variant: "destructive" },
-  ],
-  NET_OUT: [
-    { value: "OK", label: "Sesuai", variant: "default" },
-    { value: "ADD_LOAD", label: "Tambah muatan", variant: "outline" },
-    { value: "REDUCE_LOAD", label: "Kurangi muatan", variant: "outline" },
-  ],
+const CHOICE: Record<Decision, { label: string; variant: "default" | "outline" | "destructive" }> = {
+  APPROVE: { label: "Setujui", variant: "default" },
+  HOLD: { label: "Mundur/hold", variant: "outline" },
+  REJECT: { label: "Tolak truk", variant: "destructive" },
+  OK: { label: "Sesuai", variant: "default" },
+  ADD_LOAD: { label: "Isi lagi", variant: "outline" },
+  REDUCE_LOAD: { label: "Kurangi isi", variant: "outline" },
 };
+
+/** The buttons of a request, from what the API offers; a refused QC hold is a spec reject. */
+function choicesOf(view: ExceptionView): { value: Decision; label: string; variant: "default" | "outline" | "destructive" }[] {
+  return decisionOptions(view)
+    .filter((code): code is Decision => code in CHOICE)
+    .map((code) => ({ value: code, ...CHOICE[code], ...(view.type === "QC_HOLD" && code === "REJECT" ? { label: "Tolak" } : {}) }));
+}
 
 /** What each decision does, in the words of the decision table (docs/fase-4-rancangan.md, section 2). */
 function consequence(type: string): string {
@@ -39,11 +44,13 @@ function consequence(type: string): string {
     case "QC_HOLD":
       return "Setujui: QC selesai dan truk lanjut ke bongkar. Tolak: truk ditolak karena spesifikasi, lalu segel ulang, timbang 2, dan keluar.";
     case "PLATE":
-      return "Setujui: timbang dilanjutkan dengan plat registrasi. Tolak: timbang tidak tersimpan dan supir diarahkan ke pos registrasi.";
+      return "Setujui: timbang dilanjutkan dengan plat registrasi dan Berita Acara plat dibuat. Mundur/hold: timbang tidak tersimpan, truk boleh timbang lagi. Tolak truk: truk tidak ditimbang, keluar, dan kartu dikembalikan di pos.";
     case "NET_OUT":
-      return "Sesuai: timbang 2 tersimpan. Tambah atau kurangi muatan: timbang tidak tersimpan, muat, segel, dan timbang 2 diulang.";
+      return "Sesuai: timbang 2 tersimpan. Isi lagi atau kurangi isi: timbang tidak tersimpan, muat, segel, dan timbang 2 diulang.";
+    case "NET_IN":
+      return "Setujui: timbang tersimpan dan Berita Acara bernomor dibuat. Mundur/hold: timbang tidak tersimpan, truk boleh timbang lagi.";
     default:
-      return "Setujui: timbang tersimpan dan Berita Acara bernomor dibuat. Tolak: timbang tidak tersimpan.";
+      return "Setujui: timbang tersimpan dan Berita Acara bernomor dibuat. Mundur/hold: timbang tidak tersimpan, truk boleh timbang lagi. Tolak truk: truk tidak ditimbang, keluar, dan kartu dikembalikan di pos.";
   }
 }
 
@@ -178,9 +185,19 @@ function Outcome({ view }: { view: ExceptionView }) {
       ) : null}
       {view.reason ? <p>Alasan: {view.reason}</p> : null}
       {view.reportNo ? (
-        <p>
-          Berita Acara <span className="font-mono">{view.reportNo}</span>
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p>
+            Berita Acara <span className="font-mono">{view.reportNo}</span>
+          </p>
+          {view.status === "APPROVED" ? (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/berita-acara/${encodeURIComponent(String(view.id))}`} data-testid="report-print-link">
+                <Printer aria-hidden="true" />
+                Cetak Berita Acara
+              </Link>
+            </Button>
+          ) : null}
+        </div>
       ) : null}
       {view.context && (view.context as { masterTareUpdated?: boolean }).masterTareUpdated ? <p>Tarra master kendaraan diganti dengan berat ini.</p> : null}
     </div>
@@ -190,7 +207,7 @@ function Outcome({ view }: { view: ExceptionView }) {
 /** `onDecided(null)` after a decision, `onDecided(message)` when the server refused it. */
 function DecisionForm({ view, onDecided }: { view: ExceptionView; onDecided: (refusal: string | null) => void }) {
   const reasonRequired = needsReason(view.type);
-  const choices = view.type === "NET_OUT" ? CHOICES.NET_OUT : CHOICES.default;
+  const choices = choicesOf(view);
   const [reason, setReason] = useState("");
   const [reasonError, setReasonError] = useState<string | undefined>();
   const [masterTare, setMasterTare] = useState(false);
@@ -200,8 +217,8 @@ function DecisionForm({ view, onDecided }: { view: ExceptionView; onDecided: (re
 
   async function decide(decision: Decision) {
     if (sending || sent) return;
-    if (reasonRequired && reason.trim().length < 3) {
-      setReasonError("Isi alasan, minimal 3 huruf.");
+    if (needsReason(view.type, decision) && reason.trim().length < 3) {
+      setReasonError(reasonRequired ? "Isi alasan, minimal 3 huruf." : "Isi alasan menolak truk, minimal 3 huruf.");
       return;
     }
     setReasonError(undefined);

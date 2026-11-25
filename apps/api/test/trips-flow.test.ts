@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedContract, seedDestination, seedDriver, seedVehicle, sendShipmentRequest } from "./helpers/fixtures.js";
 
 // the test clock starts at 2026-11-20T03:00Z, 10:00 at the plant
 const TODAY = "2026-11-20";
@@ -10,6 +10,8 @@ async function setup() {
   const { database, companies, products, call } = context;
   const purchase1 = await seedContract(database, { no: "PC-701/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 1_000_000 });
   const purchase2 = await seedContract(database, { no: "PC-702/CONTOH", partnerId: companies.supplier2, productId: products.cpo, qty: 1_000_000 });
+  // INL sent each supplier a request on its contract (0017)
+  for (const contractId of [purchase1, purchase2]) await sendShipmentRequest(database, contractId);
   const sale = await seedContract(database, { no: "SC-701/CONTOH", direction: "OUT", partnerId: companies.customer1, productId: products.olein, qty: 1_000_000 });
   const place = await seedDestination(database, "Gudang Alur Contoh");
 

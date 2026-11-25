@@ -110,7 +110,8 @@ describe("spoken form of the real weighbridge sentences", () => {
   it("PIN wrong with attempts left, card unknown, rejection", () => {
     expect(spoken(messages.pinWrong(2).speech)).toEqual(["pin salah.", "Sisa dua kali."]);
     expect(spoken(messages.cardUnknown().speech)).toEqual(["Kartu tidak dikenal."]);
-    expect(spoken(messages.rejected(true).speech)).toEqual(["Permintaan ditolak.", "Supir ke pos registrasi."]);
+    expect(spoken(messages.rejected().speech)).toEqual(["Truk ditolak.", "Supir ke pos registrasi untuk mengembalikan kartu."]);
+    expect(spoken(messages.held().speech)).toEqual(["Permintaan ditahan.", "Timbang tidak disimpan.", "Mundur dari timbangan."]);
   });
 
   it("every fixed sentence passes through unchanged (none has a number or a lone capital)", () => {

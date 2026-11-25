@@ -145,7 +145,7 @@ describe("heartbeat, expiry and cancel", () => {
 
     const next = (await ctx.weigh(key, { cardUid: truck.cardUid, weightKg: 31_000, plateRead: truck.plateNo })).json().exception.id;
     expect(next).not.toBe(id);
-    expect((await decide(ctx, next, { decision: "REJECT", reason: "Muatan tidak sesuai" })).statusCode).toBe(200);
+    expect((await decide(ctx, next, { decision: "HOLD", reason: "Muatan tidak sesuai" })).statusCode).toBe(200);
     const late = await ctx.station(key, "POST", `/api/weighbridge/exceptions/${next}/cancel`, { reason: "OPERATOR" });
     expect(late.statusCode).toBe(409);
     expect(late.json().error.code).toBe("ALREADY_DECIDED");
@@ -154,14 +154,17 @@ describe("heartbeat, expiry and cancel", () => {
 
 describe("decisions", () => {
   const table: { type: Kind; decision: string; status: string; saved: boolean; report?: string }[] = [
-    { type: "PLATE", decision: "APPROVE", status: "APPROVED", saved: true },
+    { type: "PLATE", decision: "APPROVE", status: "APPROVED", saved: true, report: "0001/BA-PLAT/SMK/XI/2026" },
+    { type: "PLATE", decision: "HOLD", status: "REJECTED", saved: false },
     { type: "PLATE", decision: "REJECT", status: "REJECTED", saved: false },
     { type: "GROSS_IN", decision: "APPROVE", status: "APPROVED", saved: true, report: "0001/BA-SELISIH-BRUTO/SMK/XI/2026" },
+    { type: "GROSS_IN", decision: "HOLD", status: "REJECTED", saved: false },
     { type: "GROSS_IN", decision: "REJECT", status: "REJECTED", saved: false },
     { type: "TARE_OUT", decision: "APPROVE", status: "APPROVED", saved: true, report: "0001/BA-SELISIH-TARRA/SMK/XI/2026" },
+    { type: "TARE_OUT", decision: "HOLD", status: "REJECTED", saved: false },
     { type: "TARE_OUT", decision: "REJECT", status: "REJECTED", saved: false },
     { type: "NET_IN", decision: "APPROVE", status: "APPROVED", saved: true, report: "0001/BA-SELISIH-NETTO/SMK/XI/2026" },
-    { type: "NET_IN", decision: "REJECT", status: "REJECTED", saved: false },
+    { type: "NET_IN", decision: "HOLD", status: "REJECTED", saved: false },
     { type: "NET_OUT", decision: "OK", status: "APPROVED", saved: true },
     { type: "NET_OUT", decision: "ADD_LOAD", status: "RETRY", saved: false },
     { type: "NET_OUT", decision: "REDUCE_LOAD", status: "RETRY", saved: false },
@@ -174,10 +177,10 @@ describe("decisions", () => {
     const before = await weighingCount(ctx, truck.tripId);
     // the figure saved is the last one the program sent
     await heartbeat(ctx, key, id, type === "TARE_OUT" ? 16_040 : type === "NET_IN" ? 9_010 : type === "NET_OUT" ? 45_020 : 30_040);
-    const needsReason = ["GROSS_IN", "TARE_OUT", "NET_IN"].includes(type);
+    const needsReason = ["GROSS_IN", "TARE_OUT", "NET_IN"].includes(type) || decision === "REJECT";
     const response = await decide(ctx, id, { decision, ...(needsReason ? { reason: "Sudah dicek dengan supir" } : {}) });
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().exception).toMatchObject({ id, type, status, reportNo: report ?? null });
+    expect(response.json().exception).toMatchObject({ id, type, status, decision, reportNo: report ?? null, options: [] });
     expect(await weighingCount(ctx, truck.tripId)).toBe(before + (saved ? 1 : 0));
 
     const answer = (await heartbeat(ctx, key, id, 1)).json();
@@ -186,8 +189,16 @@ describe("decisions", () => {
       const expectedWeight = type === "TARE_OUT" ? 16_040 : type === "NET_IN" ? 9_010 : type === "NET_OUT" ? 45_020 : 30_040;
       expect(answer).toMatchObject({ result: "SAVED", weighing: { weightKg: expectedWeight, mode: "EXCEPTION", plateCheck: type === "PLATE" ? "CONFIRMED" : "MATCH" } });
       expect(answer.speech[0]).toBe("Permintaan disetujui.");
-    } else {
-      expect(answer.result).toBe("NOT_SAVED");
+    } else if (decision === "REJECT") {
+      // turned away before the first weighing: every step but the return of the card is skipped
+      expect(answer).toMatchObject({ decision: "REJECT", result: "TRUCK_REJECTED", message: "Truk ditolak. Supir ke pos registrasi untuk mengembalikan kartu." });
+      expect(await ctx.tripRow(truck.tripId)).toMatchObject({ outcome: "TRUCK_REJECT", current_step: "CHECK_OUT" });
+      const steps = await ctx.steps(truck.tripId);
+      expect(steps.find((step) => step.step_code === "WEIGH_1")?.status).toBe("FAILED");
+      expect(steps.filter((step) => !["DONE", "FAILED", "SKIPPED"].includes(step.status)).map((step) => [step.step_code, step.status])).toEqual([["CHECK_OUT", "READY"]]);
+    } else if (decision === "HOLD") {
+      expect(answer).toMatchObject({ result: "NOT_SAVED", message: "Permintaan ditahan. Timbang tidak disimpan. Mundur dari timbangan." });
+      expect(await ctx.tripRow(truck.tripId)).toMatchObject({ outcome: null });
     }
     if (status === "RETRY") {
       expect(answer.decision).toBe(decision);
@@ -197,7 +208,6 @@ describe("decisions", () => {
       ]);
       expect((await ctx.tripRow(truck.tripId))?.current_step).toBe("LOADING");
     }
-    if (type === "PLATE" && status === "REJECTED") expect(answer.message).toBe("Permintaan ditolak. Supir ke pos registrasi.");
   });
 
   it("cancels every type without saving", async () => {
@@ -242,7 +252,7 @@ describe("decisions", () => {
     const noReason = await decide(ctx, id, { decision: "APPROVE", reason: " a " });
     expect(noReason.statusCode).toBe(400);
     expect(noReason.json().error.fields).toEqual([{ field: "reason", message: "Alasan wajib diisi, minimal 3 huruf." }]);
-    expect((await decide(ctx, id, { decision: "OK", reason: "Sesuai" })).json().error.fields).toEqual([{ field: "decision", message: "Keputusan harus APPROVE atau REJECT." }]);
+    expect((await decide(ctx, id, { decision: "OK", reason: "Sesuai" })).json().error.fields).toEqual([{ field: "decision", message: "Keputusan harus APPROVE, HOLD atau REJECT." }]);
     expect((await decide(ctx, id, { decision: "APPROVE", reason: "Sesuai", updateMasterTare: true })).json().error.fields).toEqual([
       { field: "updateMasterTare", message: "Tarra master hanya bisa diganti pada selisih tarra yang disetujui." },
     ]);
@@ -251,6 +261,26 @@ describe("decisions", () => {
     expect(again.statusCode).toBe(409);
     expect(again.json().error.code).toBe("ALREADY_DECIDED");
     expect((await decide(ctx, 999_999, { decision: "APPROVE" })).statusCode).toBe(404);
+  });
+});
+
+describe("decisions after the first weighing", () => {
+  it("offers no reject on a net difference, nor on a plate at the second weighing", async () => {
+    const ctx = await weighingApp();
+    const net = await raise(ctx, "NET_IN");
+    const shown = (await ctx.call("GET", `/api/exceptions/${net.body.exception.id}`, "atasan")).json().exception;
+    expect(shown.options).toEqual(["APPROVE", "HOLD"]);
+    const refused = await decide(ctx, net.body.exception.id, { decision: "REJECT", reason: "Selisih besar" });
+    expect(refused.json().error.fields).toEqual([{ field: "decision", message: "Keputusan harus APPROVE atau HOLD." }]);
+    const plate = await raise(ctx, "PLATE");
+    expect((await ctx.call("GET", `/api/exceptions/${plate.body.exception.id}`, "atasan")).json().exception.options).toEqual(["APPROVE", "HOLD", "REJECT"]);
+  });
+
+  it("needs a reason to turn a truck away", async () => {
+    const ctx = await weighingApp();
+    const { body } = await raise(ctx, "PLATE");
+    const response = await decide(ctx, body.exception.id, { decision: "REJECT" });
+    expect(response.json().error.fields).toEqual([{ field: "reason", message: "Alasan wajib diisi, minimal 3 huruf." }]);
   });
 });
 
@@ -294,5 +324,14 @@ describe("GET /api/exceptions", () => {
       station: { code: "WB-IN" },
     });
     expect(report.lines).toHaveLength(1);
+    // signed by the operator who checked the truck in and by the approver
+    expect(report.signers).toEqual([
+      { role: "REGISTRAR", title: "Dibuat oleh", position: "Operator registrasi", user: { id: expect.any(Number), fullName: expect.any(String) } },
+      { role: "APPROVER", title: "Disetujui oleh", position: "Penyetuju", user: { id: expect.any(Number), fullName: "Staff atasan" } },
+    ]);
+
+    await decide(ctx, plate.body.exception.id, { decision: "APPROVE" });
+    const plateReport = (await ctx.call("GET", `/api/exceptions/${plate.body.exception.id}/report`, "atasan")).json().report;
+    expect(plateReport).toMatchObject({ reportNo: "0001/BA-PLAT/SMK/XI/2026", title: "Berita Acara Plat Tidak Sesuai", plate: { read: "BK1X", registered: expect.any(String) } });
   });
 });

@@ -67,8 +67,9 @@ export type ExceptionStatus = "PENDING" | "APPROVED" | "REJECTED" | "RETRY" | "C
 /** POST /api/weighbridge/exceptions/:id/heartbeat */
 export interface HeartbeatAnswer extends Spoken {
   status: ExceptionStatus;
-  decision?: "APPROVE" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
-  result?: "SAVED" | "PENDING" | "NOT_SAVED";
+  // HOLD: not saved, the truck may weigh again; REJECT: the truck is turned away (TRUCK_REJECTED)
+  decision?: "APPROVE" | "HOLD" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
+  result?: "SAVED" | "PENDING" | "NOT_SAVED" | "TRUCK_REJECTED";
   weighing?: WeighingView;
   trip?: TripView;
   exception?: { id: number; type: ExceptionType };

@@ -18,11 +18,16 @@ import {
   canManageDeliveryOrders,
   canReissueSpj,
   canReviewRegistrations,
+  canScanDocument,
   canSeeApprovals,
   canSeeSyncRuns,
   canSyncOdoo,
   canSyncVcf,
+  canTypeIncoming,
+  canTypeOutgoing,
   canView,
+  canWalkIn,
+  canWalkInEmergency,
   deciderModule,
   deciderText,
   decisionModuleOf,
@@ -131,8 +136,34 @@ describe("actions follow the route table of the API", () => {
     const transporter = partner({ registrations: "CREATE" }, { isTransporter: true });
     expect([canCreateIncoming(supplier), canCreateOutgoing(supplier)]).toEqual([true, false]);
     expect([canCreateIncoming(transporter), canCreateOutgoing(transporter)]).toEqual([false, true]);
+    // a DO sent to its own customer: the customer registers the trucks
+    const customer = partner({ registrations: "CREATE" }, { isCustomer: true });
+    expect([canCreateIncoming(customer), canCreateOutgoing(customer), canTypeOutgoing(customer)]).toEqual([false, true, true]);
     expect([canCreateIncoming(staff({ registrations: "CREATE" })), canCreateOutgoing(staff({ registrations: "CREATE" }))]).toEqual([true, true]);
     expect(canCreateIncoming(staff({ registrations: "VIEW" }))).toBe(false);
+  });
+
+  it("leaves the typed registration form to partner accounts; staff register at the post", () => {
+    const supplier = partner({ registrations: "CREATE" }, { isSupplier: true });
+    const transporter = partner({ registrations: "CREATE" }, { isTransporter: true });
+    const admin = staff({ registrations: "EDIT", gate: "EDIT" });
+    expect([canTypeIncoming(supplier), canTypeOutgoing(supplier)]).toEqual([true, false]);
+    expect([canTypeIncoming(transporter), canTypeOutgoing(transporter)]).toEqual([false, true]);
+    expect([canTypeIncoming(admin), canTypeOutgoing(admin)]).toEqual([false, false]);
+    // a draft a partner saved can still be changed by staff who may write registrations
+    expect(canEditDraft(admin, { status: "DRAFT", direction: "IN" })).toBe(true);
+  });
+
+  it("scans a document and registers a walk-in at the post as staff only, the emergency path with gate_emergency", () => {
+    const post = staff({ gate: "CREATE", registrations: "CREATE" });
+    expect([canScanDocument(post), canWalkIn(post), canWalkInEmergency(post)]).toEqual([true, true, false]);
+    expect(canWalkInEmergency(staff({ gate: "CREATE", registrations: "CREATE", gate_emergency: "VIEW" }))).toBe(true);
+    // the route needs both modules; a scan alone gets nowhere
+    expect([canScanDocument(staff({ gate: "CREATE" })), canWalkIn(staff({ gate: "CREATE" }))]).toEqual([true, false]);
+    expect(canWalkIn(staff({ gate: "VIEW", registrations: "EDIT" }))).toBe(false);
+    expect(canWalkInEmergency(staff({ gate: "VIEW", registrations: "EDIT", gate_emergency: "VIEW" }))).toBe(false);
+    const partnerWithAll = partner({ gate: "EDIT", registrations: "EDIT", gate_emergency: "VIEW" }, { isSupplier: true, isTransporter: true });
+    expect([canScanDocument(partnerWithAll), canWalkIn(partnerWithAll), canWalkInEmergency(partnerWithAll)]).toEqual([false, false, false]);
   });
 
   it("approves only as staff with registrations EDIT", () => {

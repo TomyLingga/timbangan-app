@@ -23,7 +23,7 @@ import { useUrlFilter } from "@/hooks/use-url-filter";
 import { TotalFigure } from "@/components/total-figure";
 import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { formatDate, formatNumber, formatQuantity } from "@/lib/format";
-import { canCreateIncoming, canCreateOutgoing, canView } from "@/lib/permissions";
+import { canTypeIncoming, canTypeOutgoing, canView, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { registrationStatusInfo } from "@/lib/status";
 import type { Page, RegistrationSummary, User } from "@/lib/types";
@@ -129,8 +129,8 @@ function RegistrationsPage({ user }: { user: User }) {
 
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title="Registrasi" figures={list.data ? <TotalFigure value={list.data.total} noun="registrasi" /> : null} description="Pendaftaran truk sebelum datang. Registrasi tanpa temuan langsung mendapat SPJ; yang punya temuan ditinjau admin logistik.">
-        {canCreateIncoming(user) ? (
+      <PageHeader title="Registrasi" figures={list.data ? <TotalFigure value={list.data.total} noun="registrasi" /> : null} description={isStaff(user) ? "Pendaftaran truk oleh pemasok dan transporter, dan registrasi di pos dari scan dokumen. Registrasi tanpa temuan langsung mendapat SPJ; yang punya temuan ditinjau admin logistik." : "Pendaftaran truk sebelum datang. Registrasi tanpa temuan langsung mendapat SPJ; yang punya temuan ditinjau admin logistik."}>
+        {canTypeIncoming(user) ? (
           <Button asChild>
             <Link href="/registrasi/baru?arah=in">
               <Plus aria-hidden="true" />
@@ -138,8 +138,8 @@ function RegistrationsPage({ user }: { user: User }) {
             </Link>
           </Button>
         ) : null}
-        {canCreateOutgoing(user) ? (
-          <Button asChild variant={canCreateIncoming(user) ? "outline" : "default"}>
+        {canTypeOutgoing(user) ? (
+          <Button asChild variant={canTypeIncoming(user) ? "outline" : "default"}>
             <Link href="/registrasi/baru?arah=out">
               <Plus aria-hidden="true" />
               Registrasi outgoing

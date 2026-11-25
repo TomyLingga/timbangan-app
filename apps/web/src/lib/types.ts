@@ -16,6 +16,8 @@ export type ModuleCode =
   | "delivery_orders"
   | "registrations"
   | "gate"
+  // typing a registration at the post when the document could not be read (API migration 0015); VIEW is its only level
+  | "gate_emergency"
   | "rfid_cards"
   | "users"
   // phase 4: weighing, decisions, field steps, reports
@@ -32,7 +34,9 @@ export type ModuleCode =
   | "plant_masters"
   | "dashboard"
   // phase 8: GPS positions of trucks outside the plant
-  | "gps";
+  | "gps"
+  // migration 0017: the INL team asks a supplier to deliver on a purchase contract
+  | "shipment_requests";
 
 /** EDIT covers CREATE, CREATE covers VIEW. */
 export type PermissionLevel = "VIEW" | "CREATE" | "EDIT";
@@ -86,6 +90,57 @@ export interface Contract {
   customerPoNo: string | null;
   state: string;
   syncedAt: string | null;
+  /**
+   * The open shipment request of the contract (API migration 0017): DRAFT or SENT for staff, SENT only for a
+   * partner account; null without one. Absent from an older API.
+   */
+  shipmentRequest?: { id: string | number; status: string; sentAt: string | null } | null;
+}
+
+/** A person named on a record: who made, sent, closed or cancelled it. */
+export interface PersonRef {
+  id: string | number;
+  fullName: string | null;
+}
+
+/** GET /api/shipment-requests and /:id (apps/api src/shipment-requests/view.ts). DRAFT, SENT, CLOSED, CANCELLED. */
+export interface ShipmentRequest {
+  id: string | number;
+  status: string;
+  contract: {
+    id: string | number;
+    contractNo: string;
+    state: string;
+    qtyContract: number | null;
+    uom: string | null;
+    tolerancePct: number | null;
+    validFrom: string | null;
+    validUntil: string | null;
+  };
+  product: { id: string | number; name: string; category: string | null };
+  partner: PartnerRef;
+  qtyPlanned: number | null;
+  uom: string | null;
+  deliveryFrom: string | null;
+  deliveryUntil: string | null;
+  remark: string | null;
+  fileCount: number;
+  createdBy: PersonRef;
+  createdAt: string;
+  sentBy: PersonRef | null;
+  sentAt: string | null;
+  closedBy: PersonRef | null;
+  closedAt: string | null;
+  cancelledBy: PersonRef | null;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  updatedAt: string;
+}
+
+/** GET /api/shipment-requests/:id: the request and the contract PDF it carries. */
+export interface ShipmentRequestDetail {
+  shipmentRequest: ShipmentRequest;
+  files: AttachedFile[];
 }
 
 export interface ContractList {
@@ -321,7 +376,10 @@ export interface DeliveryOrder {
   deliveryFrom: string;
   deliveryUntil: string | null;
   transportTerms: string | null;
+  /** The transporter; for a DO sent to its customer, the customer itself (API migration 0017). */
   transporter: PartnerRef | null;
+  /** Whom the DO was sent to; null before sending. Absent from an older API. */
+  sentTo?: "TRANSPORTER" | "CUSTOMER" | null;
   truckCount: number | null;
   truckCountBy: string | null;
   qtyPlanned: number;
@@ -390,6 +448,15 @@ export interface Trip {
   docGrossKg: Numeric;
   docTareKg: Numeric;
   docNetKg: Numeric;
+  /**
+   * Outgoing: as the post marked the truck at check-in; before that, what an older registration carries. Null:
+   * not marked yet, or an incoming truck. Absent from an API before migration 0015.
+   */
+  closeCargo?: boolean | null;
+  flexiBag?: boolean | null;
+  /** Outgoing, free and optional (API migration 0016): an extra SPBE, the passport or travel letter. */
+  extraSpbe?: string | null;
+  passportNo?: string | null;
   allocations: TripAllocation[];
   spj: Spj | null;
   card: { uid: string; label: string | null } | null;
@@ -557,6 +624,8 @@ export interface ExceptionView {
   type: ExceptionType;
   status: ExceptionStatus;
   decision: string | null;
+  /** What may be decided while PENDING (allowedDecisions in apps/api/src/exceptions/service.ts). */
+  options?: string[];
   trip: { id: string | number; tripNo: string | null; plateNo: string | null; plateDisplay: string | null };
   station: { id: string | number; code: string; name: string } | null;
   stage: number | null;
@@ -579,7 +648,51 @@ export interface ExceptionView {
   context: Record<string, unknown> | null;
 }
 
-export type StepStatus = "PENDING" | "READY" | "IN_PROGRESS" | "DONE" | "SKIPPED" | "FAILED";
+/** One signature column of a Berita Acara: the operator who checked the truck in, and the approver. */
+export interface ReportSigner {
+  role: string;
+  title: string;
+  position: string;
+  user: { id: string | number; fullName: string | null } | null;
+}
+
+/** GET /api/exceptions/:id/report: the data of the Berita Acara of an approved request (apps/api src/exceptions/routes.ts). */
+export interface ExceptionReport {
+  reportNo: string;
+  /** "Berita Acara Selisih Bruto", "Berita Acara Plat Tidak Sesuai", ... */
+  title: string;
+  type: string;
+  exceptionId: string | number;
+  site: { code: string; name: string };
+  trip: {
+    id: string | number;
+    tripNo: string | null;
+    plateNo: string | null;
+    plateDisplay: string | null;
+    driverName: string | null;
+    direction: Direction;
+    partner: string;
+    transporter: string | null;
+  };
+  lines: Array<{ seq: number; contractNo: string | null; doNo: string | null }>;
+  station: { code: string | null; name: string | null };
+  expectedKg: number | null;
+  weighedKg: number | null;
+  diffKg: number | null;
+  diffPct: number | null;
+  tolerancePct: number | null;
+  weighing: { id: string | number; weightKg: number | null; weighedAt: string | null } | null;
+  reason: string | null;
+  raisedAt: string;
+  decidedAt: string | null;
+  decidedBy: { id: string | number; fullName: string | null } | null;
+  masterTareUpdated: boolean;
+  /** A plate Berita Acara: what the camera read (null: not read) and the registered plate; null for weights. */
+  plate: { read: string | null; registered: string | null } | null;
+  signers: ReportSigner[];
+}
+
+export type StepStatus ="PENDING" | "READY" | "IN_PROGRESS" | "DONE" | "SKIPPED" | "FAILED";
 
 /** A step of a trip (apps/api trips/work-routes.ts, stepView). */
 export interface TripStep {

@@ -13,9 +13,12 @@ import {
   incomingFromDraft,
   incomingPayload,
   letterPayload,
+  outgoingExtras,
   outgoingFromDraft,
   outgoingPayload,
   registrationFieldErrors,
+  sendOrderBody,
+  sentToText,
   validateCard,
   validateDeliveryOrder,
   validateIncoming,
@@ -371,50 +374,38 @@ describe("validateOutgoing and outgoingPayload", () => {
           driver: { state: "found", key: "CONTOH0002", item: driver({ id: "d-2", licenceNo: "CONTOH0002" }) },
         }),
       ],
-      closeCargo: "yes",
-      flexiBag: "no",
       plannedDate: "2026-11-21",
       remark: "",
       ...overrides,
     };
   }
 
-  it("accepts a complete registration", () => {
-    expect(validateOutgoing(values(), CONTEXT, true)).toEqual({});
-  });
-
-  it("needs close cargo and flexi bag when sending, not for a draft", () => {
-    const open = values({ closeCargo: "", flexiBag: "" });
-    expect(validateOutgoing(open, CONTEXT, true)).toEqual({
-      closeCargo: "Pilih ya atau tidak.",
-      flexiBag: "Pilih ya atau tidak.",
-    });
-    expect(validateOutgoing(open, CONTEXT, false)).toEqual({});
+  it("accepts a complete registration, without asking for close cargo or flexi bag", () => {
+    // the post marks both per truck at check-in, so the transporter's form has neither
+    expect(validateOutgoing(values(), CONTEXT)).toEqual({});
   });
 
   it("needs a delivery order, a quantity per order and at least one truck", () => {
-    expect(validateOutgoing(values({ orders: [] }), CONTEXT, false).orders).toBe("Pilih paling sedikit satu DO.");
-    expect(validateOutgoing(values({ orders: [{ order: order("do-1"), qty: "0" }] }), CONTEXT, false)["orders.0.qty"]).toBe(
+    expect(validateOutgoing(values({ orders: [] }), CONTEXT).orders).toBe("Pilih paling sedikit satu DO.");
+    expect(validateOutgoing(values({ orders: [{ order: order("do-1"), qty: "0" }] }), CONTEXT)["orders.0.qty"]).toBe(
       "Isi quantity dalam kg, angka bulat lebih dari nol.",
     );
-    expect(validateOutgoing(values({ trucks: [] }), CONTEXT, false).trucks).toBe("Tambahkan paling sedikit satu truk.");
+    expect(validateOutgoing(values({ trucks: [] }), CONTEXT).trucks).toBe("Tambahkan paling sedikit satu truk.");
   });
 
   it("refuses the same vehicle or driver on two trucks", () => {
-    const errors = validateOutgoing(values({ trucks: [knownTruck({ key: "a" }), knownTruck({ key: "b" })] }), CONTEXT, false);
+    const errors = validateOutgoing(values({ trucks: [knownTruck({ key: "a" }), knownTruck({ key: "b" })] }), CONTEXT);
     expect(errors["trucks.1.plate"]).toBe("Kendaraan ini sudah dipakai truk lain di registrasi ini.");
     expect(errors["trucks.1.licenceNo"]).toBe("Supir ini sudah dipakai truk lain di registrasi ini.");
     expect(errors["trucks.0.plate"]).toBeUndefined();
   });
 
-  it("builds the request with the quantity per order and the answers as booleans", () => {
+  it("builds the request with the quantity per order, and without close cargo or flexi bag", () => {
     const body = outgoingPayload(values(), true);
     expect(body).toEqual({
       direction: "OUT",
       transporterId: "p-3",
       plannedDate: "2026-11-21",
-      closeCargo: true,
-      flexiBag: false,
       submit: true,
       allocations: [{ deliveryOrderId: "do-1", qtyPlanned: 38002 }],
       trips: [
@@ -424,10 +415,46 @@ describe("validateOutgoing and outgoingPayload", () => {
     });
   });
 
-  it("leaves unanswered questions out of a draft", () => {
-    const body = outgoingPayload(values({ closeCargo: "", flexiBag: "" }), false);
-    expect("closeCargo" in body).toBe(false);
-    expect("flexiBag" in body).toBe(false);
+  it("sends the extra SPBE and the passport of a truck only when filled, trimmed", () => {
+    const trucks = values().trucks.map((truck, index) => (index === 0 ? { ...truck, extraSpbe: "  SPBE Contoh 7 ", passportNo: "SJ-CONTOH-0001" } : truck));
+    expect(outgoingPayload(values({ trucks }), false).trips).toEqual([
+      { vehicle: { id: "v-1" }, driver: { id: "d-1" }, extraSpbe: "SPBE Contoh 7", passportNo: "SJ-CONTOH-0001" },
+      { vehicle: { id: "v-2" }, driver: { id: "d-2" } },
+    ]);
+    expect(outgoingExtras({ extraSpbe: " ", passportNo: "" })).toEqual({});
+  });
+
+  it("refuses an extra SPBE or passport longer than 200 characters", () => {
+    const trucks = values().trucks.map((truck, index) => (index === 1 ? { ...truck, passportNo: "x".repeat(201) } : truck));
+    expect(validateOutgoing(values({ trucks }), CONTEXT)).toEqual({ "trucks.1.passportNo": "Paling banyak 200 huruf." });
+  });
+
+  it("puts the API's messages for the two free texts on their fields", () => {
+    expect(registrationFieldErrors("OUT", { "trips.1.extraSpbe": "SPBE tambahan terlalu panjang." }).errors).toEqual({
+      "trucks.1.extraSpbe": "SPBE tambahan terlalu panjang.",
+    });
+  });
+});
+
+describe("sending a delivery order", () => {
+  const sent = (sentTo: DeliveryOrder["sentTo"], transporter: { id: string; name: string } | null) => ({
+    sentTo,
+    transporter,
+    partner: { id: "p-201", name: "Customer Contoh A" },
+  });
+
+  it("says whom the DO went to", () => {
+    expect(sentToText(sent("TRANSPORTER", { id: "p-301", name: "Transporter Contoh A" }))).toBe("Transporter: Transporter Contoh A");
+    // a DO sent to its customer keeps the customer as its transporter
+    expect(sentToText(sent("CUSTOMER", { id: "p-201", name: "Customer Contoh A" }))).toBe("Customer: Customer Contoh A");
+    expect(sentToText(sent(null, { id: "p-301", name: "Transporter Contoh A" }))).toBeNull();
+    expect(sentToText(sent(undefined, null))).toBeNull();
+  });
+
+  it("names the transporter for a transporter send and nobody for a customer send", () => {
+    expect(sendOrderBody("TRANSPORTER", { id: "p-301", name: "Transporter Contoh A" })).toEqual({ body: { to: "TRANSPORTER", transporterId: "p-301" } });
+    expect(sendOrderBody("TRANSPORTER", null)).toEqual({ problem: "Pilih transporter." });
+    expect(sendOrderBody("CUSTOMER", { id: "p-301", name: "Transporter Contoh A" })).toEqual({ body: { to: "CUSTOMER" } });
   });
 });
 
@@ -706,15 +733,19 @@ describe("drafts back into the forms", () => {
         closeCargo: true,
         flexiBag: false,
         allocations: [allocation(1, { deliveryOrder: { id: "do-1", doNo: "DO-do-1" }, qtyPlanned: 38002 })],
-        trips: [trip({ allocations: [line(1, { handoverNo: "H-1" })] }), trip({ id: "trip-2", seq: 2, vehicle: null, driver: null })],
+        trips: [
+          trip({ allocations: [line(1, { handoverNo: "H-1" })], extraSpbe: "SPBE Contoh", passportNo: "SJ-CONTOH-2" }),
+          trip({ id: "trip-2", seq: 2, vehicle: null, driver: null }),
+        ],
       }),
       [order("do-1")],
     );
     expect(values.orders).toEqual([{ order: order("do-1"), qty: "38002" }]);
-    expect(values.trucks.map((truck) => [truck.plate, truck.licenceNo, truck.handoverNo])).toEqual([
-      ["ZZ 0001 CTH", "CONTOH0001", "H-1"],
-      ["", "", ""],
+    expect(values.trucks.map((truck) => [truck.plate, truck.licenceNo, truck.handoverNo, truck.extraSpbe, truck.passportNo])).toEqual([
+      ["ZZ 0001 CTH", "CONTOH0001", "H-1", "SPBE Contoh", "SJ-CONTOH-2"],
+      ["", "", "", "", ""],
     ]);
-    expect([values.closeCargo, values.flexiBag]).toEqual(["yes", "no"]);
+    // answers an older draft carries are not brought back into the form: the post marks the trucks
+    expect(Object.keys(values).sort()).toEqual(["orders", "plannedDate", "remark", "trucks"]);
   });
 });

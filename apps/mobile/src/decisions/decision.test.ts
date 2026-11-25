@@ -32,9 +32,14 @@ const view = (changes: Partial<ExceptionView>): ExceptionView => ({
 
 describe("choices per type", () => {
   it("offers approve and reject, and the three answers of the outgoing net check", () => {
-    expect(decisionChoices("GROSS_IN").map((choice) => choice.label)).toEqual(["Setujui", "Tolak"]);
-    expect(decisionChoices("NET_OUT").map((choice) => choice.code)).toEqual(["OK", "ADD_LOAD", "REDUCE_LOAD"]);
-    expect(decisionChoices("NET_OUT").map((choice) => choice.label)).toEqual(["Sesuai", "Tambah muatan", "Kurangi muatan"]);
+    expect(decisionChoices(view({ type: "GROSS_IN", stage: 1 })).map((choice) => choice.label)).toEqual(["Setujui", "Mundur/hold", "Tolak truk"]);
+    expect(decisionChoices(view({ type: "NET_IN", stage: 2 })).map((choice) => choice.code)).toEqual(["APPROVE", "HOLD"]);
+    expect(decisionChoices(view({ type: "PLATE", stage: 2 })).map((choice) => choice.code)).toEqual(["APPROVE", "HOLD"]);
+    expect(decisionChoices(view({ type: "QC_HOLD" })).map((choice) => choice.label)).toEqual(["Setujui", "Tolak"]);
+    expect(decisionChoices(view({ type: "NET_OUT" })).map((choice) => choice.code)).toEqual(["OK", "ADD_LOAD", "REDUCE_LOAD"]);
+    expect(decisionChoices(view({ type: "NET_OUT" })).map((choice) => choice.label)).toEqual(["Sesuai", "Isi lagi", "Kurangi isi"]);
+    // what the server offers wins
+    expect(decisionChoices(view({ type: "GROSS_IN", stage: 1, options: ["APPROVE", "HOLD"] })).map((choice) => choice.code)).toEqual(["APPROVE", "HOLD"]);
     expect(typeLabel("TARE_OUT")).toBe("Selisih tarra");
   });
   it("requires a reason for the three weight differences only", () => {
@@ -44,16 +49,19 @@ describe("choices per type", () => {
     expect(reasonRequired("PLATE")).toBe(false);
     expect(reasonRequired("NET_OUT")).toBe(false);
     expect(reasonRequired("QC_HOLD")).toBe(false);
+    // turning a truck away needs a reason too, a QC spec reject does not
+    expect(reasonRequired("PLATE", "REJECT")).toBe(true);
+    expect(reasonRequired("QC_HOLD", "REJECT")).toBe(false);
   });
 });
 
 describe("validateDecision and body", () => {
   it("asks for a reason of at least 3 letters", () => {
-    expect(validateDecision("GROSS_IN", { decision: "APPROVE", reason: " ok ", updateMasterTare: false })).toEqual({ reason: "Alasan wajib diisi, minimal 3 huruf." });
-    expect(validateDecision("PLATE", { decision: "APPROVE", reason: "", updateMasterTare: false })).toEqual({});
+    expect(validateDecision(view({ type: "GROSS_IN", stage: 1 }), { decision: "APPROVE", reason: " ok ", updateMasterTare: false })).toEqual({ reason: "Alasan wajib diisi, minimal 3 huruf." });
+    expect(validateDecision(view({ type: "PLATE", stage: 1 }), { decision: "APPROVE", reason: "", updateMasterTare: false })).toEqual({});
   });
   it("offers the master tare only on an approved tare difference", () => {
-    expect(validateDecision("TARE_OUT", { decision: "REJECT", reason: "Truk tidak sesuai", updateMasterTare: true })).toEqual({
+    expect(validateDecision(view({ type: "TARE_OUT", stage: 1 }), { decision: "REJECT", reason: "Truk tidak sesuai", updateMasterTare: true })).toEqual({
       updateMasterTare: "Tarra master hanya bisa diganti saat selisih tarra disetujui.",
     });
     expect(decisionBody("TARE_OUT", { decision: "APPROVE", reason: " Ganti ban ", updateMasterTare: true })).toEqual({
@@ -64,7 +72,7 @@ describe("validateDecision and body", () => {
     expect(decisionBody("NET_OUT", { decision: "ADD_LOAD", reason: "", updateMasterTare: false })).toEqual({ decision: "ADD_LOAD" });
   });
   it("refuses a decision code that does not belong to the type", () => {
-    expect(validateDecision("NET_OUT", { decision: "APPROVE", reason: "", updateMasterTare: false })).toEqual({ decision: "Pilih salah satu keputusan." });
+    expect(validateDecision(view({ type: "NET_OUT", stage: 1 }), { decision: "APPROVE", reason: "", updateMasterTare: false })).toEqual({ decision: "Pilih salah satu keputusan." });
   });
 });
 

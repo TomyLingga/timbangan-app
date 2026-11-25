@@ -1,4 +1,5 @@
-// Files attached to a delivery order (the DO letter logistics sends with it) and weighbridge slips attached to a
+// Files attached to a delivery order (the DO letter logistics sends with it), to a shipment request (the contract
+// PDF sent to the supplier) and weighbridge slips attached to a
 // truck of an incoming registration (the supplier's own scale, label SLIP_TIMBANG). The files themselves are
 // uploaded through POST /api/files; these routes link and unlink them.
 import { and, count, eq } from "drizzle-orm";
@@ -8,14 +9,15 @@ import type { AppContext } from "../app.js";
 import { type Account, accountOf, can, type Guards } from "../auth/guard.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
-import { deliveryOrderFiles, deliveryOrders, files, registrations, tripFiles, trips, users } from "../db/schema.js";
-import { deliveryOrderFilesOf, SLIP_LABEL, tripSlipsOf } from "./view.js";
+import { deliveryOrderFiles, deliveryOrders, files, registrations, shipmentRequestFiles, shipmentRequests, tripFiles, trips, users } from "../db/schema.js";
+import { deliveryOrderFilesOf, SLIP_LABEL, shipmentRequestFilesOf, tripSlipsOf } from "./view.js";
 import { duplicate, forbidden, invalid, invalidState, notFound, refused } from "../errors.js";
 import { idNumber, idParams } from "../http.js";
 import { registrationsVisibleTo } from "../registrations/view.js";
 import { mayWrite } from "../registrations/service.js";
 
 export const MAX_DO_FILES = 5;
+export const MAX_REQUEST_FILES = 5;
 export const MAX_TRIP_SLIPS = 3;
 
 const linkBody = z.object({
@@ -36,11 +38,12 @@ async function uploaderOf(orm: Orm, fileId: number) {
   return row ?? null;
 }
 
-/** Whether the file is linked to any truck or delivery order already. */
+/** Whether the file is linked to any truck, delivery order or shipment request already. */
 export async function linkedAnywhere(orm: Orm, fileId: number): Promise<boolean> {
   const [onTrip] = await orm.select({ n: count() }).from(tripFiles).where(eq(tripFiles.fileId, fileId));
   const [onDo] = await orm.select({ n: count() }).from(deliveryOrderFiles).where(eq(deliveryOrderFiles.fileId, fileId));
-  return (onTrip?.n ?? 0) + (onDo?.n ?? 0) > 0;
+  const [onRequest] = await orm.select({ n: count() }).from(shipmentRequestFiles).where(eq(shipmentRequestFiles.fileId, fileId));
+  return (onTrip?.n ?? 0) + (onDo?.n ?? 0) + (onRequest?.n ?? 0) > 0;
 }
 
 const unknownFile = () => invalid("fileId", "Berkas tidak ditemukan.");
@@ -98,6 +101,66 @@ export function registerAttachmentRoutes(app: FastifyInstance, context: AppConte
       if (removed.length === 0) throw notFound("Lampiran");
       await writeAudit(tx, request, now, { action: "DO_FILE_REMOVED", entityType: "delivery_order", entityId: id, before: { fileId }, after: null });
       return deliveryOrderFilesOf(tx, id);
+    });
+    return { files: list };
+  });
+
+  const requestEditors = { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("shipment_requests", "CREATE")] };
+
+  /** Locks the shipment request for a change of its files: only a draft or a sent one. */
+  const lockRequest = async (tx: Orm, id: number) => {
+    const [request] = await tx.select().from(shipmentRequests).where(eq(shipmentRequests.id, id)).for("update");
+    if (!request) throw notFound("Permintaan pengiriman");
+    if (request.status !== "DRAFT" && request.status !== "SENT") throw invalidState("Lampiran hanya bisa diubah selama permintaan berstatus DRAFT atau SENT.");
+    return request;
+  };
+
+  app.post("/api/shipment-requests/:id/files", requestEditors, async (request, reply) => {
+    const { id } = idParams.parse(request.params);
+    const body = linkBody.parse(request.body ?? {});
+    const account = accountOf(request);
+    const now = context.now();
+    const list = await orm.transaction(async (tx) => {
+      await lockRequest(tx, id);
+      const uploader = await uploaderOf(tx, body.fileId);
+      // a partner's upload is never handed to another company through a request
+      if (!uploader || uploader.kind !== "INTERNAL") throw unknownFile();
+      const [mine] = await tx
+        .select({ n: count() })
+        .from(shipmentRequestFiles)
+        .where(and(eq(shipmentRequestFiles.shipmentRequestId, id), eq(shipmentRequestFiles.fileId, body.fileId)));
+      if ((mine?.n ?? 0) > 0) throw alreadyUsed();
+      if (await linkedAnywhere(tx, body.fileId)) throw invalid("fileId", "Berkas ini sudah dipakai di tempat lain.");
+      const [held] = await tx.select({ n: count() }).from(shipmentRequestFiles).where(eq(shipmentRequestFiles.shipmentRequestId, id));
+      if ((held?.n ?? 0) >= MAX_REQUEST_FILES) throw refused("TOO_MANY_FILES", `Paling banyak ${MAX_REQUEST_FILES} lampiran per permintaan.`);
+      await tx.insert(shipmentRequestFiles).values({ shipmentRequestId: id, fileId: body.fileId, label: body.label || null, addedBy: account.id, addedAt: now });
+      await writeAudit(tx, request, now, {
+        action: "SHIPMENT_REQUEST_FILE_ADDED",
+        entityType: "shipment_request",
+        entityId: id,
+        before: null,
+        after: { fileId: body.fileId, label: body.label ?? null },
+      });
+      return shipmentRequestFilesOf(tx, id);
+    });
+    return reply.code(201).send({ files: list });
+  });
+
+  app.delete("/api/shipment-requests/:id/files/:fileId", requestEditors, async (request) => {
+    const { id, fileId } = doFileParams.parse(request.params);
+    const now = context.now();
+    const list = await orm.transaction(async (tx) => {
+      const current = await lockRequest(tx, id);
+      const removed = await tx
+        .delete(shipmentRequestFiles)
+        .where(and(eq(shipmentRequestFiles.shipmentRequestId, id), eq(shipmentRequestFiles.fileId, fileId)))
+        .returning({ fileId: shipmentRequestFiles.fileId });
+      if (removed.length === 0) throw notFound("Lampiran");
+      // the supplier keeps the contract document it was sent: add the new file first, then remove the old one
+      const [left] = await tx.select({ n: count() }).from(shipmentRequestFiles).where(eq(shipmentRequestFiles.shipmentRequestId, id));
+      if (current.status === "SENT" && (left?.n ?? 0) === 0) throw refused("FILE_REQUIRED", "Permintaan yang sudah dikirim harus tetap punya satu lampiran.");
+      await writeAudit(tx, request, now, { action: "SHIPMENT_REQUEST_FILE_REMOVED", entityType: "shipment_request", entityId: id, before: { fileId }, after: null });
+      return shipmentRequestFilesOf(tx, id);
     });
     return { files: list };
   });

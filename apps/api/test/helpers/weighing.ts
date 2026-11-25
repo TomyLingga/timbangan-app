@@ -2,7 +2,7 @@
 // phase 3 routes, so they carry the same rows a real truck would.
 import type { Database } from "../../src/db/client.js";
 import { generateStationKey } from "../../src/stations/keys.js";
-import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle } from "./fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, sendShipmentRequest } from "./fixtures.js";
 import { seedStaff } from "./users.js";
 
 export interface StationSeed {
@@ -101,6 +101,8 @@ export async function weighingApp(options: { plateAttempts?: number } = {}) {
         }),
       );
     }
+    // INL sent the supplier a request for each contract, so the supplier may register the truck (0017)
+    for (const contractId of contractIds) await sendShipmentRequest(database, contractId);
     const vehicleId = await seedVehicle(database, { plate, ownerId: companies.transporter1 });
     const driver = await seedDriver(database, { name: `Supir Masuk ${n}`, licence: `SIMIN${String(n).padStart(5, "0")}` });
     const cardUid = `C1${String(n).padStart(10, "0")}`;

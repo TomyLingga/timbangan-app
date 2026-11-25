@@ -5,7 +5,7 @@ import { and, asc, eq, isNull } from "drizzle-orm";
 import type { Orm } from "../db/client.js";
 import { exceptions, notificationDeliveries, notifications, userDevices } from "../db/schema.js";
 import { expireStaleExceptions } from "../exceptions/service.js";
-import { DO_SENT, EXCEPTION_CLOSED, EXCEPTION_RAISED, type ExceptionRound, processExceptions } from "./service.js";
+import { DO_SENT, EXCEPTION_CLOSED, EXCEPTION_RAISED, type ExceptionRound, processExceptions, SHIPMENT_REQUEST_SENT } from "./service.js";
 import type { PushMessage, PushSender } from "./push.js";
 
 export const LOOP_EVERY_MS = 5_000;
@@ -51,7 +51,8 @@ export function pushMessageOf(row: PendingRow): PushMessage {
       android: { priority: "high", channelId: DECISION_CHANNEL, tag: `exception-${row.exceptionId}`, ttlS: ALARM_TTL_S },
     };
   }
-  return { token: row.token, title: row.title, body: row.body, data, android: { priority: row.type === DO_SENT ? "normal" : "high" } };
+  const plain = row.type === DO_SENT || row.type === SHIPMENT_REQUEST_SENT;
+  return { token: row.token, title: row.title, body: row.body, data, android: { priority: plain ? "normal" : "high" } };
 }
 
 /** Sends the pending pushes in order. A provider or network failure ends the round; that push stays pending. */

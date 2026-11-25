@@ -41,8 +41,8 @@ import { saveErrorMessage, transitionErrorMessage } from "@/lib/messages";
 import {
   canAcceptDeliveryOrder,
   canCreateDeliveryOrder,
-  canCreateOutgoing,
   canManageDeliveryOrders,
+  canTypeOutgoing,
   canView,
   isStaff,
 } from "@/lib/permissions";
@@ -54,16 +54,20 @@ import {
   deliveryOrderPayload,
   destinationGaps,
   EMPTY_DELIVERY_ORDER,
+  sendOrderBody,
+  sentToText,
   validateDeliveryOrder,
   type DeliveryOrderValues,
+  type SendTarget,
 } from "@/lib/workflow-forms";
+import { Segmented } from "@/components/segmented";
 
 const LIST_LIMIT = 50;
 
 const STATUS_FILTERS = [
   { value: "DRAFT", label: "Draf" },
-  { value: "SENT", label: "Menunggu transporter" },
-  { value: "ACCEPTED", label: "Diterima transporter" },
+  { value: "SENT", label: "Menunggu diterima" },
+  { value: "ACCEPTED", label: "Diterima" },
   { value: "CLOSED", label: "Tutup" },
   { value: "CANCELLED", label: "Batal" },
 ];
@@ -146,7 +150,21 @@ function columnsFor(admin: boolean): ReadonlyArray<Column<DeliveryOrder>> {
       ),
     },
     admin
-      ? { id: "transporter", header: "Transporter", cellClassName: "max-w-40 whitespace-normal", cell: (order) => order.transporter?.name ?? "Belum dipilih" }
+      ? {
+          id: "sentTo",
+          header: "Dikirim ke",
+          cellClassName: "max-w-44 whitespace-normal",
+          cell: (order) => {
+            const sent = sentToText(order);
+            if (sent) return <span data-testid="do-sent-to">{sent}</span>;
+            return (
+              <>
+                <span className="block">Belum dikirim</span>
+                {order.transporter ? <span className="block text-xs text-muted-foreground">Transporter dipilih: {order.transporter.name}</span> : null}
+              </>
+            );
+          },
+        }
       : null,
     {
       id: "trucks",
@@ -508,6 +526,64 @@ async function transition(order: DeliveryOrder, action: string, body: unknown = 
   }
 }
 
+/** Send to a transporter (the one on the DO, or another) or to the DO's own customer, who then collects its goods. */
+function SendSheet({ order, onClose, onDone }: { order: DeliveryOrder; onClose: () => void; onDone: (message: string) => void }) {
+  const [target, setTarget] = useState<SendTarget>("TRANSPORTER");
+  const [transporter, setTransporter] = useState<PartnerRef | null>(order.transporter);
+  const [transporterError, setTransporterError] = useState<string | undefined>(undefined);
+  return (
+    <ActionSheet
+      title={`Kirim ${order.doNo}`}
+      description="Setelah dikirim, isi DO tidak bisa diubah lagi kecuali batas kirim, jumlah truk, dan catatan."
+      submitLabel="Kirim DO"
+      onClose={onClose}
+      onConfirm={async () => {
+        const gaps = destinationGaps(order.destination);
+        if (gaps.length > 0) return `Lengkapi tujuan DO lewat Ubah sebelum dikirim: ${gaps.join(", ")}.`;
+        const outcome = sendOrderBody(target, transporter);
+        if ("problem" in outcome) {
+          setTransporterError(outcome.problem);
+          return "Pilih transporter dulu.";
+        }
+        const failure = await transition(order, "send", outcome.body);
+        if (!failure) onDone(`DO ${order.doNo} dikirim ke ${target === "CUSTOMER" ? order.partner.name : (transporter?.name ?? "-")}.`);
+        return failure;
+      }}
+    >
+      <div className="flex flex-col gap-2">
+        <span className="text-sm font-medium">Kirim ke</span>
+        <Segmented<SendTarget>
+          label="Kirim ke"
+          value={target}
+          onChange={setTarget}
+          options={[
+            { value: "TRANSPORTER", label: "Transporter" },
+            { value: "CUSTOMER", label: "Customer" },
+          ]}
+        />
+      </div>
+      {target === "TRANSPORTER" ? (
+        <PartnerLookup
+          role="transporter"
+          label="Transporter"
+          name="sendTransporterLookup"
+          placeholder="Cari nama transporter"
+          value={transporter}
+          onChange={(partner) => {
+            setTransporter(partner);
+            setTransporterError(undefined);
+          }}
+          error={transporterError}
+        />
+      ) : (
+        <p className="rounded-md bg-muted px-3 py-2 text-sm" data-testid="send-to-customer">
+          DO dikirim ke customer DO ini, {order.partner.name}. Customer menerima DO dan mendaftarkan truknya sendiri.
+        </p>
+      )}
+    </ActionSheet>
+  );
+}
+
 function AcceptSheet({ order, onClose, onDone }: { order: DeliveryOrder; onClose: () => void; onDone: () => void }) {
   const [truckCount, setTruckCount] = useState("");
   const [error, setError] = useState<string | undefined>(undefined);
@@ -559,7 +635,8 @@ function DeliveryOrdersPage({ user }: { user: User }) {
   const mayCreate = canCreateDeliveryOrder(user);
   const mayManage = canManageDeliveryOrders(user);
   const mayAccept = canAcceptDeliveryOrder(user);
-  const mayFillTrucks = canCreateOutgoing(user);
+  // the list of trucks is the transporter's to fill; staff register a truck at the post
+  const mayFillTrucks = canTypeOutgoing(user);
   const ids = useId();
   const [searchText, setSearchText] = useUrlFilter("q");
   const [status, setStatus] = useUrlFilter("status");
@@ -599,7 +676,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
           </DropdownMenuItem>
           {is(order, "DRAFT") ? (
             <DropdownMenuItem className="min-h-11 md:min-h-9" onSelect={() => setPending({ kind: "send", order })}>
-              Kirim ke transporter
+              Kirim DO
             </DropdownMenuItem>
           ) : null}
           {is(order, "ACCEPTED") ? (
@@ -647,7 +724,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
         figures={list.data ? <TotalFigure value={list.data.total} noun="delivery order" /> : null}
         description={
           admin
-            ? "Susun DO, kirim ke transporter, lalu pantau sisanya sampai ditutup."
+            ? "Susun DO, kirim ke transporter atau customer, lalu pantau sisanya sampai ditutup."
             : "DO yang dikirim admin logistik kepada perusahaan Anda. Terima DO, lalu isi daftar truknya."
         }
       >
@@ -722,26 +799,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
           onSaved={(order, created) => done(created ? `DO ${order.doNo} dibuat sebagai draf.` : `DO ${order.doNo} diperbarui.`)}
         />
       ) : null}
-      {pending?.kind === "send" ? (
-        <ActionSheet
-          title={`Kirim ${pending.order.doNo}`}
-          description={
-            pending.order.transporter
-              ? `DO dikirim ke ${pending.order.transporter.name}. Setelah dikirim, isi DO tidak bisa diubah lagi kecuali batas kirim, jumlah truk, dan catatan.`
-              : "DO ini belum punya transporter. Pilih transporter lewat Ubah, lalu kirim lagi."
-          }
-          submitLabel="Kirim DO"
-          onClose={() => setPending(null)}
-          onConfirm={async () => {
-            if (!pending.order.transporter) return "Pilih transporter dulu lewat Ubah.";
-            const gaps = destinationGaps(pending.order.destination);
-            if (gaps.length > 0) return `Lengkapi tujuan DO lewat Ubah sebelum dikirim: ${gaps.join(", ")}.`;
-            const failure = await transition(pending.order, "send");
-            if (!failure) done(`DO ${pending.order.doNo} dikirim ke ${pending.order.transporter.name}.`);
-            return failure;
-          }}
-        />
-      ) : null}
+      {pending?.kind === "send" ? <SendSheet order={pending.order} onClose={() => setPending(null)} onDone={done} /> : null}
       {pending?.kind === "close" ? (
         <ActionSheet
           title={`Tutup ${pending.order.doNo}`}
@@ -774,7 +832,7 @@ function DeliveryOrdersPage({ user }: { user: User }) {
         <AcceptSheet
           order={pending.order}
           onClose={() => setPending(null)}
-          onDone={() => done(`DO ${pending.order.doNo} diterima. Isi daftar truknya lewat tombol Isi daftar truk.`)}
+          onDone={() => done(mayFillTrucks ? `DO ${pending.order.doNo} diterima. Isi daftar truknya lewat tombol Isi daftar truk.` : `DO ${pending.order.doNo} diterima.`)}
         />
       ) : null}
     </div>

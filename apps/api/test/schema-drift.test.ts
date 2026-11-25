@@ -70,6 +70,8 @@ describe("Drizzle definitions against the migrated database", () => {
       "rfid_cards",
       "seals",
       "settings",
+      "shipment_request_files",
+      "shipment_requests",
       "sites",
       "spj_documents",
       "stations",

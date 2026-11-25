@@ -76,6 +76,9 @@ export interface TruckValues {
   phone: string;
   containerNo: string;
   handoverNo: string;
+  /** Outgoing only, free and optional (owner, 25 November 2026): an extra SPBE, and the passport or travel letter. */
+  extraSpbe: string;
+  passportNo: string;
 }
 
 export function emptyTruck(key: string): TruckValues {
@@ -98,6 +101,8 @@ export function emptyTruck(key: string): TruckValues {
     phone: "",
     containerNo: "",
     handoverNo: "",
+    extraSpbe: "",
+    passportNo: "",
   };
 }
 
@@ -360,18 +365,29 @@ export function incomingPayload(values: IncomingValues, submit: boolean): Regist
 
 // --- outgoing registration -------------------------------------------------------
 
-export type YesNo = "" | "yes" | "no";
-
+// Close cargo and flexi bag are not part of this form any more: the operator of the registration post marks them
+// per truck when it checks in (API migration 0015, src/lib/cargo-marks.ts).
 export interface OutgoingValues {
   orders: Array<{ order: DeliveryOrder; qty: string }>;
   trucks: TruckValues[];
-  closeCargo: YesNo;
-  flexiBag: YesNo;
   plannedDate: string;
   remark: string;
 }
 
-export function validateOutgoing(values: OutgoingValues, context: FormContext, submit: boolean): FormErrors {
+/** The two free texts of an outgoing truck, each at most this long (apps/api src/registrations/service.ts). */
+const OUTGOING_EXTRAS = ["extraSpbe", "passportNo"] as const;
+export const OUTGOING_EXTRA_MAX = 200;
+
+/** The filled free texts of an outgoing truck; an empty one is left out. */
+export function outgoingExtras(truck: Pick<TruckValues, "extraSpbe" | "passportNo">): { extraSpbe?: string; passportNo?: string } {
+  const extras: { extraSpbe?: string; passportNo?: string } = {};
+  for (const name of OUTGOING_EXTRAS) {
+    if (text(truck[name])) extras[name] = text(truck[name]);
+  }
+  return extras;
+}
+
+export function validateOutgoing(values: OutgoingValues, context: FormContext): FormErrors {
   let errors: FormErrors = {};
   if (values.orders.length === 0) errors.orders = "Pilih paling sedikit satu DO.";
   values.orders.forEach((entry, index) => {
@@ -390,15 +406,13 @@ export function validateOutgoing(values: OutgoingValues, context: FormContext, s
     if (licence && !own.licenceNo && seenLicences.has(licence)) {
       own.licenceNo = "Supir ini sudah dipakai truk lain di registrasi ini.";
     }
+    for (const name of OUTGOING_EXTRAS) {
+      if (text(truck[name]).length > OUTGOING_EXTRA_MAX) own[name] = `Paling banyak ${OUTGOING_EXTRA_MAX} huruf.`;
+    }
     if (plate) seenPlates.add(plate);
     if (licence) seenLicences.add(licence);
     errors = { ...errors, ...prefixed(`trucks.${index}`, own) };
   });
-
-  if (submit) {
-    if (!values.closeCargo) errors.closeCargo = "Pilih ya atau tidak.";
-    if (!values.flexiBag) errors.flexiBag = "Pilih ya atau tidak.";
-  }
   return errors;
 }
 
@@ -408,10 +422,8 @@ export function outgoingPayload(values: OutgoingValues, submit: boolean): Regist
   const transporter = values.orders.find((entry) => entry.order.transporter)?.order.transporter;
   if (transporter) body.transporterId = transporter.id;
   commonFields(body, values);
-  if (values.closeCargo) body.closeCargo = values.closeCargo === "yes";
-  if (values.flexiBag) body.flexiBag = values.flexiBag === "yes";
   body.allocations = values.orders.map((entry) => ({ deliveryOrderId: entry.order.id, qtyPlanned: wholeKg(entry.qty) }));
-  body.trips = values.trucks.map(truckPayload);
+  body.trips = values.trucks.map((truck) => ({ ...truckPayload(truck), ...outgoingExtras(truck) }));
   return body;
 }
 
@@ -432,6 +444,8 @@ const TRUCK_FIELDS: Record<string, string> = {
   "driver.phone": "phone",
   containerNo: "containerNo",
   handoverNo: "handoverNo",
+  extraSpbe: "extraSpbe",
+  passportNo: "passportNo",
 };
 const TOP_FIELDS = new Set(["plannedDate", "remark", "closeCargo", "flexiBag"]);
 
@@ -482,6 +496,8 @@ export function truckFromTrip(trip: Trip, key: string): TruckValues {
     licenceNo: trip.driver?.licenceNo ?? "",
     containerNo: trip.containerNo ?? "",
     handoverNo: trip.allocations[0]?.handoverNo ?? "",
+    extraSpbe: trip.extraSpbe ?? "",
+    passportNo: trip.passportNo ?? "",
   };
 }
 
@@ -527,8 +543,6 @@ export function incomingFromDraft(registration: Registration, parameters: readon
   };
 }
 
-const yesNoOf = (value: boolean | null): YesNo => (value === null ? "" : value ? "yes" : "no");
-
 /** `orders` are the delivery orders the draft names, as GET /api/delivery-orders/:id answers them. */
 export function outgoingFromDraft(registration: Registration, orders: readonly DeliveryOrder[]): OutgoingValues {
   return {
@@ -537,8 +551,6 @@ export function outgoingFromDraft(registration: Registration, orders: readonly D
       return order ? [{ order, qty: asText(allocation.qtyPlanned) }] : [];
     }),
     trucks: registration.trips.map((trip) => truckFromTrip(trip, `draft-${trip.seq}`)),
-    closeCargo: yesNoOf(registration.closeCargo),
-    flexiBag: yesNoOf(registration.flexiBag),
     plannedDate: registration.plannedDate ?? "",
     remark: registration.remark ?? "",
   };
@@ -665,6 +677,23 @@ export function deliveryOrderPayload(
   };
   if (mode === "draft") return all;
   return Object.fromEntries(Object.entries(all).filter(([, value]) => value !== null));
+}
+
+/** POST /api/delivery-orders/:id/send: to a transporter (picked), or to the DO's own customer. */
+export type SendTarget = "TRANSPORTER" | "CUSTOMER";
+
+/** Who the DO went to, in words; null before it was sent. */
+export function sentToText(order: Pick<DeliveryOrder, "sentTo" | "transporter" | "partner">): string | null {
+  if (order.sentTo === "CUSTOMER") return `Customer: ${order.partner.name}`;
+  if (order.sentTo === "TRANSPORTER") return `Transporter: ${order.transporter?.name ?? "-"}`;
+  return null;
+}
+
+/** The body of the send, or the sentence that stops it. A customer send names no transporter (the API refuses one). */
+export function sendOrderBody(target: SendTarget, transporter: PartnerRef | null): { body: Record<string, unknown> } | { problem: string } {
+  if (target === "CUSTOMER") return { body: { to: "CUSTOMER" } };
+  if (!transporter) return { problem: "Pilih transporter." };
+  return { body: { to: "TRANSPORTER", transporterId: transporter.id } };
 }
 
 /** The parts of the typed destination the API still needs before a DO is sent, in words for a sentence. */

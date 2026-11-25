@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { newBarcodeToken, normaliseToken, TOKEN_ALPHABET } from "../src/trips/spj.js";
-import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, sendShipmentRequest, siteCode } from "./helpers/fixtures.js";
 
 const DAY = 86_400_000;
 
@@ -8,6 +8,7 @@ async function setup() {
   const context = await phase3App();
   const { database, companies, products, call } = context;
   const purchase = await seedContract(database, { no: "PC-501/CONTOH", partnerId: companies.supplier1, productId: products.cpo });
+  await sendShipmentRequest(database, purchase);
   const vehicle = await seedVehicle(database, { plate: "BK 3001 CC", ownerId: companies.transporter1 });
   const vehicle2 = await seedVehicle(database, { plate: "BK 3002 CC", ownerId: companies.transporter1, type: "BOX" });
   const driver = await seedDriver(database, { name: "Supir Surat Satu", licence: "SIMSPJ0001" });

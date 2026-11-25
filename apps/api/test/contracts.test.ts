@@ -80,6 +80,7 @@ describe("GET /api/contracts", () => {
       customerPoNo: "PO-77",
       state: "OPEN",
       syncedAt: "2026-11-20T01:00:00.000Z",
+      shipmentRequest: null,
     });
     expect(body.items[0]).toMatchObject({ validUntil: null });
   });

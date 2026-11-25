@@ -1,6 +1,6 @@
 // The two journeys phase 3 has to carry from registration to check-in, through the HTTP routes only.
 import { describe, expect, it } from "vitest";
-import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, siteCode } from "./helpers/fixtures.js";
+import { DESTINATION, phase3App, seedCard, seedContract, seedDestination, seedDriver, seedVehicle, sendShipmentRequest, siteCode } from "./helpers/fixtures.js";
 
 describe("phase 3 scenarios", () => {
   it("(a) one incoming truck with two purchase contracts, from the supplier's registration to check-in", async () => {
@@ -13,6 +13,8 @@ describe("phase 3 scenarios", () => {
     const site = await siteCode(database);
     const first = await seedContract(database, { no: "PC-901/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 200_000 });
     const second = await seedContract(database, { no: "PC-902/CONTOH", partnerId: companies.supplier1, productId: products.cpo, qty: 200_000 });
+    // INL sent the supplier a request on both contracts (0017)
+    for (const contractId of [first, second]) await sendShipmentRequest(database, contractId);
     const vehicle = await seedVehicle(database, { plate: "BK 9001 EE", ownerId: companies.transporter1 });
     const driver = await seedDriver(database, { name: "Supir Skenario A", licence: "SIMSKA0001" });
     await seedCard(database, "CA0000000001", "K-A1");

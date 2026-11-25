@@ -35,7 +35,7 @@ describe("the switched-off destinations module", () => {
     const { call, holderId, database } = await setup();
     const modules = (await call("GET", "/api/admin/modules", "admin")).json().items.map((item: { code: string }) => item.code);
     expect(modules).not.toContain("destinations");
-    expect(modules).toHaveLength(21);
+    expect(modules).toHaveLength(22);
     expect((await call("GET", "/api/me", "holder")).json().user.permissions).toEqual({ gate: "VIEW" });
     const listed = (await call("GET", "/api/admin/users?q=holder", "admin")).json().items;
     expect(listed).toEqual([expect.objectContaining({ id: holderId, permissions: { gate: "VIEW" } })]);

@@ -97,6 +97,7 @@ describe("GET /api/admin/modules", () => {
         { code: "plant_masters", name: "Master pabrik", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: false },
         { code: "gps", name: "Lacak kendaraan", levels: ["VIEW", "EDIT"], partnerAllowed: true },
         { code: "gate_emergency", name: "Registrasi darurat di pos", levels: ["VIEW"], partnerAllowed: false },
+        { code: "shipment_requests", name: "Permintaan pengiriman", levels: ["VIEW", "CREATE", "EDIT"], partnerAllowed: true },
       ],
     });
   });

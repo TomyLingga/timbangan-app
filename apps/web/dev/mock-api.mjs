@@ -15,6 +15,7 @@
 //   MOCK_VCF       "off" makes the driver registry sync answer 503, "fail" makes it answer 502
 //   MOCK_SYNC_MS   how long a sync takes (default 1200)
 //   MOCK_HISTORY   "off" makes the archive of the old application (dev/mock-history.mjs) answer 503
+//   MOCK_OCR       "off" makes POST /api/gate/scan-document answer 503, "down" makes every reading fail (see readScan)
 //
 // Access follows docs/rancangan-hak-akses.md: every account holds a level per
 // module (VIEW, CREATE, EDIT), and each route checks the module and level that
@@ -33,6 +34,7 @@ import { createServer } from "node:http";
 import { controlRoomRoutes } from "./mock-control-room.mjs";
 import { createGpsMock } from "./mock-gps.mjs";
 import { createNotificationsMock } from "./mock-notifications.mjs";
+import { createShipmentRequestsMock } from "./mock-shipment-requests.mjs";
 import { historyRoutes } from "./mock-history.mjs";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -109,6 +111,10 @@ const modules = [
   ["plant_masters", "Master pabrik", ["VIEW", "CREATE", "EDIT"], false],
   // phase 8, migration 0011: GPS positions (dev/mock-gps.mjs); every partner account holds VIEW since 0012
   ["gps", "Lacak kendaraan", ["VIEW", "EDIT"], true],
+  // migration 0015: typing a registration at the post when the document was not read; VIEW is its only level
+  ["gate_emergency", "Registrasi darurat di pos", ["VIEW"], false],
+  // migration 0017: requests to a supplier to deliver on a purchase contract (dev/mock-shipment-requests.mjs)
+  ["shipment_requests", "Permintaan pengiriman", ["VIEW", "CREATE", "EDIT"], true],
 ].map(([code, name, levels, partnerAllowed]) => ({ code, name, levels, partnerAllowed }));
 
 const everything = () => Object.fromEntries(modules.map((item) => [item.code, item.levels.at(-1)]));
@@ -134,7 +140,7 @@ const users = [
     kind: "PARTNER",
     username: "pks.contoh.a",
     fullName: "Admin PKS Contoh A",
-    permissions: { contracts: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
+    permissions: { contracts: "VIEW", shipment_requests: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
     partner: partners.pksA,
     password: "contoh-123",
   },
@@ -155,6 +161,26 @@ const users = [
   { id: "u-8", kind: "INTERNAL", username: "manajer.qc", fullName: "Manajer QC Contoh", permissions: { qc_approvals: "EDIT" }, partner: null },
   { id: "u-9", kind: "INTERNAL", username: "pengawas.timbang", fullName: "Pengawas Timbang Contoh", permissions: { approvals: "EDIT", qc_approvals: "VIEW" }, partner: null },
   { id: "u-10", kind: "INTERNAL", username: "keputusan.timbang", fullName: "Keputusan Timbang Contoh", permissions: { approvals: "EDIT" }, partner: null },
+  // migration 0017: a customer gets what a transporter gets, since a DO may be sent to it (partnerDefaults in apps/api)
+  {
+    id: "u-11",
+    kind: "PARTNER",
+    username: "customer.contoh",
+    fullName: "Admin Customer Contoh A",
+    permissions: { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
+    partner: partners.customerA,
+    password: "contoh-123",
+  },
+  // a second supplier, without any shipment request at the start
+  {
+    id: "u-12",
+    kind: "PARTNER",
+    username: "pks.contoh.b",
+    fullName: "Admin PKS Contoh B",
+    permissions: { contracts: "VIEW", shipment_requests: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
+    partner: partners.pksB,
+    password: "contoh-123",
+  },
 ];
 users.forEach((user, index) => {
   user.employeeNo = user.kind === "INTERNAL" ? `EMP-CONTOH-${String(index + 1).padStart(2, "0")}` : null;
@@ -500,6 +526,8 @@ function publicVehicle(item) {
 let gpsMock = null;
 /** The inbox of dev/mock-notifications.mjs, made once the sample data exists. */
 let notificationsMock = null;
+/** dev/mock-shipment-requests.mjs, made once the other routes exist. */
+let shipmentMock = null;
 
 const EMPTY_VEHICLE_BODY = {
   vehicleTypeCode: null,
@@ -789,6 +817,8 @@ function publicOrder(order) {
     deliveryUntil: order.deliveryUntil,
     transportTerms: order.transportTerms,
     transporter: ref(findPartner(order.transporterId)),
+    // whom the DO was sent to: a transporter, or its own customer (then `transporter` is the customer)
+    sentTo: !order.sentAt || !order.transporterId ? null : order.transporterId === order.partner.id ? "CUSTOMER" : "TRANSPORTER",
     truckCount: order.truckCount,
     truckCountBy: order.truckCountBy,
     qtyPlanned: planned,
@@ -829,6 +859,11 @@ function publicTrip(trip) {
     docGrossKg: trip.docGrossKg,
     docTareKg: trip.docTareKg,
     docNetKg: trip.docNetKg,
+    // outgoing: as the post marked the truck at check-in; before that, what an older registration carries
+    closeCargo: trip.closeCargo ?? registration.closeCargo ?? null,
+    flexiBag: trip.flexiBag ?? registration.flexiBag ?? null,
+    extraSpbe: trip.extraSpbe ?? null,
+    passportNo: trip.passportNo ?? null,
     allocations: trip.allocations,
     spj: trip.spj,
     card: card ? { uid: card.uid, label: card.label } : null,
@@ -971,7 +1006,11 @@ function submitRegistration(registration) {
   }
 }
 
-const problem = (status, code, message, fields) => ({ status, body: { error: { code, message, ...(fields ? { fields: fieldList(fields) } : {}) } } });
+/** The refusal of a supplier's registration on a contract without a SENT shipment request (apps/api registrations/service.ts). */
+const shipmentRequestRequired = (contractNo) =>
+  problem(409, "SHIPMENT_REQUEST_REQUIRED", `Kontrak ${contractNo} belum dikirim INL ke perusahaan Anda. Truk hanya bisa didaftarkan untuk kontrak yang sudah dikirim.`);
+
+const problem = (status, code, message, fields) =>({ status, body: { error: { code, message, ...(fields ? { fields: fieldList(fields) } : {}) } } });
 const validation = (fields) => problem(400, "VALIDATION", "Data yang dikirim tidak valid.", fields);
 
 /**
@@ -982,9 +1021,10 @@ function planRegistration(user, body) {
   const direction = body.direction;
   if (direction !== "IN" && direction !== "OUT") return { problem: validation({ direction: "Arah harus IN atau OUT." }) };
   const isPartner = user.kind === "PARTNER";
-  // mayWrite in apps/api registrations/service.ts: a partner registers incoming as a supplier, outgoing as a transporter
+  // mayWrite in apps/api registrations/service.ts: a partner registers incoming as a supplier, outgoing for any DO
+  // sent to its company (a transporter, or a customer that collects its own goods)
   const company = accountPartner(user.partner);
-  if (isPartner && !(direction === "IN" ? company?.isSupplier : company?.isTransporter)) {
+  if (isPartner && !(direction === "IN" ? company?.isSupplier : company !== null)) {
     return { problem: problem(403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.") };
   }
   const submit = body.submit === true;
@@ -1004,6 +1044,8 @@ function planRegistration(user, body) {
       if (!row || row.direction !== "IN" || row.state !== "OPEN" || (isPartner && row.partner.id !== user.partner.id)) {
         return { problem: problem(409, "CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan milik perusahaan Anda.") };
       }
+      // a supplier account registers only on a contract INL sent it (migration 0017); staff need no request
+      if (isPartner && !shipmentMock?.hasSentRequest(row.id, user.partner.id)) return { problem: shipmentRequestRequired(row.contractNo) };
       allocations.push({ seq: index + 1, contractId: row.id, deliveryOrderId: null, qtyPlanned: null, source: row });
     } else {
       const order = deliveryOrders.find((item) => item.id === entry?.deliveryOrderId);
@@ -1086,6 +1128,11 @@ function planRegistration(user, body) {
     if (vehicleTypes.find((type) => type.code === typeCode)?.needsContainerNo && !optionalText(entry?.containerNo)) {
       tripFields[`${at}.containerNo`] = "Nomor kontainer wajib diisi untuk jenis kendaraan ini.";
     }
+    // outgoing, free and optional (migration 0016); the API keeps them only on an outgoing truck
+    for (const [name, label] of [["extraSpbe", "SPBE tambahan"], ["passportNo", "Passport atau surat jalan"]]) {
+      const value = entry?.[name];
+      if (value !== undefined && value !== null && (typeof value !== "string" || value.trim().length > 200)) tripFields[`${at}.${name}`] = `${label} terlalu panjang.`;
+    }
     const letters = [];
     if (direction === "IN") {
       for (const allocation of allocations) {
@@ -1141,11 +1188,9 @@ function planRegistration(user, body) {
     planned.push({ entry, vehicleRow, newVehicle, driverRow, newDriver, letters });
   }
 
-  if (direction === "OUT" && submit && (typeof body.closeCargo !== "boolean" || typeof body.flexiBag !== "boolean")) {
-    const missing = {};
-    if (typeof body.closeCargo !== "boolean") missing.closeCargo = "Close cargo wajib dijawab sebelum dikirim.";
-    if (typeof body.flexiBag !== "boolean") missing.flexiBag = "Flexi bag wajib dijawab sebelum dikirim.";
-    return { problem: validation(missing) };
+  // close cargo and flexi bag are no longer asked here: the post marks them per truck at check-in (migration 0015)
+  for (const name of ["closeCargo", "flexiBag"]) {
+    if (body[name] !== undefined && typeof body[name] !== "boolean") return { problem: validation({ [name]: `${name} harus true atau false.` }) };
   }
 
   return {
@@ -1251,6 +1296,8 @@ function writeRegistration(registration, plan, user) {
       vehicleId: vehicleRow.id,
       driverId: driverRow.id,
       containerNo: optionalText(item.entry.containerNo)?.toUpperCase() ?? null,
+      extraSpbe: plan.direction === "OUT" ? optionalText(item.entry.extraSpbe) : null,
+      passportNo: plan.direction === "OUT" ? optionalText(item.entry.passportNo) : null,
       plannedArrival: isDate(item.entry.plannedArrival) ? item.entry.plannedArrival : plan.plannedDate,
       handoverNo: optionalText(item.entry.handoverNo),
       qtyPlanned: lines.reduce((sum, line) => sum + (line.qtyPlanned ?? 0), 0) || null,
@@ -1595,7 +1642,19 @@ function raiseException(trip, fields) {
   return row;
 }
 
-const EXCEPTION_DECISION = { APPROVED: (row) => (row.type === "NET_OUT" ? "OK" : "APPROVE"), REJECTED: () => "REJECT", RETRY: (row) => row.decisionCode };
+const EXCEPTION_DECISION = {
+  APPROVED: (row) => (row.type === "NET_OUT" ? "OK" : "APPROVE"),
+  REJECTED: (row) => row.decisionCode ?? (row.type === "QC_HOLD" ? "REJECT" : "HOLD"),
+  RETRY: (row) => row.decisionCode,
+};
+
+/** As apps/api src/exceptions/service.ts allowedDecisions. */
+function allowedDecisions(row) {
+  if (row.type === "NET_OUT") return ["OK", "ADD_LOAD", "REDUCE_LOAD"];
+  if (row.type === "QC_HOLD") return ["APPROVE", "REJECT"];
+  if (row.type === "NET_IN" || row.stage === 2) return ["APPROVE", "HOLD"];
+  return ["APPROVE", "HOLD", "REJECT"];
+}
 
 /** The types an account may see, as apps/api src/exceptions/service.ts visibleTypes: weighbridge requests with approvals, QC holds with qc_approvals. */
 const WEIGHING_TYPES = ["PLATE", "GROSS_IN", "TARE_OUT", "NET_IN", "NET_OUT"];
@@ -1614,6 +1673,7 @@ function exceptionView(row) {
     type: row.type,
     status: row.status,
     decision: EXCEPTION_DECISION[row.status]?.(row) ?? null,
+    options: row.status === "PENDING" ? allowedDecisions(row) : [],
     trip: { id: row.tripId, tripNo: trip?.tripNo ?? null, plateNo: vehicleRow?.plateNo ?? null, plateDisplay: vehicleRow?.plateDisplay ?? null },
     station: station ? { id: station.id, code: station.code, name: station.name } : null,
     stage: row.stage,
@@ -1721,7 +1781,7 @@ function seedWeighingSample() {
     reportNo: `0001/BA-SELISIH-NETTO/${SITE.code}/${ROMAN[Number(plantDate().month) - 1]}/${plantDate().year}`,
   });
   exception.weighingId = fourth.trip.weighings[1].id;
-  bindCard(fourth.trip, rfidCards.find((card) => card.uid === "04A1B2C305"));
+  bindCard(fourth.trip, rfidCards.find((card) => card.uid === "04A1B2C305"), "u-2");
 
   // a field step ready for the temporary buttons
   const fifth = seed("v-3", "d-6", "IN", "QC");
@@ -1795,7 +1855,12 @@ function checkStation(body, current) {
 }
 
 const DIFFERENCE_TYPES = ["GROSS_IN", "TARE_OUT", "NET_IN"];
-const REPORT_KIND = { GROSS_IN: "SELISIH-BRUTO", TARE_OUT: "SELISIH-TARRA", NET_IN: "SELISIH-NETTO" };
+// a plate decision approved gets its Berita Acara too (migration 0016, BA-PLAT)
+const REPORT_KIND = { GROSS_IN: "SELISIH-BRUTO", TARE_OUT: "SELISIH-TARRA", NET_IN: "SELISIH-NETTO", PLATE: "PLAT" };
+/** The titles of apps/api src/exceptions/decide.ts reportTitle. */
+const REPORT_TITLE = { GROSS_IN: "Berita Acara Selisih Bruto", TARE_OUT: "Berita Acara Selisih Tarra", NET_IN: "Berita Acara Selisih Netto" };
+const reportTitle = (row) =>
+  row.type === "PLATE" ? (row.plateRead ? "Berita Acara Plat Tidak Sesuai" : "Berita Acara Plat Tidak Terbaca") : (REPORT_TITLE[row.type] ?? "Berita Acara");
 
 const csvCell = (value) => (value === null || value === undefined ? "" : typeof value === "number" ? String(value) : `"${String(value).replaceAll('"', '""')}"`);
 function sendCsv(request, response, fileName, header, rows) {
@@ -1914,6 +1979,65 @@ function phaseFourRoutes() {
       return send(request, response, 200, { exception: exceptionView(row) });
     },
 
+    // the data of the Berita Acara of an approved request (apps/api src/exceptions/routes.ts): signed by the operator of
+    // the post who checked the truck in and by the approver, nobody else (owner, 25 November 2026)
+    "GET /api/exceptions/:id/report": (request, response, url, id) => {
+      if (!guard(request, response, [["approvals", "VIEW"]], { staffOnly: true })) return 0;
+      const row = exceptions.find((item) => item.id === id);
+      if (!row) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
+      if (!row.reportNo) return fail(request, response, 409, "NO_REPORT", "Permintaan ini tidak punya Berita Acara.");
+      const trip = trips.find((item) => item.id === row.tripId);
+      const registration = registrationOf(trip);
+      const vehicleRow = vehicleOf(trip);
+      const station = stations.find((item) => item.id === row.stationId) ?? null;
+      const weighing = (trip.weighings ?? []).find((item) => item.id === row.weighingId) ?? null;
+      const decider = users.find((item) => item.id === row.decidedBy) ?? null;
+      const assignment = cardAssignments.find((item) => item.tripId === trip.id && item.assignedBy);
+      const registrar = users.find((item) => item.id === assignment?.assignedBy) ?? null;
+      const person = (user) => (user ? { id: user.id, fullName: user.fullName } : null);
+      return send(request, response, 200, {
+        report: {
+          reportNo: row.reportNo,
+          title: reportTitle(row),
+          type: row.type,
+          exceptionId: row.id,
+          site: { code: SITE.code, name: SITE.name },
+          trip: {
+            id: trip.id,
+            tripNo: trip.tripNo,
+            plateNo: vehicleRow?.plateNo ?? null,
+            plateDisplay: vehicleRow?.plateDisplay ?? null,
+            driverName: driverOf(trip)?.fullName ?? null,
+            direction: registration.direction,
+            partner: registration.partner.name,
+            transporter: findPartner(registration.transporterId)?.name ?? null,
+          },
+          lines: registration.allocations.map((allocation) => {
+            const order = deliveryOrders.find((item) => item.id === allocation.deliveryOrderId) ?? null;
+            const contractRow = contracts.find((item) => item.id === (allocation.contractId ?? order?.contractId)) ?? null;
+            return { seq: allocation.seq, contractNo: contractRow?.contractNo ?? null, doNo: order?.doNo ?? null };
+          }),
+          station: { code: station?.code ?? null, name: station?.name ?? null },
+          expectedKg: row.expectedValue,
+          weighedKg: row.actualValue,
+          diffKg: row.diffValue,
+          diffPct: row.diffPct,
+          tolerancePct: row.tolerancePct,
+          weighing: weighing ? { id: weighing.id, weightKg: weighing.weightKg, weighedAt: weighing.weighedAt } : null,
+          reason: row.reason,
+          raisedAt: row.raisedAt,
+          decidedAt: row.decidedAt,
+          decidedBy: person(decider),
+          masterTareUpdated: row.context?.masterTareUpdated === true,
+          plate: row.type === "PLATE" ? { read: row.plateRead ?? null, registered: vehicleRow?.plateDisplay ?? vehicleRow?.plateNo ?? null } : null,
+          signers: [
+            { role: "REGISTRAR", title: "Dibuat oleh", position: "Operator registrasi", user: person(registrar) },
+            { role: "APPROVER", title: "Disetujui oleh", position: "Penyetuju", user: person(decider) },
+          ],
+        },
+      });
+    },
+
     // the order of apps/api src/exceptions/decide.ts: the body, the status, then EDIT on the module of the request
     "POST /api/exceptions/:id/decide": async (request, response, url, id) => {
       const user = guard(request, response, [["approvals", "EDIT"], ["qc_approvals", "EDIT"]], { staffOnly: true });
@@ -1923,10 +2047,11 @@ function phaseFourRoutes() {
       const body = await readJson(request);
       const fields = {};
       const netOut = row.type === "NET_OUT";
-      const allowed = netOut ? ["OK", "ADD_LOAD", "REDUCE_LOAD"] : ["APPROVE", "REJECT"];
-      if (!allowed.includes(body.decision)) fields.decision = netOut ? "Keputusan harus OK, ADD_LOAD, atau REDUCE_LOAD." : "Keputusan harus APPROVE atau REJECT.";
+      const allowed = allowedDecisions(row);
+      if (!allowed.includes(body.decision)) fields.decision = `Keputusan harus ${allowed.slice(0, -1).join(", ")} atau ${allowed.at(-1)}.`;
       const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-      if (DIFFERENCE_TYPES.includes(row.type) && reason.length < 3) fields.reason = "Alasan wajib diisi, minimal 3 huruf.";
+      const turnedAway = body.decision === "REJECT" && row.type !== "QC_HOLD";
+      if ((DIFFERENCE_TYPES.includes(row.type) || turnedAway) && reason.length < 3) fields.reason = "Alasan wajib diisi, minimal 3 huruf.";
       if (row.type === "QC_HOLD" && reason.length > 300) fields.reason = "Catatan keputusan paling banyak 300 huruf.";
       if (body.updateMasterTare && !(row.type === "TARE_OUT" && body.decision === "APPROVE")) fields.updateMasterTare = "Tarra master hanya bisa diganti pada selisih tarra yang disetujui.";
       if (Object.keys(fields).length > 0) return invalid(request, response, fields);
@@ -1938,7 +2063,7 @@ function phaseFourRoutes() {
       let weighing = null;
       // a QC hold weighs nothing; the mock does not move the trip's steps for it
       if (row.type === "QC_HOLD") row.status = body.decision === "APPROVE" ? "APPROVED" : "REJECTED";
-      else if (body.decision === "REJECT") row.status = "REJECTED";
+      else if (body.decision === "HOLD" || body.decision === "REJECT") Object.assign(row, { status: "REJECTED", decisionCode: body.decision });
       else if (body.decision === "ADD_LOAD" || body.decision === "REDUCE_LOAD") Object.assign(row, { status: "RETRY", decisionCode: body.decision });
       else {
         row.status = "APPROVED";
@@ -2225,10 +2350,11 @@ function releaseCard(trip, reason) {
   if (assignment) Object.assign(assignment, { releasedAt: nowIso(), releaseReason: reason });
 }
 
-function bindCard(trip, card) {
+/** Binds the card; `by` is the account of the post that handed it over (the registrar of a Berita Acara). */
+function bindCard(trip, card, by = null) {
   card.status = "IN_USE";
   card.tripId = trip.id;
-  cardAssignments.push({ cardId: card.id, tripId: trip.id, assignedAt: nowIso(), releasedAt: null, releaseReason: null });
+  cardAssignments.push({ cardId: card.id, tripId: trip.id, assignedAt: nowIso(), assignedBy: by, releasedAt: null, releaseReason: null });
 }
 
 /** Card checks shared by check-in and replace: null when the card can be bound. */
@@ -2408,11 +2534,382 @@ function mayReadFile(user, id) {
   const file = storedFiles.get(id);
   if (file?.partnerId && file.partnerId === user.partner?.id) return true;
   if (deliveryOrders.some((order) => order.transporterId === user.partner?.id && order.status !== "DRAFT" && (order.files ?? []).some((link) => link.fileId === id))) return true;
+  // the contract PDF of a shipment request sent to the supplier
+  if (shipmentMock?.partnerMayRead(user, id)) return true;
   return trips.some((trip) => (trip.slips ?? []).some((link) => link.fileId === id) && seesRegistration(user, registrationOf(trip)));
 }
 
 const linkedAnywhere = (id) =>
-  deliveryOrders.some((order) => (order.files ?? []).some((link) => link.fileId === id)) || trips.some((trip) => (trip.slips ?? []).some((link) => link.fileId === id));
+  deliveryOrders.some((order) => (order.files ?? []).some((link) => link.fileId === id)) ||
+  Boolean(shipmentMock?.linked(id)) ||
+  trips.some((trip) => (trip.slips ?? []).some((link) => link.fileId === id) || trip.scan?.fileId === id);
+
+// --- the post without a barcode: the scanned document and what the reading service makes of it ---------------
+//
+// MOCK_OCR: "on" (default), "off" (POST /api/gate/scan-document answers 503 NOT_CONFIGURED), "down" (every reading
+// fails with 502 OCR_UNAVAILABLE). With "on", a word in the name of the uploaded file picks what the stand-in
+// reading service answers, so dev/smoke.mjs reaches every outcome through the file picker:
+//   rusak   502 OCR_UNAVAILABLE, the scan is kept      lambat  504 OCR_TIMEOUT, the scan is kept
+//   buram   read, but unreadable (5 of 12 fields)      dekat   contract or DO number two characters off, driver by name only
+//   baru    plate and licence the master does not know  warning a driver with the WARNING status (the registration waits for review)
+// Anything else reads cleanly: the letter of truck ZZ 0001 CTH with Supir Contoh 02, or the accepted delivery order.
+
+const OCR_MODE = process.env.MOCK_OCR ?? "on";
+const MAX_SCAN = 15 * 1024 * 1024;
+/** file id -> { direction, outcome: READ | UNREADABLE | NOT_READ } (gate_scans in apps/api). */
+const gateScans = new Map();
+/** The audit lines WALK_IN_EMERGENCY of apps/api, kept for a look in a debugger. */
+const emergencyWalkIns = [];
+const EMERGENCY_REASON_MESSAGE = "Alasan registrasi darurat wajib diisi, 3 sampai 300 huruf.";
+const EMERGENCY_MESSAGES = {
+  NO_SCAN: "Registrasi tanpa scan dokumen hanya untuk petugas dengan akses registrasi darurat.",
+  NOT_READ: "Dokumen ini belum terbaca oleh layanan baca dokumen. Pindai lagi, atau minta petugas dengan akses registrasi darurat.",
+  UNREADABLE: "Dokumen ini tidak terbaca. Pindai lagi, atau minta petugas dengan akses registrasi darurat.",
+};
+
+/** Every part of a multipart body: the text fields by name, and the one file. Null when the body is not multipart. */
+async function readMultipart(request) {
+  const type = request.headers["content-type"] ?? "";
+  const boundary = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(type);
+  if (!boundary) return null;
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+  const marker = Buffer.from(`--${boundary[1] ?? boundary[2]}`);
+  const fields = {};
+  let file = null;
+  let at = body.indexOf(marker);
+  while (at !== -1) {
+    const next = body.indexOf(marker, at + marker.length);
+    if (next === -1) break;
+    const part = body.subarray(at + marker.length + 2, next - 2);
+    const split = part.indexOf("\r\n\r\n");
+    const head = part.subarray(0, split).toString("utf8");
+    const fileName = /filename="([^"]*)"/i.exec(head);
+    const fieldName = /name="([^"]*)"/i.exec(head);
+    if (fileName) file = { name: fileName[1], bytes: part.subarray(split + 4) };
+    else if (fieldName) fields[fieldName[1]] = part.subarray(split + 4).toString("utf8");
+    at = next;
+  }
+  return { fields, file };
+}
+
+const lettersAndDigits = (value) => String(value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+
+/** Edit distance of two numbers or names after dropping punctuation and case. */
+function editDistance(left, right) {
+  const a = lettersAndDigits(left);
+  const b = lettersAndDigits(right);
+  const row = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i += 1) {
+    let previous = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const kept = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, previous + (a[i - 1] === b[j - 1] ? 0 : 1));
+      previous = kept;
+    }
+  }
+  return row[b.length];
+}
+
+const SCAN_LABELS = {
+  nomor_spb: "Nomor SPB", tanggal_spb: "Tanggal SPB", unit_usaha: "Unit usaha (PKS)", nomor_kontrak: "Nomor kontrak",
+  no_order_penyerahan: "Order penyerahan", brutto_kg: "Bruto (kg)", tarra_kg: "Tarra (kg)", netto_kg: "Netto (kg)",
+  no_polisi: "Nomor polisi", nama_supir: "Nama supir", no_sim: "Nomor SIM", transporter: "Transporter", ffa: "FFA (%)",
+  kadar_air: "Kadar air (%)", kadar_kotoran: "Kadar kotoran (%)", suhu: "Suhu (°C)", ullage: "Ullage", keterangan: "Keterangan",
+  nomor_do: "Nomor DO", tanggal: "Tanggal DO", nomor_po: "Nomor PO", pengangkut: "Pengangkut", tujuan: "Tujuan",
+  jenis_barang: "Jenis barang", kuantitas: "Kuantitas", satuan: "Satuan", tanggal_jadwal: "Tanggal jadwal",
+};
+
+/** The accepted delivery order a clean outgoing scan names: the one with the most left to load. */
+const scannedOrder = () =>
+  deliveryOrders
+    .filter((order) => order.status === "ACCEPTED")
+    .sort((a, b) => publicOrder(b).qtyRemaining - publicOrder(a).qtyRemaining)[0] ?? null;
+
+/** What the stand-in reading service answers for one scan: { failure } or the reading. */
+function readScan(direction, originalName) {
+  const name = String(originalName ?? "").toLowerCase();
+  if (OCR_MODE === "down" || name.includes("rusak")) return { failure: { status: 502, code: "OCR_UNAVAILABLE", message: "Layanan baca dokumen tidak dapat dihubungi. Scan sudah disimpan. Coba pindai lagi." } };
+  if (name.includes("lambat")) return { failure: { status: 504, code: "OCR_TIMEOUT", message: "Layanan baca dokumen tidak menjawab dalam 60 detik. Scan sudah disimpan. Coba pindai lagi." } };
+  const unreadable = name.includes("buram");
+  const close = name.includes("dekat");
+  const unknown = name.includes("baru");
+  const warned = name.includes("warning");
+  const values =
+    direction === "IN"
+      ? {
+          nomor_spb: "SPB-CONTOH-77", tanggal_spb: today(), unit_usaha: "PKS CONTOH A",
+          nomor_kontrak: close ? "0123/CONTOH/CPO/IX/2026" : "0123/CONTOH/CPO/XI/2026", no_order_penyerahan: "OP-CONTOH-7",
+          brutto_kg: 34120, tarra_kg: 10030, netto_kg: 24090,
+          // the seeded truck and driver that no seeded trip has inside the plant
+          no_polisi: unknown ? "ZZ 0099 CTH" : "ZZ 0001 CTH",
+          nama_supir: unknown ? "SUPIR BARU CONTOH" : warned ? "SUPIR CONTOH 03" : "SUPIR CONTOH 02",
+          no_sim: unknown ? "CONTOH0099" : close ? "CONTOH9902" : warned ? "CONTOH0003" : "CONTOH0002",
+          transporter: "TRANSPORTER CONTOH A", ffa: 3.41, kadar_air: 0.18, kadar_kotoran: 0.02, suhu: null, ullage: null, keterangan: null,
+        }
+      : {
+          // "dekat": a zero read for the letter O
+          nomor_do: close ? (scannedOrder()?.doNo ?? "999/DO/CTH/XI/2026").replace("/DO/", "/D0/") : (scannedOrder()?.doNo ?? "999/DO/CTH/XI/2026"),
+          tanggal: today(), nomor_po: "PO-CONTOH-0044", pengangkut: "TRANSPORTER CONTOH B", tujuan: "Pabrik Contoh",
+          jenis_barang: "RBD PALM OLEIN", kuantitas: 20000, satuan: "KG", tanggal_jadwal: today(),
+        };
+  // an unreadable page: most values are missing and the rest are flagged
+  const kept = unreadable ? new Set(direction === "IN" ? ["nomor_kontrak", "no_polisi", "netto_kg", "unit_usaha", "tanggal_spb"] : ["nomor_do", "tanggal"]) : null;
+  const fields = Object.entries(values).map(([key, value]) => {
+    const shown = kept && !kept.has(key) ? null : value;
+    const flagged = (kept !== null && shown !== null) || (close && (key === "nomor_kontrak" || key === "nomor_do" || key === "no_sim")) || shown === null;
+    return { key, label: SCAN_LABELS[key] ?? key, value: shown, needsCheck: flagged, reason: flagged && shown !== null ? "keyakinan baca rendah" : null };
+  });
+  const found = fields.filter((field) => field.value !== null).length;
+  return {
+    unreadable,
+    fieldsFound: unreadable ? 5 : direction === "IN" ? 12 : found,
+    fieldsTotal: direction === "IN" ? 12 : found,
+    warnings: unreadable ? ["Sebagian besar isian tidak terbaca."] : [],
+    fields,
+  };
+}
+
+function readSection(reading) {
+  return { fieldsFound: reading.fieldsFound, fieldsTotal: reading.fieldsTotal, warnings: reading.warnings, fields: reading.fields, extraLines: [] };
+}
+
+const scanValue = (reading, key) => {
+  const value = reading.fields.find((field) => field.key === key)?.value;
+  return value === undefined || value === null || value === "" ? null : value;
+};
+const noMatch = (read, note = null) => ({ status: "NONE", read, value: null, candidates: [], note });
+
+function matchCompany(read, role) {
+  if (read === null) return noMatch(read);
+  const rows = Object.values(partners).filter((partner) => partnerRole(partner) === role);
+  const ranked = rows.map((partner) => ({ ...ref(partner), distance: editDistance(read, partner.name) })).sort((a, b) => a.distance - b.distance);
+  const [best] = ranked;
+  if (best && best.distance === 0) return { status: "EXACT", read, value: { id: best.id, name: best.name }, candidates: [], note: null };
+  const near = ranked.filter((item) => item.distance <= 3).slice(0, 5);
+  return near.length > 0 ? { status: "CLOSE", read, value: null, candidates: near, note: null } : noMatch(read);
+}
+
+const contractView = (row, supplier) => ({
+  id: row.id,
+  contractNo: row.contractNo,
+  partner: ref(row.partner),
+  product: { id: row.product.id, name: row.product.name, category: row.product.category },
+  qtyContract: row.qtyContract,
+  uom: row.uom,
+  validUntil: row.validUntil,
+  supplierMatches: supplier ? row.partner.id === supplier.id : null,
+});
+
+function matchContract(read, supplier) {
+  if (read === null) return noMatch(read);
+  const open = contracts.filter((row) => row.direction === "IN" && row.state === "OPEN");
+  const exact = open.filter((row) => editDistance(read, row.contractNo) === 0);
+  if (exact.length === 1) return { status: "EXACT", read, value: contractView(exact[0], supplier), candidates: [], note: null };
+  const near = open
+    .map((row) => ({ row, distance: editDistance(read, row.contractNo) }))
+    .filter((item) => item.distance <= 2)
+    .sort((a, b) => Number(b.row.partner.id === supplier?.id) - Number(a.row.partner.id === supplier?.id) || a.distance - b.distance)
+    .slice(0, 10)
+    .map(({ row, distance }) => ({ ...contractView(row, supplier), distance, lookalikeOnly: false }));
+  return { status: near.length > 0 ? "CLOSE" : "NONE", read, value: null, candidates: near, note: null };
+}
+
+function matchVehicle(read) {
+  if (read === null) return { ...noMatch(read, "Plat nomor tidak terbaca. Isi plat nomor."), isNew: false };
+  const row = vehicles.find((item) => item.plateNo === plateKey(read));
+  if (!row) return { ...noMatch(read, "Plat belum terdaftar. Kendaraan baru dibuat saat registrasi; pilih jenis kendaraannya."), isNew: true };
+  if (!row.isActive) return { ...noMatch(read, `Kendaraan ${row.plateDisplay} nonaktif. Aktifkan di master kendaraan atau pilih kendaraan lain.`), isNew: false };
+  const type = vehicleTypes.find((item) => item.code === row.vehicleTypeCode);
+  return {
+    status: "EXACT",
+    read,
+    value: { id: row.id, plateNo: row.plateNo, plateDisplay: row.plateDisplay, vehicleTypeCode: row.vehicleTypeCode, needsContainerNo: type?.needsContainerNo ?? false, owner: ref(row.owner), verified: row.verified },
+    candidates: [],
+    note: null,
+    isNew: false,
+  };
+}
+
+const driverView = (row) => ({ id: row.id, fullName: row.fullName, licenceNo: row.licenceNo, licenceClass: row.licenceClass, licenceValidUntil: row.licenceValidUntil, registryStatus: row.registryStatus });
+
+function matchDriver(read) {
+  const licenceNo = lettersAndDigits(read.licenceNo);
+  if (!licenceNo && read.fullName === null) return { ...noMatch(read, "Nama dan nomor SIM supir tidak terbaca. Pilih supir."), isNew: false };
+  const known = licenceNo ? drivers.find((row) => row.licenceNo === licenceNo) : null;
+  if (known?.isActive) return { status: "EXACT", read, value: driverView(known), candidates: [], note: null, isNew: false };
+  if (known) return { ...noMatch(read, `Supir ${known.fullName} dengan nomor SIM ini nonaktif. Pilih supir lain.`), isNew: false };
+  if (read.fullName !== null) {
+    const candidates = drivers
+      .filter((row) => row.isActive)
+      .map((row) => ({ ...driverView(row), distance: editDistance(read.fullName, row.fullName) }))
+      .filter((row) => row.distance <= 2)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, 5);
+    if (candidates.length > 0) {
+      const note = "Nomor SIM di surat tidak ada di master. Cocokkan nama dan nomor SIM sebelum memilih supir, atau isi sebagai supir baru.";
+      return { status: "CLOSE", read, value: null, candidates, note, isNew: false };
+    }
+  }
+  return { ...noMatch(read, "Supir belum terdaftar. Supir baru dibuat saat registrasi; isi jenis dan masa berlaku SIM."), isNew: true };
+}
+
+const UNREADABLE_DOCUMENT = { field: "document", message: "Dokumen tidak terbaca dengan baik. Periksa semua isian sebelum menyimpan." };
+const present = (values) => Object.fromEntries(Object.entries(values).filter(([, value]) => value !== null && value !== undefined));
+
+/** The proposal for a scanned letter of an incoming truck (incomingProposal in apps/api src/gate/proposal.ts). */
+function incomingProposal(reading) {
+  const supplier = matchCompany(scanValue(reading, "unit_usaha"), "supplier");
+  const transporter = matchCompany(scanValue(reading, "transporter"), "transporter");
+  const vehicleMatch = matchVehicle(scanValue(reading, "no_polisi"));
+  const driverMatch = matchDriver({ fullName: scanValue(reading, "nama_supir"), licenceNo: scanValue(reading, "no_sim") });
+  const contractMatch = matchContract(scanValue(reading, "nomor_kontrak"), supplier.value);
+  const kg = (key) => (Number.isInteger(scanValue(reading, key)) ? scanValue(reading, key) : null);
+  const [grossKg, tareKg, netKg] = [kg("brutto_kg"), kg("tarra_kg"), kg("netto_kg")];
+  const netConsistent = grossKg !== null && tareKg !== null && netKg !== null ? netKg === grossKg - tareKg : null;
+  const quality = present({ FFA: scanValue(reading, "ffa"), MOISTURE: scanValue(reading, "kadar_air"), IMPURITIES: scanValue(reading, "kadar_kotoran") });
+  const spbNo = scanValue(reading, "nomor_spb");
+  const spbDate = scanValue(reading, "tanggal_spb");
+  const handoverNo = scanValue(reading, "no_order_penyerahan");
+  const todayIso = plantDate().iso;
+  const draft = {
+    direction: "IN",
+    submit: true,
+    plannedDate: todayIso,
+    ...(transporter.value ? { transporterId: transporter.value.id } : {}),
+    allocations: [contractMatch.value ? { contractId: contractMatch.value.id } : {}],
+    trips: [
+      {
+        vehicle: vehicleMatch.value ? { id: vehicleMatch.value.id } : present({ plateDisplay: vehicleMatch.isNew ? vehicleMatch.read : undefined }),
+        driver: driverMatch.value
+          ? { id: driverMatch.value.id }
+          : driverMatch.isNew || driverMatch.status === "CLOSE"
+            ? present({ licenceNo: driverMatch.read.licenceNo ?? undefined, fullName: driverMatch.read.fullName ?? undefined })
+            : {},
+        plannedArrival: todayIso,
+        letters: [present({ allocationSeq: 1, handoverNo, spbNo, spbDate, originGrossKg: grossKg, originTareKg: tareKg, originNetKg: netKg, quality: Object.keys(quality).length ? quality : undefined })],
+      },
+    ],
+  };
+  const missing = reading.unreadable ? [UNREADABLE_DOCUMENT] : [];
+  if (contractMatch.status !== "EXACT") {
+    const message = contractMatch.read === null ? "Nomor kontrak tidak terbaca. Pilih kontraknya." : contractMatch.status === "CLOSE" ? "Nomor kontrak tidak persis sama. Pilih kontrak yang benar." : "Kontrak tidak ditemukan. Pilih kontraknya.";
+    missing.push({ field: "allocations.0.contractId", message });
+  }
+  if (transporter.read !== null && transporter.status !== "EXACT") missing.push({ field: "transporterId", message: "Transporter di surat belum cocok dengan master. Pilih transporter, atau kosongkan." });
+  if (vehicleMatch.isNew) missing.push({ field: "trips.0.vehicle.vehicleTypeCode", message: "Kendaraan belum terdaftar. Pilih jenis kendaraannya." });
+  else if (!vehicleMatch.value) missing.push({ field: "trips.0.vehicle", message: vehicleMatch.note ?? "Pilih kendaraan." });
+  else if (vehicleMatch.value.needsContainerNo) missing.push({ field: "trips.0.containerNo", message: "Isi nomor kontainer untuk jenis kendaraan ini." });
+  if (driverMatch.isNew) {
+    if (!/^[A-Z0-9]{6,20}$/.test(lettersAndDigits(driverMatch.read.licenceNo))) missing.push({ field: "trips.0.driver.licenceNo", message: "Nomor SIM tidak terbaca. Isi nomor SIM." });
+    if (driverMatch.read.fullName === null) missing.push({ field: "trips.0.driver.fullName", message: "Nama supir tidak terbaca. Isi nama supir." });
+    missing.push({ field: "trips.0.driver.licenceClass", message: "Supir belum terdaftar. Isi jenis SIM." });
+    missing.push({ field: "trips.0.driver.licenceValidUntil", message: "Supir belum terdaftar. Isi masa berlaku SIM." });
+  } else if (!driverMatch.value) {
+    missing.push({ field: "trips.0.driver", message: driverMatch.status === "CLOSE" ? "Pilih supir dari kandidat, atau isi data supir baru." : (driverMatch.note ?? "Pilih supir.") });
+  }
+  if (netConsistent === false) missing.push({ field: "trips.0.letters.0.originNetKg", message: "Netto tidak sama dengan bruto dikurangi tarra. Periksa angka berat." });
+  return {
+    matches: { supplier, transporter, contracts: [contractMatch], vehicle: vehicleMatch, driver: driverMatch },
+    letter: {
+      spbNo,
+      spbDate,
+      lines: [{ seq: 1, contractNo: contractMatch.read, handoverNo, grossKg, tareKg, netKg, netConsistent, netNote: netConsistent === false ? "Netto tidak sama dengan bruto dikurangi tarra." : netConsistent === null ? "Ada angka berat yang tidak terbaca." : null }],
+      quality,
+    },
+    draft,
+    registration: missing.length === 0 ? draft : null,
+    missing,
+  };
+}
+
+/** The proposal for a scanned delivery order (outgoingProposal in apps/api src/gate/proposal.ts). */
+function outgoingProposal(reading) {
+  const read = scanValue(reading, "nomor_do");
+  let deliveryOrder = noMatch(read);
+  if (read !== null) {
+    const accepted = deliveryOrders.filter((order) => order.status === "ACCEPTED");
+    const exact = accepted.find((order) => editDistance(read, order.doNo) === 0);
+    if (exact) deliveryOrder = { status: "EXACT", read, value: publicOrder(exact), candidates: [], note: null };
+    else {
+      const candidates = accepted
+        .map((order) => ({ order, distance: editDistance(read, order.doNo) }))
+        .filter((item) => item.distance <= 3)
+        .sort((a, b) => a.distance - b.distance)
+        .map(({ order, distance }) => ({ ...publicOrder(order), distance, lookalikeOnly: false }));
+      deliveryOrder = { status: candidates.length ? "CLOSE" : "NONE", read, value: null, candidates, note: null };
+    }
+  }
+  const todayIso = plantDate().iso;
+  const draft = {
+    direction: "OUT",
+    submit: true,
+    plannedDate: todayIso,
+    allocations: [deliveryOrder.value ? { deliveryOrderId: deliveryOrder.value.id } : {}],
+    trips: [{ vehicle: {}, driver: {}, plannedArrival: todayIso }],
+  };
+  const missing = reading.unreadable ? [UNREADABLE_DOCUMENT] : [];
+  if (deliveryOrder.status !== "EXACT") {
+    const message = read === null ? "Nomor DO tidak terbaca. Pilih DO." : deliveryOrder.status === "CLOSE" ? "Nomor DO tidak persis sama. Pilih DO yang benar." : "DO tidak ditemukan. Pilih DO.";
+    missing.push({ field: "allocations.0.deliveryOrderId", message });
+  }
+  missing.push(
+    { field: "allocations.0.qtyPlanned", message: "Isi quantity yang dimuat truk ini." },
+    { field: "trips.0.vehicle", message: "Pilih kendaraan. Surat DO tidak memuat nomor polisi." },
+    { field: "trips.0.driver", message: "Pilih supir. Surat DO tidak memuat nama supir." },
+    { field: "closeCargo", message: "Jawab close cargo." },
+    { field: "flexiBag", message: "Jawab flexi bag." },
+  );
+  return { matches: { deliveryOrder }, draft, registration: null, missing };
+}
+
+/**
+ * Checks the truck of an issued SPJ in with a card (checkInWithCard in apps/api src/gate/routes.ts): the marks of a
+ * bulk outgoing truck, the driver, the card, the truck inside elsewhere. Answers a refusal, or null once it is in.
+ * `marks` are close cargo and flexi bag as the post marked them; an older registration's answers count when absent.
+ */
+function checkInWithCard(trip, uid, marks = {}, by = null) {
+  const refuse = (code) => problem(409, code, GATE_MESSAGES[code]);
+  refreshTrip(trip);
+  if (ARRIVED.includes(trip.status)) return refuse("ALREADY_CHECKED_IN");
+  if (trip.status === "EXPIRED") return refuse("SPJ_EXPIRED");
+  if (trip.status !== "ISSUED") return problem(409, "INVALID_STATE", "Truk ini belum siap check-in.");
+  const registration = registrationOf(trip);
+  const outgoing = registration.direction === "OUT";
+  const closeCargo = outgoing ? (typeof marks.closeCargo === "boolean" ? marks.closeCargo : registration.closeCargo ?? null) : null;
+  const flexiBag = outgoing ? (typeof marks.flexiBag === "boolean" ? marks.flexiBag : registration.flexiBag ?? null) : null;
+  if (registration.flowCode === "OUT_BULK") {
+    const unmarked = {};
+    if (closeCargo === null) unmarked.closeCargo = "Tandai close cargo: ya atau tidak.";
+    if (flexiBag === null) unmarked.flexiBag = "Tandai flexi bag: ya atau tidak.";
+    if (Object.keys(unmarked).length > 0) return validation(unmarked);
+  }
+  const driverRow = driverOf(trip);
+  const verdict = registryVerdict(driverRow);
+  if (verdict?.level === "BLOCK") return problem(409, verdict.code, verdict.message);
+  if (driverRow.blocked) return problem(409, "DRIVER_BLOCKED", `Supir ${driverRow.fullName} sedang diblokir.`);
+  const card = rfidCards.find((item) => item.uid === uid) ?? null;
+  const refused = cardProblem(card);
+  if (refused) return refused;
+  if (insideElsewhere(trip, "vehicleId")) return refuse("VEHICLE_INSIDE");
+  if (insideElsewhere(trip, "driverId")) return refuse("DRIVER_INSIDE");
+  const now = new Date();
+  const { year, month, day, iso } = plantDate(now);
+  bindCard(trip, card, by);
+  const steps = flowSteps[registration.flowCode] ?? ["CHECK_IN"];
+  Object.assign(trip, {
+    status: "CHECKED_IN",
+    checkedInAt: now.toISOString(),
+    tripNo: `${year}${month}${day}-${String(nextNumber(`TRIP|${iso}`)).padStart(4, "0")}`,
+    steps: steps.map((code, index) => ({ code, status: index === 0 ? "DONE" : index === 1 ? "READY" : "PENDING" })),
+    currentStep: steps[1] ?? null,
+    closeCargo,
+    flexiBag,
+  });
+  return null;
+}
 
 function plantAndFileRoutes() {
   return {
@@ -2639,14 +3136,20 @@ const routes = {
     const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     const includeClosed = ["true", "1"].includes(url.searchParams.get("includeClosed") ?? "");
     const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
-    const matches = contracts.filter(
-      (item) =>
-        item.direction === direction &&
-        (includeClosed || item.state !== "CLOSED") &&
-        // A partner account only sees the contracts of its own company.
-        (user.kind !== "PARTNER" || item.partner.id === user.partner.id) &&
-        (!q || item.contractNo.toLowerCase().includes(q) || item.partner.name.toLowerCase().includes(q)),
-    );
+    // true: only contracts with a shipment request sent to the supplier; false: only those without (migration 0017)
+    const requestSent = url.searchParams.get("requestSent");
+    if (requestSent !== null && requestSent !== "true" && requestSent !== "false") return invalid(request, response, { requestSent: "requestSent harus true atau false." });
+    const matches = contracts
+      .filter(
+        (item) =>
+          item.direction === direction &&
+          (includeClosed || item.state !== "CLOSED") &&
+          // A partner account only sees the contracts of its own company.
+          (user.kind !== "PARTNER" || item.partner.id === user.partner.id) &&
+          (!q || item.contractNo.toLowerCase().includes(q) || item.partner.name.toLowerCase().includes(q)),
+      )
+      .map((item) => ({ ...item, shipmentRequest: shipmentMock?.openRequestOf(item.id, user) ?? null }))
+      .filter((item) => requestSent === null || (item.shipmentRequest?.status === "SENT") === (requestSent === "true"));
     return send(request, response, 200, { items: matches.slice(0, limit), total: matches.length });
   },
 
@@ -3093,12 +3596,18 @@ const routes = {
     const order = deliveryOrders.find((item) => item.id === id);
     if (!order) return fail(request, response, 404, "NOT_FOUND", "DO tidak ditemukan.");
     const body = await readJson(request);
+    // to: TRANSPORTER (the default, as before) or CUSTOMER, the DO's own partner, kept in transporterId (migration 0017)
+    const to = body.to ?? "TRANSPORTER";
+    if (to !== "TRANSPORTER" && to !== "CUSTOMER") return invalid(request, response, { to: "Tujuan kirim harus TRANSPORTER atau CUSTOMER." });
     if (order.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya DO berstatus DRAFT yang bisa dikirim.");
-    const transporterId = body.transporterId ?? order.transporterId;
+    if (to === "CUSTOMER" && body.transporterId !== undefined && body.transporterId !== order.partner.id) {
+      return invalid(request, response, { transporterId: "DO untuk customer dikirim ke customer DO ini. Kosongkan transporter." });
+    }
+    const transporterId = to === "CUSTOMER" ? order.partner.id : (body.transporterId ?? order.transporterId);
     if (!transporterId) return invalid(request, response, { transporterId: "Pilih transporter sebelum DO dikirim." });
     const missing = Object.fromEntries(DEST_FIELDS.filter((name) => !order[name]).map((name) => [name, `${DEST_LABELS[name]} wajib diisi sebelum DO dikirim.`]));
     if (Object.keys(missing).length > 0) return invalid(request, response, missing);
-    if (partnerRole(findPartner(transporterId) ?? { id: "p-0" }) !== "transporter") {
+    if (to === "TRANSPORTER" && partnerRole(findPartner(transporterId) ?? { id: "p-0" }) !== "transporter") {
       return invalid(request, response, { transporterId: "Transporter harus partner transporter." });
     }
     Object.assign(order, { transporterId, status: "SENT", sentAt: nowIso() });
@@ -3232,8 +3741,12 @@ const routes = {
     const registration = registrations.find((item) => item.id === id);
     if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
     if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi berstatus DRAFT yang bisa dikirim.");
-    if (registration.direction === "OUT" && (registration.closeCargo === null || registration.flexiBag === null)) {
-      return invalid(request, response, { closeCargo: "Close cargo wajib dijawab sebelum dikirim.", flexiBag: "Flexi bag wajib dijawab sebelum dikirim." });
+    // a request closed or cancelled since the draft was written stops it (assertRequestsSent in apps/api)
+    if (user.kind === "PARTNER" && registration.direction === "IN") {
+      const unsent = registration.allocations
+        .map((allocation) => contracts.find((item) => item.id === allocation.contractId))
+        .find((row) => row && !shipmentMock?.hasSentRequest(row.id, user.partner.id));
+      if (unsent) return reply(request, response, shipmentRequestRequired(unsent.contractNo));
     }
     submitRegistration(registration);
     return send(request, response, 200, { registration: publicRegistration(registration) });
@@ -3453,39 +3966,144 @@ const routes = {
   },
 
   "POST /api/gate/check-in": async (request, response) => {
-    if (!guard(request, response, [["gate", "CREATE"]])) return 0;
+    const user = guard(request, response, [["gate", "CREATE"]]);
+    if (!user) return 0;
     const body = await readJson(request);
     const uid = normalizeUid(body.cardUid);
     if (!/^[0-9A-F]{8,20}$/.test(uid)) return invalid(request, response, { cardUid: "UID kartu harus 8 sampai 20 digit heksadesimal." });
     const found = findByToken(body.token);
     if (!found) return fail(request, response, 404, "SPJ_NOT_FOUND", "SPJ dengan kode ini tidak ditemukan.");
     const trip = trips.find((item) => item.id === found.id);
-    const refuse = (code) => fail(request, response, 409, code, GATE_MESSAGES[code]);
-    if (found.revoked) return refuse("SPJ_REVOKED");
-    if (ARRIVED.includes(trip.status)) return refuse("ALREADY_CHECKED_IN");
-    if (trip.status === "EXPIRED") return refuse("SPJ_EXPIRED");
-    if (trip.status !== "ISSUED") return fail(request, response, 409, "INVALID_STATE", "Truk ini belum siap check-in.");
-    const driverRow = driverOf(trip);
-    const verdict = registryVerdict(driverRow);
-    if (verdict?.level === "BLOCK") return fail(request, response, 409, verdict.code, verdict.message);
-    if (driverRow.blocked) return fail(request, response, 409, "DRIVER_BLOCKED", `Supir ${driverRow.fullName} sedang diblokir.`);
-    const card = rfidCards.find((item) => item.uid === uid) ?? null;
-    const refused = cardProblem(card);
+    if (found.revoked) return fail(request, response, 409, "SPJ_REVOKED", GATE_MESSAGES.SPJ_REVOKED);
+    for (const name of ["closeCargo", "flexiBag"]) {
+      if (body[name] !== undefined && typeof body[name] !== "boolean") return invalid(request, response, { [name]: `${name} harus true atau false.` });
+    }
+    const refused = checkInWithCard(trip, uid, body, user.id);
     if (refused) return reply(request, response, refused);
-    if (insideElsewhere(trip, "vehicleId")) return refuse("VEHICLE_INSIDE");
-    if (insideElsewhere(trip, "driverId")) return refuse("DRIVER_INSIDE");
-    const now = new Date();
-    const { year, month, day, iso } = plantDate(now);
-    bindCard(trip, card);
-    const steps = flowSteps[registrationOf(trip).flowCode] ?? ["CHECK_IN"];
-    Object.assign(trip, {
-      status: "CHECKED_IN",
-      checkedInAt: now.toISOString(),
-      tripNo: `${year}${month}${day}-${String(nextNumber(`TRIP|${iso}`)).padStart(4, "0")}`,
-      steps: steps.map((code, index) => ({ code, status: index === 0 ? "DONE" : index === 1 ? "READY" : "PENDING" })),
-      currentStep: steps[1] ?? null,
-    });
     return send(request, response, 200, { trip: publicTrip(trip) });
+  },
+
+  // --- the post without a barcode: a scanned document, then a walk-in (apps/api src/gate/walk-in-routes.ts) ---
+
+  "POST /api/gate/scan-document": async (request, response) => {
+    const user = guard(request, response, [["gate", "CREATE"]], { staffOnly: true });
+    if (!user) return 0;
+    if (OCR_MODE === "off") return fail(request, response, 503, "NOT_CONFIGURED", "Layanan baca dokumen belum diatur di server.");
+    const parts = await readMultipart(request);
+    if (!parts) return invalid(request, response, { file: "Kirim satu berkas sebagai multipart/form-data." });
+    if (!parts.file) return invalid(request, response, { file: "Pilih satu berkas scan." });
+    const direction = parts.fields.direction;
+    if (direction !== "IN" && direction !== "OUT") return invalid(request, response, { direction: "Arah harus IN atau OUT." });
+    const mimeType = fileKind(parts.file.bytes);
+    if (mimeType !== "image/jpeg" && mimeType !== "image/png") return invalid(request, response, { file: "Scan harus gambar JPG atau PNG." });
+    if (parts.file.bytes.length > MAX_SCAN) return fail(request, response, 413, "FILE_TOO_LARGE", "Scan paling besar 15 MB.");
+    // the scan is kept whatever the reading service then does with it
+    const fileId = `f-${nextFileId++}`;
+    const originalName = parts.file.name.slice(0, 200) || null;
+    storedFiles.set(fileId, { bytes: parts.file.bytes, mimeType, originalName, partnerId: null, kind: "SCAN" });
+    const reading = readScan(direction, originalName);
+    gateScans.set(fileId, { direction, outcome: reading.failure ? "NOT_READ" : reading.unreadable ? "UNREADABLE" : "READ" });
+    if (reading.failure) {
+      const { status, code, message } = reading.failure;
+      return send(request, response, status, { error: { code, message, scanFileId: fileId } });
+    }
+    const proposal = direction === "IN" ? incomingProposal(reading) : outgoingProposal(reading);
+    return send(request, response, 200, {
+      scan: { fileId, originalName, mimeType, sizeBytes: parts.file.bytes.length },
+      direction,
+      unreadable: reading.unreadable,
+      read: readSection(reading),
+      ...proposal,
+      timing: { ocrMs: 40 },
+    });
+  },
+
+  "POST /api/gate/walk-in": async (request, response) => {
+    const user = guard(request, response, [["gate", "CREATE"]], { staffOnly: true });
+    if (!user) return 0;
+    if (!can(user, "registrations", "CREATE")) return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+    const body = await readJson(request);
+    const uid = normalizeUid(body.cardUid);
+    const fields = {};
+    if (!/^[0-9A-F]{8,20}$/.test(uid)) fields.cardUid = "UID kartu harus 8 sampai 20 digit heksadesimal.";
+    const reason = typeof body.emergencyReason === "string" ? body.emergencyReason.trim() : undefined;
+    if (body.emergencyReason !== undefined && (reason === undefined || reason.length < 3 || reason.length > 300)) fields.emergencyReason = EMERGENCY_REASON_MESSAGE;
+    if (!body.registration || typeof body.registration !== "object") fields.registration = "Registrasi wajib diisi.";
+    if (Object.keys(fields).length > 0) return invalid(request, response, fields);
+    const input = body.registration;
+    if (input.submit !== true) return invalid(request, response, { "registration.submit": "Registrasi di pos selalu langsung dikirim (submit: true)." });
+    if (!Array.isArray(input.trips) || input.trips.length !== 1) return invalid(request, response, { "registration.trips": "Registrasi di pos berisi tepat satu truk." });
+    if (input.direction === "OUT") {
+      const open = (Array.isArray(input.allocations) ? input.allocations : []).findIndex((allocation) => allocation?.qtyPlanned === undefined);
+      if (open !== -1) return invalid(request, response, { [`registration.allocations.${open}.qtyPlanned`]: "Isi quantity yang dimuat truk ini." });
+    }
+    // the truck stands at the post: it arrives today, whatever the request says
+    const todayIso = plantDate().iso;
+    const registrationBody = { ...input, plannedDate: todayIso, trips: [{ ...input.trips[0], plannedArrival: todayIso }] };
+
+    // the scan a walk-in refers to, and why a registration built on it counts as typed
+    let typed = "NO_SCAN";
+    if (body.scanFileId !== undefined) {
+      const file = storedFiles.get(body.scanFileId);
+      if (!file || file.kind !== "SCAN") return invalid(request, response, { scanFileId: "Scan dokumen tidak ditemukan." });
+      if (linkedAnywhere(body.scanFileId)) return fail(request, response, 409, "SCAN_ALREADY_USED", "Scan ini sudah dipakai untuk registrasi lain.");
+      const scan = gateScans.get(body.scanFileId);
+      if (scan && scan.direction !== registrationBody.direction) return invalid(request, response, { scanFileId: "Scan ini dipindai untuk arah yang lain." });
+      typed = !scan || scan.outcome === "NOT_READ" ? "NOT_READ" : scan.outcome === "UNREADABLE" ? "UNREADABLE" : null;
+    }
+    if (typed !== null) {
+      if (!can(user, "gate_emergency", "VIEW")) return fail(request, response, 403, "EMERGENCY_ACCESS_REQUIRED", EMERGENCY_MESSAGES[typed]);
+      if (reason === undefined) return invalid(request, response, { emergencyReason: EMERGENCY_REASON_MESSAGE });
+    }
+
+    // every refusal below leaves nothing behind: the rows written so far are taken back
+    const underRegistration = (refused) =>
+      refused.body.error.code === "VALIDATION" && refused.body.error.fields
+        ? { ...refused, body: { error: { ...refused.body.error, fields: refused.body.error.fields.map((item) => ({ ...item, field: `registration.${item.field}` })) } } }
+        : refused;
+    const { plan, problem: refused } = planRegistration(user, registrationBody);
+    if (refused) return reply(request, response, underRegistration(refused));
+    const before = { vehicles: [...vehicles], drivers: [...drivers], counters: new Map(counters), nextVehicleId, nextDriverId, nextTripId, nextSpjId };
+    const registration = {
+      id: `r-${nextRegistrationId}`,
+      regNo: regNumber(),
+      status: "DRAFT",
+      // a typed registration is marked as the operator's own, not as one made from a scan
+      createdVia: typed === null ? "SCAN" : "OPERATOR",
+      createdBy: { id: user.id, fullName: user.fullName },
+      createdAt: nowIso(),
+      ownerPartnerId: plan.direction === "IN" ? plan.partner.id : plan.transporterId,
+      submittedAt: null,
+      reviewedAt: null,
+      reviewNote: null,
+    };
+    registrations.push(registration);
+    writeRegistration(registration, plan, user);
+    submitRegistration(registration);
+    const [trip] = tripsOf(registration);
+    // approved at once: the SPJ exists and the truck goes in. Waiting for review: no SPJ, no check-in.
+    const checkInRefused = registration.status === "APPROVED" ? checkInWithCard(trip, uid, registrationBody, user.id) : null;
+    if (checkInRefused) {
+      trips.splice(trips.indexOf(trip), 1);
+      registrations.splice(registrations.indexOf(registration), 1);
+      vehicles.splice(0, vehicles.length, ...before.vehicles);
+      drivers.splice(0, drivers.length, ...before.drivers);
+      counters.clear();
+      for (const [key, value] of before.counters) counters.set(key, value);
+      ({ nextVehicleId, nextDriverId, nextTripId, nextSpjId } = before);
+      return reply(request, response, underRegistration(checkInRefused));
+    }
+    nextRegistrationId += 1;
+    if (body.scanFileId !== undefined) trip.scan = { fileId: body.scanFileId, label: "SCAN_DOKUMEN", addedAt: nowIso(), addedBy: { id: user.id, fullName: user.fullName } };
+    if (typed !== null) emergencyWalkIns.push({ registrationId: registration.id, cause: typed, reason, fileId: body.scanFileId ?? null, by: user.id });
+    const checkedIn = registration.status === "APPROVED";
+    return send(request, response, 201, {
+      state: checkedIn ? "CHECKED_IN" : "REVIEW",
+      emergency: typed !== null,
+      message: checkedIn ? null : "Registrasi menunggu tinjauan logistik. Truk belum check-in dan kartu belum dipakai.",
+      registration: publicRegistration(registration),
+      trip: checkedIn ? publicTrip(trip) : null,
+    });
   },
 
   "POST /api/gate/replace-card": async (request, response) => {
@@ -3530,6 +4148,27 @@ gpsMock = createGpsMock({ guard, send, fail, invalid, readJson, corsHeaders, pla
 Object.assign(routes, gpsMock.routes);
 notificationsMock = createNotificationsMock({ authenticate, send, fail, invalid, users, can, exceptions, trips, deliveryOrders });
 Object.assign(routes, notificationsMock.routes);
+/** A made-up contract PDF of staff, for the seeded shipment requests. */
+const seedPdf = (name) => {
+  const id = `f-${nextFileId++}`;
+  storedFiles.set(id, { bytes: Buffer.from("%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n"), mimeType: "application/pdf", originalName: name, partnerId: null });
+  return id;
+};
+shipmentMock = createShipmentRequestsMock({
+  guard,
+  send,
+  fail,
+  invalid,
+  readJson,
+  contracts,
+  users,
+  storedFiles,
+  publicAttachment,
+  linkedAnywhere,
+  notify: (request) => notificationsMock.shipmentRequestSent(request),
+  seedPdf,
+});
+Object.assign(routes, shipmentMock.routes);
 
 /**
  * Routes written with ":id" match one path segment in that place; a second
@@ -3579,7 +4218,7 @@ const server = createServer(async (request, response) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Mock API on http://${HOST}:${PORT} (web origin ${WEB_ORIGIN})`);
-  console.log("Partner sign-in, password contoh-123: pks.contoh.a, transporter.contoh");
+  console.log("Partner sign-in, password contoh-123: pks.contoh.a, pks.contoh.b, transporter.contoh, customer.contoh");
   console.log(`Staff sign-in: open http://${HOST}:${PORT}/api/auth/sso/start?as=admin.contoh`);
   console.log("  other staff: super.contoh (every module), pos.contoh (registration post), staf.baru (no access yet)");
   console.log("  decisions: manajer.qc (QC holds only), pengawas.timbang (weighbridge, reads QC holds), keputusan.timbang (weighbridge only)");

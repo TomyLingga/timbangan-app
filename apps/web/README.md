@@ -8,7 +8,11 @@ Hak akses per modul, bukan per peran (`docs/rancangan-hak-akses.md`). `GET /api/
 
 ## Menjalankan
 
-Butuh Node 24. Alamat API dibaca dari `NEXT_PUBLIC_API_URL` saat build (lihat `.env.example`); tanpa variabel itu yang dipakai `http://localhost:3100`.
+Butuh Node 24. Alamat API dibaca dari `NEXT_PUBLIC_API_URL` saat build (lihat `.env.example`); tanpa variabel itu yang dipakai `http://localhost:3100`. `NEXT_PUBLIC_SCANNER_URL` adalah alamat scanner-helper di PC pos registrasi (helper dari aplikasi lama, protokol `GET /status` dan `GET /scan`); kosong berarti `http://127.0.0.1:7879`, alamat yang dipakai helper itu.
+
+## Pos registrasi
+
+Karyawan tidak mengetik registrasi. Truk datang dengan barcode SPJ dari registrasi pemasok atau transporter, atau hanya dengan dokumennya. Di `/pos`, tab "Tanpa barcode" memindai dokumen lewat scanner-helper (atau berkas JPG/PNG bila helper tidak menjawab), mengirimnya ke `POST /api/gate/scan-document`, menampilkan usulan di samping gambar scan, lalu mendaftarkan dan meng-check-in truk dengan `POST /api/gate/walk-in`. Bila dokumen tidak terbaca atau tidak ada scan, hanya akun dengan modul `gate_emergency` yang boleh mengisi dengan tangan, dengan alasan. Truk bulk outgoing ditandai close cargo dan flexi bag oleh petugas pos sebelum kartu ditempel.
 
 ```bash
 npm install
@@ -29,7 +33,7 @@ npm run build
 
 `dev/mock-api.mjs` meniru kontrak API tanpa dependensi. Semua nama, perusahaan, dan nomor kontrak di dalamnya karangan.
 
-- Akun partner (kata sandi `contoh-123`): `pks.contoh.a` (pemasok), `transporter.contoh`; hak aksesnya bawaan partner menurut jenis perusahaannya.
+- Akun partner (kata sandi `contoh-123`): `pks.contoh.a` dan `pks.contoh.b` (pemasok), `transporter.contoh`, `customer.contoh` (customer yang menerima DO langsung); hak aksesnya bawaan partner menurut jenis perusahaannya. Kontrak 0123 dan 0124 milik `pks.contoh.a` sudah punya permintaan pengiriman terkirim; `pks.contoh.b` belum punya.
 - Akun karyawan masuk lewat `http://localhost:3100/api/auth/sso/start?as=admin.contoh` (semua modul tingkat ubah kecuali Pengguna). Rute itu berperan sebagai portal: browser dikembalikan ke `/?token=…&appId=…` (tambahkan `&to=callback` untuk `/auth/sso`). Akun lain: `super.contoh` (semua modul), `pos.contoh` (pos registrasi, registrasi tingkat buat, kontrak tingkat lihat), `staf.baru` (belum punya hak akses).
 - Akun untuk memisahkan dua modul keputusan: `manajer.qc` (hanya Keputusan QC tingkat ubah), `pengawas.timbang` (Keputusan selisih dan plat tingkat ubah, Keputusan QC tingkat lihat), `keputusan.timbang` (hanya Keputusan selisih dan plat tingkat ubah). Seperti API asli, daftar Keputusan hanya memuat jenis permintaan dari modul yang dipegang akun.
 - `petugas.lokal` (kata sandi `contoh-123`) meniru akun darurat lokal (`npm run user:create -- --admin`): karyawan dengan semua modul tingkat ubah yang masuk dengan kata sandi.
@@ -37,6 +41,7 @@ npm run build
 - Supir baru dari form berstatus "menunggu dikirim ke VCF" dan terkirim saat "Ambil dari VCF". Satu supir contoh selalu gagal dikirim, supaya tanda gagal dan alasannya bisa dilihat.
 - Fase 3: supir `CONTOH0004` berstatus blacklist, `CONTOH0003` warning; kartu `04A1B2C301` sampai `04A1B2C305` tersedia.
 - `MOCK_FLOW=sample` mengisi truk di semua tahap pabrik (akan datang, di dalam pabrik per langkah, selesai hari ini) untuk melihat Aliran truk di Beranda; `MOCK_FLOW=empty` menghapus truk contoh bawaan. Tanpa variabel itu data tidak berubah.
+- Baca dokumen di pos: nama berkas scan menentukan jawaban layanan baca tiruan (`rusak` 502, `lambat` 504, `buram` tidak terbaca, `dekat` nomor mirip, `baru` plat dan SIM belum terdaftar, `warning` supir berstatus warning); nama lain terbaca bersih. `MOCK_OCR=off` membuat scan menjawab 503, `MOCK_OCR=down` membuat semua pembacaan gagal. `admin.contoh` memegang `gate_emergency` (registrasi darurat), `pos.contoh` tidak.
 - `MOCK_ODOO=off` membuat sinkron menjawab 503, `MOCK_SSO=off` membuat penukaran tiket menjawab 503, `MOCK_VCF=off` atau `MOCK_VCF=fail` membuat ambil dari VCF menjawab 503 atau 502.
 
 ## Uji asap di browser
@@ -44,17 +49,19 @@ npm run build
 `dev/smoke.mjs` menjalankan API tiruan (port 3110), `next start` (port 3210), dan Edge atau Chrome tanpa jendela, lalu memeriksa alur masuk, daftar kontrak, sinkron, data master, tampilan ponsel, hak akses (halaman menunggu hak akses, pengaturan tingkat per modul di `/pengguna` dan menu yang ikut berubah, tingkat lihat tanpa tombol tambah dan ubah, modul terlarang untuk akun partner), dan alur Fase 3: registrasi incoming dengan dua kontrak sampai SPJ, draf yang diubah lalu dikirim, DO yang dikirim lalu diisi empat truk, tinjauan admin, rincian DO, halaman cetak SPJ, dan check-in di pos. Build harus menunjuk ke port API tiruan itu:
 
 ```bash
-NEXT_PUBLIC_API_URL=http://localhost:3110 npm run build
+NEXT_PUBLIC_API_URL=http://localhost:3110 NEXT_PUBLIC_SCANNER_URL=http://127.0.0.1:3290 npm run build
 npm run smoke
 ```
 
 `SMOKE_MODE=dev npm run smoke` memakai `next dev` (tanpa build), sehingga React Strict Mode ikut teruji. Tangkapan layar ditulis ke `dev/.smoke/`.
 
+`SMOKE_ONLY=pos npm run smoke` hanya menjalankan pemeriksaan pos tanpa barcode terhadap API tiruan yang baru: tanda close cargo dan flexi bag saat check-in barcode, walk-in masuk dan keluar, hasil tinjauan logistik, dan layanan baca yang mati dengan dan tanpa akses darurat. Bagian ini memainkan scanner-helper di `127.0.0.1:3290`, jadi build harus memakai `NEXT_PUBLIC_SCANNER_URL` di atas.
+
 `node dev/ui-shots.mjs [folder]` memakai build dan port yang sama untuk memotret halaman utama dalam tema gelap dan terang, lebar 1440 dan 390 piksel. Skrip itu menjalankan API tiruan dua kali: dengan `MOCK_FLOW=sample` untuk semua halaman, lalu dengan `MOCK_FLOW=empty` untuk Beranda tanpa truk. Folder bawaannya `.data/ui-pilot` di akar repo.
 
 ## Uji browser terhadap API asli
 
-`dev/e2e-real.mjs` menjalankan alur pokok terhadap API asli di database pengembangan: masuk, lihat kontrak, registrasi incoming dua kontrak, halaman cetak SPJ dengan kedua barcode, check-in di pos dengan kartu uji, lalu membatalkan trip itu dan memastikan kartunya bebas lagi. Kendaraan uji (plat `ZZ … E2E`) dan kartu uji (UID berawalan `E2E0`) dibuat sendiri lewat API; supir dipilih dari yang sudah ada, jadi tidak ada yang dikirim ke VCF. Di akhir kartu uji dibuat `RETIRED` dan kendaraan uji dinonaktifkan. Alamat dan akun hanya dibaca dari variabel lingkungan dan tidak dicetak:
+`dev/e2e-real.mjs` menjalankan alur pokok terhadap API asli di database pengembangan: masuk, lihat kontrak, form registrasi ditolak untuk karyawan, registrasi incoming dua kontrak lewat API, halaman cetak SPJ dengan kedua barcode, check-in di pos dengan kartu uji, lalu membatalkan trip itu dan memastikan kartunya bebas lagi. Kendaraan uji (plat `ZZ … E2E`) dan kartu uji (UID berawalan `E2E0`) dibuat sendiri lewat API; supir dipilih dari yang sudah ada, jadi tidak ada yang dikirim ke VCF. Di akhir kartu uji dibuat `RETIRED` dan kendaraan uji dinonaktifkan. Alamat dan akun hanya dibaca dari variabel lingkungan dan tidak dicetak:
 
 ```bash
 NEXT_PUBLIC_API_URL=<alamat API> npm run build

@@ -16,6 +16,7 @@ import { DIRECTION_LABELS } from "@/features/registrations/registrations-screen"
 import { TripWorkPanel } from "@/features/trips/trip-work";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { canChangeSlips, MAX_TRIP_SLIPS } from "@/lib/attachments";
+import { cargoMarkText } from "@/lib/cargo-marks";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
 import { positionLink } from "@/lib/gps";
@@ -23,8 +24,6 @@ import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrati
 import { api } from "@/lib/session";
 import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { Registration, Trip, User } from "@/lib/types";
-
-const yesNo = (value: boolean | null) => (value === null ? "-" : value ? "Ya" : "Tidak");
 
 const slipPath = (registration: Registration, trip: Trip) =>
   `/api/registrations/${encodeURIComponent(String(registration.id))}/trips/${encodeURIComponent(String(trip.id))}/files`;
@@ -129,6 +128,19 @@ function TripCard({
         </Fact>
         <Fact label="Rencana quantity">{formatQuantity(trip.qtyPlanned, registration.uom ?? "Kg")}</Fact>
         {trip.containerNo ? <Fact label="Nomor kontainer">{trip.containerNo}</Fact> : null}
+        {incoming ? null : (
+          <>
+            {/* marked by the operator of the post when this truck checks in */}
+            <Fact label="Close cargo">{cargoMarkText(trip.closeCargo)}</Fact>
+            <Fact label="Flexi bag">{cargoMarkText(trip.flexiBag)}</Fact>
+            <Fact label="SPBE tambahan">
+              <span data-testid={`trip-${trip.seq}-extra-spbe`}>{trip.extraSpbe || "-"}</span>
+            </Fact>
+            <Fact label="Passport atau surat jalan">
+              <span data-testid={`trip-${trip.seq}-passport`}>{trip.passportNo || "-"}</span>
+            </Fact>
+          </>
+        )}
         {incoming ? (
           <Fact label="Angka surat (bruto / tarra / netto)">
             <span className="tabular-nums">
@@ -232,6 +244,12 @@ function TripCard({
 }
 
 type PendingAction = "approve" | "reject" | "cancel" | "submit" | null;
+
+/** How a registration came in when it was not the partner's own form: at the post from a scanned document, or typed by staff. */
+const CREATED_VIA: Record<string, string> = {
+  SCAN: "di pos, dari scan dokumen",
+  OPERATOR: "lewat petugas",
+};
 
 const CREATED_NOTICES: Record<string, string> = {
   draf: "Registrasi disimpan sebagai draf. Kirim registrasi ini bila datanya sudah lengkap.",
@@ -344,15 +362,9 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
           <Fact label="Tanggal datang">{formatDate(registration.plannedDate)}</Fact>
           <Fact label="Jumlah truk">{formatNumber(registration.truckCount ?? registration.trips.length)}</Fact>
           <Fact label="Quantity">{formatQuantity(registration.qtyTotal, registration.uom ?? "Kg")}</Fact>
-          {registration.direction === "OUT" ? (
-            <>
-              <Fact label="Close cargo">{yesNo(registration.closeCargo)}</Fact>
-              <Fact label="Flexi bag">{yesNo(registration.flexiBag)}</Fact>
-            </>
-          ) : null}
           <Fact label="Dibuat oleh">
             {registration.createdBy?.fullName ?? "-"}
-            {registration.createdVia === "OPERATOR" ? <span className="block text-xs text-muted-foreground">lewat petugas</span> : null}
+            {CREATED_VIA[registration.createdVia] ? <span className="block text-xs text-muted-foreground">{CREATED_VIA[registration.createdVia]}</span> : null}
           </Fact>
           <Fact label="Dikirim">{formatDateTime(registration.submittedAt)}</Fact>
           {registration.reviewedAt ? <Fact label="Ditinjau">{formatDateTime(registration.reviewedAt)}</Fact> : null}

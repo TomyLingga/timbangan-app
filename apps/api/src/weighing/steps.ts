@@ -120,13 +120,14 @@ export function outcomeOf(stepCode: string): Outcome {
  * The rejection rule: the trip gets the outcome; every step not done yet is skipped unless the flow marks it
  * to run on rejection. A second weighing without a first one is skipped as well. Then the next kept step is READY.
  */
-export async function rejectTrip(orm: Orm, tripId: number, outcome: Outcome, now: Date): Promise<StepInfo | null> {
+/** `alsoSkip`: steps the reject skips although the flow runs them for rejected trucks. */
+export async function rejectTrip(orm: Orm, tripId: number, outcome: Outcome, now: Date, alsoSkip: string[] = []): Promise<StepInfo | null> {
   await orm.update(trips).set({ outcome, updatedAt: now }).where(eq(trips.id, tripId));
   const steps = await loadSteps(orm, tripId);
   const firstWeighed = steps.some((step) => step.stepCode === "WEIGH_1" && step.status === "DONE");
   const skipped = steps
     .filter((step) => step.status === "PENDING" || step.status === "READY")
-    .filter((step) => step.onReject !== "RUN" || (step.stepCode === "WEIGH_2" && !firstWeighed))
+    .filter((step) => step.onReject !== "RUN" || (step.stepCode === "WEIGH_2" && !firstWeighed) || alsoSkip.includes(step.stepCode))
     .map((step) => step.id);
   if (skipped.length) await orm.update(tripSteps).set({ status: "SKIPPED", readyAt: null }).where(inArray(tripSteps.id, skipped));
   // the kept steps now run, optional ones included

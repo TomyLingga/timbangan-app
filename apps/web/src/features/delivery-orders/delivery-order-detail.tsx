@@ -17,10 +17,11 @@ import { canChangeDoFiles, MAX_DO_FILES } from "@/lib/attachments";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { positionLink } from "@/lib/gps";
 import { googleMapsUrl, locationText } from "@/lib/location";
-import { canCreateOutgoing, canTrackVehicles, canView } from "@/lib/permissions";
+import { canTrackVehicles, canTypeOutgoing, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { deliveryOrderStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { DeliveryOrderDetail, Trip, User } from "@/lib/types";
+import { sentToText } from "@/lib/workflow-forms";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -141,7 +142,7 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
         </p>
       </div>
 
-      {accepted && canCreateOutgoing(user) ? (
+      {accepted && canTypeOutgoing(user) ? (
         <div>
           <Button asChild>
             <Link href={`/registrasi/baru?arah=out&do=${encodeURIComponent(String(order.id))}`}>
@@ -172,7 +173,12 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
             {formatDate(order.deliveryFrom)}
             {order.deliveryUntil ? ` sampai ${formatDate(order.deliveryUntil)}` : ""}
           </Fact>
-          <Fact label="Transporter">{order.transporter?.name ?? "Belum dipilih"}</Fact>
+          <Fact label="Dikirim ke">
+            <span data-testid="do-sent-to">{sentToText(order) ?? "Belum dikirim"}</span>
+            {!order.sentTo && order.transporter ? (
+              <span className="block text-xs text-muted-foreground">Transporter dipilih: {order.transporter.name}</span>
+            ) : null}
+          </Fact>
           <Fact label="Jumlah truk">
             {formatNumber(order.tripCount)}
             {order.truckCount ? ` dari ${formatNumber(order.truckCount)}` : ""}
@@ -222,7 +228,7 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
         </h2>
         <p className="mt-1 text-xs text-muted-foreground">
           {canChangeDoFiles(user, order)
-            ? "Surat DO dan berkas lain untuk transporter. Bisa ditambah atau dihapus selama DO berstatus draf atau terkirim."
+            ? "Surat DO dan berkas lain untuk transporter atau customer. Bisa ditambah atau dihapus selama DO berstatus draf atau terkirim."
             : "Surat DO dan berkas lain dari logistik."}
         </p>
         <div className="mt-3">
@@ -250,7 +256,7 @@ function DeliveryOrderView({ user, id }: { user: User; id: string }) {
           Truk ({formatNumber(trips.length)})
         </h2>
         {trips.length === 0 ? (
-          <ListEmpty title="Belum ada truk" hint="Truk muncul di sini setelah transporter mengisi daftar truk DO ini." />
+          <ListEmpty title="Belum ada truk" hint="Truk muncul di sini setelah transporter atau customer mengisi daftar truk DO ini." />
         ) : (
           <div data-testid="do-trucks">
             <DataList columns={truckColumns(order.uom, canView(user, "registrations"), canTrackVehicles(user))} rows={trips} rowKey={(trip) => trip.id} />

@@ -7,25 +7,33 @@ import { type Account, can } from "../auth/guard.js";
 import type { ModuleCode } from "../auth/permissions.js";
 import { writeAudit } from "../audit.js";
 import type { Orm } from "../db/client.js";
-import { exceptions, sites, trips, vehicles, vehicleTareHistory, weighings } from "../db/schema.js";
+import { exceptions, sites, trips, tripSteps, vehicles, vehicleTareHistory, weighings } from "../db/schema.js";
 import { AppError, forbidden, invalidState, notFound, refused } from "../errors.js";
 import { nextReportNo } from "../numbering.js";
 import { type ProceedOptions, proceed, saveAndAnswer } from "../weighing/flow.js";
 import { messages } from "../weighing/messages.js";
 import { loadWeighContext } from "../weighing/service.js";
 import { joinSpoken, type Spoken } from "../weighing/speech.js";
-import { loadSteps, readyStep, repeatLoading } from "../weighing/steps.js";
+import { loadSteps, readyStep, rejectTrip, repeatLoading } from "../weighing/steps.js";
 import { loadWeighTrip, weighingView } from "../weighing/view.js";
 import { decideQcHold } from "../work/qc-hold.js";
-import { contextOf, decisionOf, type ExceptionRow, expireStaleExceptions, pendingSpoken } from "./service.js";
+import { allowedDecisions, contextOf, decisionOf, type ExceptionRow, expireStaleExceptions, pendingSpoken } from "./service.js";
 
-/** The three weight differences: a written reason is required and an approval gets a Berita Acara number. */
+/** The three weight differences: a written reason is required. */
 export const DIFFERENCE_TYPES = ["GROSS_IN", "TARE_OUT", "NET_IN"];
-const REPORT_KIND: Record<string, string> = { GROSS_IN: "SELISIH-BRUTO", TARE_OUT: "SELISIH-TARRA", NET_IN: "SELISIH-NETTO" };
-export const REPORT_TITLE: Record<string, string> = { GROSS_IN: "Berita Acara Selisih Bruto", TARE_OUT: "Berita Acara Selisih Tarra", NET_IN: "Berita Acara Selisih Netto" };
+/** An approval of these gets a Berita Acara number; a plate one since 0016 (owner, 25 November 2026). */
+const REPORT_KIND: Record<string, string> = { PLATE: "PLAT", GROSS_IN: "SELISIH-BRUTO", TARE_OUT: "SELISIH-TARRA", NET_IN: "SELISIH-NETTO" };
+const REPORT_TITLE: Record<string, string> = { GROSS_IN: "Berita Acara Selisih Bruto", TARE_OUT: "Berita Acara Selisih Tarra", NET_IN: "Berita Acara Selisih Netto" };
+
+/** The title of the Berita Acara of an approved request. */
+export function reportTitle(row: Pick<ExceptionRow, "type" | "context">): string {
+  if (row.type === "PLATE") return contextOf(row as ExceptionRow).plateRead ? "Berita Acara Plat Tidak Sesuai" : "Berita Acara Plat Tidak Terbaca";
+  return REPORT_TITLE[row.type] ?? "Berita Acara";
+}
+
 
 export const decideBody = z.object({
-  decision: z.enum(["APPROVE", "REJECT", "OK", "ADD_LOAD", "REDUCE_LOAD"], "Keputusan harus APPROVE, REJECT, OK, ADD_LOAD, atau REDUCE_LOAD."),
+  decision: z.enum(["APPROVE", "HOLD", "REJECT", "OK", "ADD_LOAD", "REDUCE_LOAD"], "Keputusan harus APPROVE, HOLD, REJECT, OK, ADD_LOAD, atau REDUCE_LOAD."),
   reason: z.string("Alasan harus berupa teks.").trim().max(500, "Alasan terlalu panjang.").optional(),
   updateMasterTare: z.boolean("updateMasterTare harus true atau false.").optional(),
 });
@@ -34,10 +42,12 @@ export type DecideBody = z.infer<typeof decideBody>;
 /** The rules of the body that depend on the type of the request. */
 function checkBody(row: ExceptionRow, body: DecideBody): void {
   const fields: { field: string; message: string }[] = [];
-  const netOut = row.type === "NET_OUT";
-  const allowed = netOut ? ["OK", "ADD_LOAD", "REDUCE_LOAD"] : ["APPROVE", "REJECT"];
-  if (!allowed.includes(body.decision)) fields.push({ field: "decision", message: netOut ? "Keputusan harus OK, ADD_LOAD, atau REDUCE_LOAD." : "Keputusan harus APPROVE atau REJECT." });
-  if (DIFFERENCE_TYPES.includes(row.type) && (body.reason ?? "").length < 3) fields.push({ field: "reason", message: "Alasan wajib diisi, minimal 3 huruf." });
+  const allowed = allowedDecisions(row);
+  if (!allowed.includes(body.decision)) {
+    fields.push({ field: "decision", message: `Keputusan harus ${allowed.slice(0, -1).join(", ")} atau ${allowed.at(-1)}.` });
+  }
+  const turnedAway = body.decision === "REJECT" && row.type !== "QC_HOLD";
+  if ((DIFFERENCE_TYPES.includes(row.type) || turnedAway) && (body.reason ?? "").length < 3) fields.push({ field: "reason", message: "Alasan wajib diisi, minimal 3 huruf." });
   if (row.type === "QC_HOLD" && (body.reason ?? "").length > 300) fields.push({ field: "reason", message: "Catatan keputusan paling banyak 300 huruf." });
   if (body.updateMasterTare && !(row.type === "TARE_OUT" && body.decision === "APPROVE")) {
     fields.push({ field: "updateMasterTare", message: "Tarra master hanya bisa diganti pada selisih tarra yang disetujui." });
@@ -77,16 +87,26 @@ export async function decideException(tx: Orm, request: FastifyRequest, account:
   let next: DecideResult["next"] = null;
   let changes: Partial<typeof exceptions.$inferInsert> = {};
 
-  if (body.decision === "REJECT") {
-    changes = { status: "REJECTED", ...decided };
+  if (body.decision === "HOLD") {
+    // the weighing is not saved; the truck backs off and may weigh again
+    changes = { status: "REJECTED", decisionCode: "HOLD", ...decided };
     await tx.update(exceptions).set(changes).where(eq(exceptions.id, id));
+  } else if (body.decision === "REJECT") {
+    // the truck is turned away before its first weighing: the step fails, every step but the return of the card
+    // is skipped (a resealing too: the seal was never opened), and the trip ends as rejected at the post
+    changes = { status: "REJECTED", decisionCode: "REJECT", ...decided };
+    await tx.update(exceptions).set(changes).where(eq(exceptions.id, id));
+    if (row.tripStepId !== null) await tx.update(tripSteps).set({ status: "FAILED", result: "FAIL", finishedAt: now }).where(eq(tripSteps.id, row.tripStepId));
+    await rejectTrip(tx, row.tripId, "TRUCK_REJECT", now, ["RESEAL"]);
   } else if (body.decision === "ADD_LOAD" || body.decision === "REDUCE_LOAD") {
     changes = { status: "RETRY", decisionCode: body.decision, ...decided };
     await tx.update(exceptions).set(changes).where(eq(exceptions.id, id));
     await repeatLoading(tx, row.tripId, now);
   } else if (row.type === "PLATE") {
     // the weighing goes on with the registered plate; the checks after the plate still run
-    changes = { status: "APPROVED", ...decided };
+    const [site] = await tx.select({ code: sites.code }).from(sites).where(eq(sites.id, row.siteId));
+    const reportNo = site ? await nextReportNo(tx, "PLAT", site.code, now) : null;
+    changes = { status: "APPROVED", reportNo, ...decided };
     await tx.update(exceptions).set(changes).where(eq(exceptions.id, id));
     const answer = await proceed(tx, weigh, input, { ...options, plateCheck: "CONFIRMED" }, now);
     if (answer.result === "SAVED") weighingId = answer.weighingId;
@@ -146,7 +166,10 @@ export async function stationAnswer(orm: Orm, row: ExceptionRow): Promise<Record
       if (next) return { ...head, result: "PENDING", exception: { id: next.id, type: next.type }, ...joinSpoken(messages.approved(), pendingSpoken(next)) };
     }
   }
-  if (row.status === "REJECTED") return { ...head, result: "NOT_SAVED", ...messages.rejected(row.type === "PLATE") };
+  if (row.status === "REJECTED") {
+    const spoken = decision === "REJECT" ? (row.type === "QC_HOLD" ? messages.qcRejected() : messages.rejected()) : messages.held();
+    return { ...head, result: decision === "REJECT" && row.type !== "QC_HOLD" ? "TRUCK_REJECTED" : "NOT_SAVED", ...spoken };
+  }
   if (row.status === "RETRY" && (row.decisionCode === "ADD_LOAD" || row.decisionCode === "REDUCE_LOAD")) return { ...head, result: "NOT_SAVED", ...messages.retry(row.decisionCode) };
   return { ...head, result: "NOT_SAVED", ...messages.cancelled() };
 }

@@ -49,6 +49,27 @@ export async function seedContract(database: Database, seed: ContractSeed): Prom
   );
 }
 
+/**
+ * A shipment request for the purchase contract, sent to the contract's supplier: what INL does before a supplier
+ * account may register trucks on the contract (0017). Made by the first staff account, or a new one when the
+ * database has none. Answers the request id.
+ */
+export async function sendShipmentRequest(database: Database, contractId: number): Promise<number> {
+  const [staff] = await database.query<{ id: number }>("select id from users where kind = 'INTERNAL' order by id limit 1");
+  const by = staff
+    ? Number(staff.id)
+    : await one(database, "insert into users (kind, username, full_name) values ('INTERNAL', 'inl-permintaan', 'Staff Permintaan') returning id", []);
+  const id = await one(
+    database,
+    `insert into shipment_requests (site_id, contract_id, contract_no, partner_id, status, created_by, sent_by, sent_at)
+     select coalesce(c.site_id, (select id from sites order by id limit 1)), c.id, c.contract_no, c.partner_id, 'SENT', $2, $2, now()
+     from erp_contracts c where c.id = $1 returning id`,
+    [contractId, by],
+  );
+  if (!Number.isInteger(id)) throw new Error(`Contract ${contractId} does not exist.`);
+  return id;
+}
+
 /** A typed destination as a DO carries it since migration 0008. */
 export const DESTINATION = {
   destName: "Gudang Contoh",

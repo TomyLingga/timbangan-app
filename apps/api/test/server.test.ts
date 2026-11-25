@@ -41,12 +41,12 @@ describe("migrate command", () => {
 
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
     expect(lines).toEqual([
-      "Applied 15 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql, 0005_weighing.sql, 0006_field_steps.sql, 0007_control_room.sql, 0008_tanks_attachments.sql, 0009_reports_modules.sql, 0010_legacy_archive.sql, 0011_gps.sql, 0012_gps_partner_access.sql, 0013_do_destination_pin.sql, 0014_notifications.sql, 0015_gate_post.sql",
+      "Applied 17 migrations: 0001_schema.sql, 0002_seed.sql, 0003_registration.sql, 0004_module_permissions.sql, 0005_weighing.sql, 0006_field_steps.sql, 0007_control_room.sql, 0008_tanks_attachments.sql, 0009_reports_modules.sql, 0010_legacy_archive.sql, 0011_gps.sql, 0012_gps_partner_access.sql, 0013_do_destination_pin.sql, 0014_notifications.sql, 0015_gate_post.sql, 0016_decisions_ba_trip_notes.sql, 0017_shipment_requests.sql",
     ]);
 
     lines.length = 0;
     expect(await runMigrate(env, (line) => lines.push(line), open)).toBe(0);
-    expect(lines).toEqual(["Nothing to apply: 15 migrations were applied before."]);
+    expect(lines).toEqual(["Nothing to apply: 17 migrations were applied before."]);
   });
 
   it("prints the reason and exits with 1 when it cannot run", async () => {

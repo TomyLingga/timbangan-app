@@ -34,14 +34,24 @@ export class ApiError extends Error {
   readonly fields: string[];
   /** Field path to the API's message for it. The API writes these in Indonesian for users. */
   readonly fieldMessages: Record<string, string>;
+  /** The other keys of the error envelope, as the API sent them: `scanFileId` of a scan that was stored but not read. */
+  readonly details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string, fields: string[] = [], fieldMessages: Record<string, string> = {}) {
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    fields: string[] = [],
+    fieldMessages: Record<string, string> = {},
+    details: Record<string, unknown> = {},
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
     this.fields = fields;
     this.fieldMessages = fieldMessages;
+    this.details = details;
   }
 }
 
@@ -115,6 +125,8 @@ export interface ApiClientOptions {
 export interface UploadOptions {
   /** Called with the part sent so far, from 0 to 1. */
   onProgress?: (fraction: number) => void;
+  /** Text fields sent in the same multipart body, before the file (the `direction` of a scanned document). */
+  fields?: Record<string, string>;
 }
 
 export interface ApiClient {
@@ -169,7 +181,7 @@ function toApiError(status: number, body: unknown): ApiError {
   if (typeof body === "object" && body !== null && "error" in body) {
     const envelope = (body as { error: unknown }).error;
     if (typeof envelope === "object" && envelope !== null) {
-      const { code, message, fields } = envelope as { code?: unknown; message?: unknown; fields?: unknown };
+      const { code, message, fields, ...details } = envelope as { code?: unknown; message?: unknown; fields?: unknown } & Record<string, unknown>;
       if (typeof code === "string" && code) {
         return new ApiError(
           status,
@@ -177,6 +189,7 @@ function toApiError(status: number, body: unknown): ApiError {
           typeof message === "string" && message ? message : code,
           readFieldNames(fields),
           readFieldMessages(fields),
+          details,
         );
       }
     }
@@ -334,6 +347,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       };
       xhr.onerror = () => reject(new ApiError(0, NETWORK_ERROR, "The API could not be reached"));
       const form = new FormData();
+      for (const [name, value] of Object.entries(options.fields ?? {})) form.append(name, value);
       form.append("file", file, fileName);
       xhr.send(form);
     });

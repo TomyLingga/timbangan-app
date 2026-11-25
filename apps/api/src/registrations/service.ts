@@ -28,6 +28,7 @@ import { defaultSite, readSetting, siteById } from "../settings.js";
 import { issueSpj } from "../trips/spj.js";
 import { ARRIVED_STATUSES } from "../trips/view.js";
 import { SLIP_LABEL } from "../attachments/view.js";
+import { hasSentRequest } from "../shipment-requests/view.js";
 import { checkRegistration, doRemaining } from "./checks.js";
 
 type Field = { field: string; message: string };
@@ -75,6 +76,9 @@ const tripBody = z.object({
   vehicle: vehicleBody,
   driver: driverBody,
   containerNo: text("Nomor kontainer", 30),
+  // outgoing, free and optional (owner, 25 November 2026)
+  extraSpbe: text("SPBE tambahan", 200),
+  passportNo: text("Passport atau surat jalan", 200),
   plannedArrival: dateText("Tanggal datang").optional(),
   handoverNo: text("Nomor penyerahan", 60),
   remark: text("Keterangan", 1000),
@@ -101,11 +105,34 @@ export type RegistrationInput = z.infer<typeof registrationBody>;
 
 /**
  * Whether the account may write registrations of this direction at all, next to registrations:CREATE: a partner
- * account registers incoming trucks when its company is a supplier and outgoing ones when it is a transporter.
+ * account registers incoming trucks when its company is a supplier. Outgoing trucks are registered by the company a
+ * DO was sent to, a transporter or the DO's own customer collecting its goods; writeRegistration refuses a DO that
+ * was not sent to the account's company (DO_NOT_AVAILABLE), so no company flag is asked here.
  */
 export function mayWrite(account: Account, direction: "IN" | "OUT"): boolean {
   if (account.kind === "INTERNAL") return true;
-  return direction === "IN" ? account.partner?.isSupplier === true : account.partner?.isTransporter === true;
+  return direction === "IN" ? account.partner?.isSupplier === true : account.partner !== null;
+}
+
+const requestNotSent = (contractNo: string) =>
+  refused("SHIPMENT_REQUEST_REQUIRED", `Kontrak ${contractNo} belum dikirim INL ke perusahaan Anda. Truk hanya bisa didaftarkan untuk kontrak yang sudah dikirim.`);
+
+/**
+ * Refuses a supplier account's incoming registration when one of its contracts no longer has a SENT shipment
+ * request (closed or cancelled since the draft was written). Staff and outgoing registrations pass.
+ */
+export async function assertRequestsSent(tx: Orm, account: Account, registrationId: number): Promise<void> {
+  if (account.kind !== "PARTNER") return;
+  const own = account.partner?.id ?? -1;
+  const rows = await tx
+    .select({ contractId: registrationAllocations.contractId, contractNo: registrationAllocations.contractNo })
+    .from(registrationAllocations)
+    .innerJoin(registrations, eq(registrations.id, registrationAllocations.registrationId))
+    .where(and(eq(registrationAllocations.registrationId, registrationId), eq(registrations.direction, "IN")))
+    .orderBy(registrationAllocations.seq);
+  for (const row of rows) {
+    if (row.contractId !== null && !(await hasSentRequest(tx, row.contractId, own))) throw requestNotSent(row.contractNo);
+  }
 }
 
 interface Resolved {
@@ -190,6 +217,8 @@ export async function writeRegistration(
         throw refused("CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan milik perusahaan Anda.");
       }
       const { contract } = row;
+      // a supplier registers trucks only on a contract INL sent it a request for; staff at the post are not bound
+      if (own !== null && !(await hasSentRequest(tx, contract.id, own))) throw requestNotSent(contract.contractNo);
       resolved.push({
         id: contract.id, contractNo: contract.contractNo, doNo: null, contractId: contract.id, deliveryOrderId: null, partnerId: contract.partnerId,
         transporterId: null, siteId: contract.siteId, category: row.category, uom: contract.uom, tolerancePct: contract.tolerancePct, qty: contract.qtyContract,
@@ -428,6 +457,8 @@ export async function writeRegistration(
         driverId: picked[index]?.driverId ?? null,
         transporterId,
         containerNo: trip.containerNo ?? null,
+        extraSpbe: body.direction === "OUT" ? trip.extraSpbe || null : null,
+        passportNo: body.direction === "OUT" ? trip.passportNo || null : null,
         qtyPlanned: sum(own),
         plannedArrival: trip.plannedArrival ?? body.plannedDate ?? null,
         docNetKg: docNet,

@@ -11,6 +11,7 @@
 //                                               twelve older delivery orders (read), so "Muat lagi" has a next page
 //   pos.contoh                                  the notice only
 //   pks.contoh.a                                nothing (the empty inbox)
+// A shipment request sent through POST /api/shipment-requests/:id/send adds one for the accounts of its supplier.
 // A DO sent through POST /api/delivery-orders/:id/send adds one for the accounts of its transporter, and a request
 // raised later gets its notification on the next inbox read, the way the API's loop finds it.
 
@@ -27,6 +28,8 @@ const EXCEPTION_TITLES = {
   QC_HOLD: "Hasil QC menunggu keputusan",
 };
 const DO_SENT_TITLE = "Delivery order baru";
+export const SHIPMENT_REQUEST_SENT = "SHIPMENT_REQUEST_SENT";
+const SHIPMENT_REQUEST_SENT_TITLE = "Permintaan pengiriman baru";
 
 const LIMIT_MESSAGE = "limit harus bilangan bulat 1 sampai 50.";
 
@@ -73,6 +76,21 @@ export function createNotificationsMock({ authenticate, send, fail, invalid, use
     return add(
       { type: DO_SENT, severity: "INFO", title: DO_SENT_TITLE, body: order.doNo, data: { type: DO_SENT, deliveryOrderId: order.id } },
       accountsOf(order.transporterId),
+      options,
+    );
+  }
+
+  /** A shipment request sent to its supplier: the active accounts of that company get one INFO notification. */
+  function shipmentRequestSent(request, options) {
+    return add(
+      {
+        type: SHIPMENT_REQUEST_SENT,
+        severity: "INFO",
+        title: SHIPMENT_REQUEST_SENT_TITLE,
+        body: request.contractNo,
+        data: { type: SHIPMENT_REQUEST_SENT, shipmentRequestId: request.id },
+      },
+      accountsOf(request.partnerId),
       options,
     );
   }
@@ -177,5 +195,5 @@ export function createNotificationsMock({ authenticate, send, fail, invalid, use
     },
   };
 
-  return { routes, deliveryOrderSent };
+  return { routes, deliveryOrderSent, shipmentRequestSent };
 }

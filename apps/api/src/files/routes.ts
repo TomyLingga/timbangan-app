@@ -4,7 +4,8 @@
 // post comes in through POST /api/gate/scan-document (kind SCAN, larger limit) and is kept the same way.
 //
 // Who reads a file: staff read every file. A partner account reads the uploads of its own company, and a staff
-// upload once it is linked to that company's DO (sent to it) or to a truck slip of a registration it may see.
+// upload once it is linked to that company's DO (sent to it), to a shipment request sent to it (SENT or CLOSED), or
+// to a truck slip of a registration it may see.
 // Anyone else gets 404, never 403, so ids cannot be probed.
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
@@ -16,11 +17,12 @@ import type { AppContext } from "../app.js";
 import { type Account, accountOf, can, type Guards } from "../auth/guard.js";
 import { SLIP_LABEL } from "../attachments/view.js";
 import type { Orm } from "../db/client.js";
-import { deliveryOrderFiles, deliveryOrders, files, registrations, tripFiles, trips, users } from "../db/schema.js";
+import { deliveryOrderFiles, deliveryOrders, files, registrations, shipmentRequestFiles, shipmentRequests, tripFiles, trips, users } from "../db/schema.js";
 import { AppError, forbidden, invalid, notFound } from "../errors.js";
 import { idParams } from "../http.js";
 import { plantDateParts } from "../numbering.js";
 import { registrationsVisibleTo } from "../registrations/view.js";
+import { shipmentRequestsVisibleTo } from "../shipment-requests/view.js";
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
@@ -100,6 +102,13 @@ async function partnerMayRead(orm: Orm, account: Account, fileId: number, upload
     .where(and(eq(deliveryOrderFiles.fileId, fileId), eq(deliveryOrders.transporterId, own), ne(deliveryOrders.status, "DRAFT")))
     .limit(1);
   if (onDo) return true;
+  const [onRequest] = await orm
+    .select({ id: shipmentRequests.id })
+    .from(shipmentRequestFiles)
+    .innerJoin(shipmentRequests, eq(shipmentRequests.id, shipmentRequestFiles.shipmentRequestId))
+    .where(and(eq(shipmentRequestFiles.fileId, fileId), shipmentRequestsVisibleTo(account)))
+    .limit(1);
+  if (onRequest) return true;
   const [onTrip] = await orm
     .select({ id: trips.id })
     .from(tripFiles)

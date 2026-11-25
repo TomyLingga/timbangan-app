@@ -1,4 +1,7 @@
-// Delivery orders (DO): written by the logistics admin, sent to one transporter, accepted by it, closed. The
+// Delivery orders (DO): written by the logistics admin, sent to one transporter or to the DO's own customer (owner's
+// flow of 25 November 2026, outgoing step 2.1), accepted by that company, closed. A DO sent to its customer keeps the
+// customer in transporter_id, so the partner visibility, the accept route and the registration checks, which all
+// ask for "the company the DO was sent to", work unchanged. The
 // destination is typed on the DO (dest_* columns): name and regency for a draft, all five parts before it is sent.
 // A map pin (dest_lat, dest_lon) is optional and changes in the same states as the typed parts.
 import { and, count, desc, eq, ilike, inArray, ne, or, type SQL, sql } from "drizzle-orm";
@@ -71,7 +74,9 @@ const typed = (value: string | null | undefined) => (value && value.trim() !== "
 /** What may still change once a DO has been sent. */
 const LATE_FIELDS = new Set(["deliveryUntil", "truckCount", "remark"]);
 const listQuery = z.object({ status: z.enum(STATUSES, "Status DO tidak dikenal.").optional(), q: searchParam, limit: limitParam });
-const sendBody = z.object({ transporterId: idNumber.optional() });
+// to: TRANSPORTER (the default, as before) or CUSTOMER, the DO's own partner, which then collects its goods with its
+// own trucks and is recorded as the DO's transporter (transporter_id = partner_id)
+const sendBody = z.object({ to: z.enum(["TRANSPORTER", "CUSTOMER"], "Tujuan kirim harus TRANSPORTER atau CUSTOMER.").default("TRANSPORTER"), transporterId: idNumber.optional() });
 const acceptBody = z.object({ truckCount: truckCount.optional() });
 const reasonBody = z.object({ reason: z.string("Alasan wajib diisi.").trim().min(1, "Alasan wajib diisi.").max(500, "Alasan terlalu panjang.") });
 
@@ -130,6 +135,8 @@ export async function listDeliveryOrders(orm: Orm, where: SQL | undefined, limit
     deliveryUntil: order.deliveryUntil,
     transportTerms: order.transportTerms,
     transporter: order.transporterId !== null && row.transporterName !== null ? { id: order.transporterId, name: row.transporterName } : null,
+    // whom the DO was sent to: a transporter, or its own customer (then `transporter` is the customer); null before sending
+    sentTo: order.sentAt === null || order.transporterId === null ? null : order.transporterId === order.partnerId ? ("CUSTOMER" as const) : ("TRANSPORTER" as const),
     truckCount: order.truckCount,
     truckCountBy: order.truckCountBy,
     qtyPlanned: row.qtyPlanned,
@@ -391,17 +398,21 @@ export function registerDeliveryOrderRoutes(app: FastifyInstance, context: AppCo
     const deliveryOrder = await orm.transaction(async (tx) => {
       const current = await lock(tx, id, account);
       if (current.status !== "DRAFT") throw invalidState("Hanya DO berstatus DRAFT yang bisa dikirim.");
-      const transporterId = body.transporterId ?? current.transporterId;
+      if (body.to === "CUSTOMER" && body.transporterId !== undefined && body.transporterId !== current.partnerId) {
+        throw invalid("transporterId", "DO untuk customer dikirim ke customer DO ini. Kosongkan transporter.");
+      }
+      const transporterId = body.to === "CUSTOMER" ? current.partnerId : (body.transporterId ?? current.transporterId);
       if (transporterId === null) throw invalid("transporterId", "Pilih transporter sebelum DO dikirim.");
       const missing = DEST_PARTS.filter(([field]) => typed(current[field]) === null).map(([field, label]) => ({
         field,
         message: `${label} wajib diisi sebelum DO dikirim.`,
       }));
       if (missing.length > 0) throw new AppError(400, "VALIDATION", "Data yang dikirim tidak valid.", missing);
-      if (!(await isTransporter(tx, transporterId))) throw invalid("transporterId", "Transporter harus partner transporter.");
+      // the customer needs no transporter flag: the DO is its own (it registers the trucks as the company it was sent to)
+      if (body.to === "TRANSPORTER" && !(await isTransporter(tx, transporterId))) throw invalid("transporterId", "Transporter harus partner transporter.");
       await tx.update(deliveryOrders).set({ status: "SENT", transporterId, sentAt: now, updatedAt: now }).where(eq(deliveryOrders.id, id));
-      await audit(tx, request, now, id, "DO_SENT", { status: current.status }, { status: "SENT", transporterId });
-      // the transporter's accounts see it in their inbox, and on their phones once the sender loop runs
+      await audit(tx, request, now, id, "DO_SENT", { status: current.status }, { status: "SENT", transporterId, sentTo: body.to });
+      // the receiving company's accounts see it in their inbox, and on their phones once the sender loop runs
       await notifyDeliveryOrderSent(tx, { id, doNo: current.doNo, siteId: current.siteId, transporterId }, now);
       return one(tx, id, account);
     });

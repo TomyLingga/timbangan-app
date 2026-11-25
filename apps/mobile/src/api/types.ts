@@ -339,6 +339,8 @@ export interface ExceptionView {
   type: ExceptionType | string;
   status: ExceptionStatus | string;
   decision: string | null;
+  /** FROM CODE apps/api/src/exceptions/service.ts (allowedDecisions): what may be decided while PENDING. */
+  options?: DecisionCode[];
   trip: { id: number; tripNo: string | null; plateNo: string | null; plateDisplay: string | null };
   station: { id: number; code: string | null; name: string | null } | null;
   stage: number | null;
@@ -369,7 +371,8 @@ export interface ExceptionResponse {
   exception: ExceptionView;
 }
 
-export type DecisionCode = "APPROVE" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
+/** HOLD: the weighing is not saved and the truck may weigh again. REJECT: the truck is turned away (QC_HOLD: spec reject). */
+export type DecisionCode = "APPROVE" | "HOLD" | "REJECT" | "OK" | "ADD_LOAD" | "REDUCE_LOAD";
 
 /** FROM CODE apps/api/src/exceptions/decide.ts (decideBody). */
 export interface DecideBody {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Check, CircleCheck, CreditCard, Loader2, OctagonX, ScanLine, TriangleAlert, Truck } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 
@@ -12,18 +12,21 @@ import { AccessDenied, Notice, PageHeader } from "@/components/page-parts";
 import { Segmented } from "@/components/segmented";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
+import { YesNoField } from "@/components/yes-no-field";
 import { useAuth } from "@/features/auth/auth-provider";
+import { ReaderInput } from "@/features/gate/reader-input";
+import { WalkInPanel } from "@/features/gate/walk-in-panel";
 import { TripWorkPanel } from "@/features/trips/trip-work";
 import { useApiQuery } from "@/hooks/use-api-query";
+import { isApiError } from "@/lib/api-client";
+import { cargoMarkErrors, cargoMarkPayload, cargoMarkText, marksComplete, marksOf, needsCargoMarks, NO_MARKS, type CargoMarkValues } from "@/lib/cargo-marks";
 import { formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { cardUidError, normalizeCardUid, normalizeSpjToken, spjTokenError } from "@/lib/gate-input";
 import { checkOutErrorMessage, gateErrorMessage } from "@/lib/messages";
 import { MOTION_EASE, MOTION_SLOW, MOTION_SPRING } from "@/lib/motion";
-import { canCreate, canEdit, canView, isStaff } from "@/lib/permissions";
+import { canCreate, canEdit, canView, canWalkIn, isStaff } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import { checkSentence, isBlocking, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { GateCheck, GateScan, Page, Trip, User } from "@/lib/types";
@@ -83,99 +86,6 @@ function StepRail({ step }: { step: StepState }) {
         );
       })}
     </ol>
-  );
-}
-
-/** Big text box for a reader that types like a keyboard and ends with Enter. */
-function ReaderInput({
-  id,
-  label,
-  hint,
-  inputRef,
-  value,
-  onChange,
-  onEnter,
-  onEscape,
-  busy,
-  name,
-  error,
-  icon: Icon,
-}: {
-  id: string;
-  label: string;
-  hint: string;
-  inputRef: RefObject<HTMLInputElement | null>;
-  value: string;
-  onChange: (value: string) => void;
-  onEnter: () => void;
-  onEscape?: () => void;
-  busy: boolean;
-  name: string;
-  error?: string | null;
-  icon: typeof ScanLine;
-}) {
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Escape" && onEscape) {
-      event.preventDefault();
-      onEscape();
-    }
-  }
-  return (
-    <form
-      noValidate
-      onSubmit={(event: FormEvent) => {
-        event.preventDefault();
-        if (!busy) onEnter();
-      }}
-      className="flex flex-col gap-2.5"
-    >
-      <Label htmlFor={id} className="text-base font-semibold">
-        <Icon className="size-5 text-muted-foreground" aria-hidden="true" />
-        {label}
-      </Label>
-      <div className="flex gap-2">
-        {/* The box that expects the next reading lights up while it has focus. */}
-        <div className="group/reader relative min-w-0 flex-1">
-          <Input
-            ref={inputRef}
-            id={id}
-            name={name}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={handleKeyDown}
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            enterKeyHint="go"
-            aria-describedby={`${id}-hint${error ? ` ${id}-error` : ""}`}
-            aria-invalid={error ? true : undefined}
-            className="peer h-16 border-2 pr-24 font-mono text-2xl tracking-[0.12em] uppercase rounded-xl focus-visible:border-signal focus-visible:shadow-[0_0_0_4px_color-mix(in_oklch,var(--signal)_24%,transparent),0_0_32px_-6px_color-mix(in_oklch,var(--signal)_55%,transparent)] focus-visible:ring-0 md:text-2xl"
-          />
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute top-1/2 right-3 hidden -translate-y-1/2 items-center gap-1.5 rounded-full bg-signal-subtle px-2.5 py-1 text-xs font-medium text-foreground peer-focus-visible:flex"
-          >
-            <span className="relative flex size-2">
-              <span className="relative size-2 rounded-full bg-signal" />
-            </span>
-            Siap
-          </span>
-        </div>
-        <Button type="submit" size="lg" className="h-16 shrink-0 rounded-xl px-6 text-base" disabled={busy}>
-          {busy ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
-          Enter
-        </Button>
-      </div>
-      <p id={`${id}-hint`} className="text-sm text-muted-foreground">
-        {hint}
-      </p>
-      {error ? (
-        <p id={`${id}-error`} role="alert" className="flex items-start gap-2 text-base font-medium text-destructive">
-          <OctagonX className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
-          {error}
-        </p>
-      ) : null}
-    </form>
   );
 }
 
@@ -268,6 +178,18 @@ function TruckCard({ trip }: { trip: Trip }) {
           <dt className="text-xs text-muted-foreground">SPJ berlaku sampai</dt>
           <dd className="tabular-nums">{formatDateTime(trip.spj?.validUntil ?? null)}</dd>
         </div>
+        {trip.direction === "OUT" && trip.extraSpbe ? (
+          <div>
+            <dt className="text-xs text-muted-foreground">SPBE tambahan</dt>
+            <dd className="wrap-break-word">{trip.extraSpbe}</dd>
+          </div>
+        ) : null}
+        {trip.direction === "OUT" && trip.passportNo ? (
+          <div>
+            <dt className="text-xs text-muted-foreground">Passport atau surat jalan</dt>
+            <dd className="wrap-break-word">{trip.passportNo}</dd>
+          </div>
+        ) : null}
       </dl>
       {trip.direction === "IN" ? (
         <div className="flex flex-col gap-2 border-t pt-4">
@@ -541,9 +463,14 @@ function GatePage({ user }: { user: User }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [sheet, setSheet] = useState<{ kind: "replace" | "cancel" | "reissue"; trip: Trip } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // check-in at the start of a visit, the card coming back at the end of it
-  const [mode, setMode] = useState<"in" | "out">("in");
+  // check-in at the start of a visit, a truck that came without a barcode, the card coming back at the end of it
+  const [mode, setMode] = useState<"in" | "walkin" | "out">("in");
+  const mayWalkIn = canWalkIn(user);
   const [detailOf, setDetailOf] = useState<Trip | null>(null);
+  // close cargo and flexi bag of the scanned truck, as the operator marks them before the card (bulk outgoing only)
+  const marksRef = useRef<HTMLDivElement>(null);
+  const [marks, setMarks] = useState<CargoMarkValues>(NO_MARKS);
+  const [markErrors, setMarkErrors] = useState<Partial<Record<keyof CargoMarkValues, string>>>({});
 
   const today = plantToday();
   // `date` matches the planned arrival or the day of check-in (apps/api trips/routes.ts); `status` takes several.
@@ -555,14 +482,21 @@ function GatePage({ user }: { user: User }) {
     api.request<Page<Trip>>("/api/trips", { query: { status: "CHECKED_IN,IN_PROCESS", limit: 50 }, signal }),
   { keepPrevious: true });
 
-  const awaitingCard = mayCheckIn && phase.kind === "scanned" && !phase.scan.checks.some(isBlocking);
+  const mayGoIn = mayCheckIn && phase.kind === "scanned" && !phase.scan.checks.some(isBlocking);
+  // a bulk outgoing truck is marked first; the card box opens once both answers are in
+  const asksMarks = mayGoIn && phase.kind === "scanned" && needsCargoMarks(phase.scan.trip);
+  const awaitingMarks = asksMarks && !marksComplete(marks);
+  const awaitingCard = mayGoIn && !awaitingMarks;
 
   // The operator works without the mouse: the box that expects the next reading has focus.
   useEffect(() => {
     if (sheet || mode !== "in") return;
     if (awaitingCard) cardRef.current?.focus();
-    else if (phase.kind !== "scanning") scanRef.current?.focus();
-  }, [phase, awaitingCard, sheet, mode]);
+    else if (awaitingMarks) {
+      // the first open question; an answer already chosen with the keyboard keeps its focus
+      if (!marksRef.current?.contains(document.activeElement)) marksRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+    } else if (phase.kind !== "scanning") scanRef.current?.focus();
+  }, [phase, awaitingCard, awaitingMarks, sheet, mode]);
 
   async function scan(raw: string) {
     const token = normalizeSpjToken(raw);
@@ -579,6 +513,9 @@ function GatePage({ user }: { user: User }) {
     setPhase({ kind: "scanning", token });
     try {
       const result = await api.request<GateScan>(`/api/gate/spj/${encodeURIComponent(token)}`);
+      // answers an older registration still carries are shown, and can be corrected
+      setMarks(needsCargoMarks(result.trip) ? marksOf(result.trip) : NO_MARKS);
+      setMarkErrors({});
       setPhase({ kind: "scanned", token, scan: result, cardError: null, checkingIn: false });
     } catch (error) {
       setPhase({ kind: "refused", message: gateErrorMessage(error), scan: null });
@@ -594,17 +531,28 @@ function GatePage({ user }: { user: User }) {
       setPhase({ ...phase, cardError: problem });
       return;
     }
+    const marked = needsCargoMarks(phase.scan.trip);
+    if (marked && !marksComplete(marks)) {
+      setMarkErrors(cargoMarkErrors(marks));
+      return;
+    }
     setPhase({ ...phase, cardError: null, checkingIn: true });
     try {
       const { trip } = await api.request<{ trip: Trip }>("/api/gate/check-in", {
         method: "POST",
-        body: { token: phase.token, cardUid },
+        body: { token: phase.token, cardUid, ...(marked ? cargoMarkPayload(marks) : {}) },
       });
       setPhase({ kind: "done", trip });
       setReloadToken((token) => token + 1);
     } catch (error) {
       const code = (error as { code?: string }).code ?? "";
-      if (code.startsWith("CARD_")) {
+      const refusedMarks = isApiError(error) ? { closeCargo: error.fieldMessages.closeCargo, flexiBag: error.fieldMessages.flexiBag } : {};
+      if (refusedMarks.closeCargo || refusedMarks.flexiBag) {
+        // the API asks for an answer it did not get: its own words go under the question, the truck stays on screen
+        setMarkErrors(refusedMarks);
+        setMarks((current) => ({ closeCargo: refusedMarks.closeCargo ? "" : current.closeCargo, flexiBag: refusedMarks.flexiBag ? "" : current.flexiBag }));
+        setPhase({ ...phase, cardError: null, checkingIn: false });
+      } else if (code.startsWith("CARD_")) {
         // The truck is fine; only the card was refused. Another card can be tapped right away.
         setPhase({ ...phase, cardError: gateErrorMessage(error), checkingIn: false });
         focusSoon(cardRef);
@@ -618,6 +566,8 @@ function GatePage({ user }: { user: User }) {
   function reset() {
     setPhase({ kind: "idle" });
     setCardText("");
+    setMarks(NO_MARKS);
+    setMarkErrors({});
     focusSoon(scanRef);
   }
 
@@ -656,29 +606,38 @@ function GatePage({ user }: { user: User }) {
             </span>
           </>
         }
-        description="Scan SPJ, periksa truknya, lalu tempelkan kartu RFID. Pembaca barcode dan pembaca kartu cukup diarahkan ke kotak yang menyala."
+        description={
+          mayWalkIn
+            ? "Scan SPJ, periksa truknya, lalu tempelkan kartu RFID. Truk tanpa barcode SPJ: pilih Tanpa barcode dan pindai dokumennya."
+            : "Scan SPJ, periksa truknya, lalu tempelkan kartu RFID. Pembaca barcode dan pembaca kartu cukup diarahkan ke kotak yang menyala."
+        }
       />
 
       <div aria-live="polite" className="empty:hidden">
         {notice ? <Notice tone="success">{notice}</Notice> : null}
       </div>
 
+      {mayCheckIn ? (
+        <Segmented<"in" | "walkin" | "out">
+          label="Tugas di pos"
+          value={mode}
+          onChange={(value) => {
+            setMode(value);
+            if (value === "in") focusSoon(scanRef);
+          }}
+          options={[
+            { value: "in", label: "Check-in" },
+            ...(mayWalkIn ? [{ value: "walkin" as const, label: "Tanpa barcode" }] : []),
+            { value: "out", label: "Kembalikan kartu" },
+          ]}
+        />
+      ) : null}
+
+      {mode === "walkin" ? (
+        <WalkInPanel user={user} onChanged={() => setReloadToken((token) => token + 1)} />
+      ) : (
       <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-4">
-          {mayCheckIn ? (
-            <Segmented<"in" | "out">
-              label="Tugas di pos"
-              value={mode}
-              onChange={(value) => {
-                setMode(value);
-                if (value === "in") focusSoon(scanRef);
-              }}
-              options={[
-                { value: "in", label: "Check-in" },
-                { value: "out", label: "Kembalikan kartu" },
-              ]}
-            />
-          ) : null}
           {mode === "out" ? (
             <CheckOutPanel
               onCheckedOut={() => setReloadToken((token) => token + 1)}
@@ -731,7 +690,11 @@ function GatePage({ user }: { user: User }) {
                     <p className="mt-2 text-base text-success">
                       <span className="plate mr-1 text-foreground">{phase.trip.vehicle?.plateDisplay ?? "-"}</span> membawa kartu{" "}
                       <span className="font-mono font-semibold">{phase.trip.card?.label ?? phase.trip.card?.uid ?? "-"}</span>.
-                      {phase.trip.tripNo ? ` Nomor trip ${phase.trip.tripNo}.` : ""} Scan SPJ berikutnya.
+                      {phase.trip.tripNo ? ` Nomor trip ${phase.trip.tripNo}.` : ""}
+                      {needsCargoMarks(phase.trip)
+                        ? ` Close cargo: ${cargoMarkText(phase.trip.closeCargo).toLowerCase()}. Flexi bag: ${cargoMarkText(phase.trip.flexiBag).toLowerCase()}.`
+                        : ""}{" "}
+                      Scan SPJ berikutnya.
                     </p>
                   </div>
                 </div>
@@ -753,6 +716,41 @@ function GatePage({ user }: { user: User }) {
                     <p className="display text-[clamp(1.5rem,1.1rem+1.6vw,2.25rem)] leading-tight font-semibold text-destructive">Ditolak</p>
                     <p className="mt-1.5 text-lg text-destructive">{phase.message}</p>
                   </div>
+                </div>
+              </motion.section>
+            ) : null}
+
+            {asksMarks && phase.kind === "scanned" ? (
+              <motion.section
+                key="marks"
+                {...motionProps}
+                className={cn("rounded-2xl bg-card p-4 shadow-raised sm:p-6", awaitingMarks ? "border-2 border-signal" : "border")}
+                data-testid="gate-marks"
+              >
+                <h2 className="text-base font-semibold">Tandai muatan truk ini</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Jawab keduanya, lalu tempelkan kartu. Jawaban ini menentukan cek netto di timbang 2.
+                </p>
+                <div ref={marksRef} className="mt-4 grid gap-4 sm:grid-cols-2">
+                  {(
+                    [
+                      ["closeCargo", "Close cargo"],
+                      ["flexiBag", "Flexi bag"],
+                    ] as const
+                  ).map(([name, legend]) => (
+                    <YesNoField
+                      key={name}
+                      legend={legend}
+                      name={name}
+                      size="lg"
+                      value={marks[name]}
+                      onChange={(value) => {
+                        setMarks((current) => ({ ...current, [name]: value }));
+                        setMarkErrors((current) => ({ ...current, [name]: undefined }));
+                      }}
+                      error={markErrors[name]}
+                    />
+                  ))}
                 </div>
               </motion.section>
             ) : null}
@@ -911,6 +909,7 @@ function GatePage({ user }: { user: User }) {
           </TripPanel>
         </div>
       </div>
+      )}
 
       {detailOf ? (
         <Sheet open onOpenChange={(open) => (open ? undefined : setDetailOf(null))}>
