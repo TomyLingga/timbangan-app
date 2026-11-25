@@ -275,8 +275,8 @@ async function run(browser) {
     // the logistics admin also holds the modules of phase 4: Keputusan, Laporan, Stasiun
     // and since migration 0006 the plant masters: Tangki and Segel
     // Tujuan left the menu: the destination is typed on each DO (owner's decision, 22 November 2026)
-    // and since migration 0011 Lacak kendaraan (gps)
-    const expected = ['/', '/registrasi', '/delivery-order', '/pos', '/lacak', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/riwayat', '/stasiun'];
+    // and since migration 0011 Lacak kendaraan (gps), since migration 0017 Permintaan pengiriman
+    const expected = ['/', '/registrasi', '/permintaan-pengiriman', '/delivery-order', '/pos', '/lacak', '/keputusan', '/kontrak', '/supir', '/kendaraan', '/kartu', '/tangki', '/segel', '/laporan', '/riwayat', '/stasiun'];
     return !dialog.innerText.includes('Belum tersedia') && links.join() === expected.join();
   })()`)));
   await browser.screenshot("07-drawer-phone-dark");
@@ -541,7 +541,8 @@ async function run(browser) {
   check(
     "a partner account is offered only the modules allowed for partners",
     // gps is allowed for partners since migration 0011 (apps/api)
-    partnerModules === "permission-contracts permission-drivers permission-vehicles permission-delivery_orders permission-registrations permission-gps",
+    // and shipment_requests since migration 0017
+    partnerModules === "permission-contracts permission-drivers permission-vehicles permission-delivery_orders permission-registrations permission-gps permission-shipment_requests",
     partnerModules,
   );
   await browser.click("Beri semua");
@@ -1039,7 +1040,7 @@ async function phaseThree(browser) {
     "the send sheet starts on Transporter with the transporter of the DO chosen",
     Boolean(
       await browser.waitFor(
-        `[...document.querySelectorAll('[role="dialog"] button[aria-pressed="true"]')].some((button) => button.innerText.trim() === 'Transporter') && (document.querySelector('[role="dialog"]')?.innerText ?? '').includes('Transporter Contoh A')`,
+        `[...document.querySelectorAll('[role="dialog"] button[aria-pressed="true"]')].some((button) => button.innerText.trim() === 'Transporter') && ((document.querySelector('[role="dialog"]')?.innerText ?? '') + ' ' + [...document.querySelectorAll('[role="dialog"] input')].map((input) => input.value).join(' ')).includes('Transporter Contoh A')`,
       ),
     ),
   );
@@ -2443,7 +2444,10 @@ async function shipmentAndCustomer(browser) {
   // 62. Staff send a delivery order to its customer.
   // signing out in the browser ends the sessions of the account, so a new token is taken
   adminToken = await apiSession("admin.contoh");
-  const draft = (await apiGet(adminToken, "/api/delivery-orders?status=DRAFT&limit=50")).items.find((order) => order.partner.name === "Customer Contoh A");
+  // a draft of Customer Contoh A with a complete destination (the DO of step 48 has only a name and a regency)
+  const draft = (await apiGet(adminToken, "/api/delivery-orders?status=DRAFT&limit=50")).items.find(
+    (order) => order.partner.name === "Customer Contoh A" && order.destination?.address && order.destination.district && order.destination.province,
+  );
   const doNo = draft?.doNo ?? "";
   await staffSignIn(browser, "admin.contoh");
   await browser.click('a[href="/delivery-order"]');
