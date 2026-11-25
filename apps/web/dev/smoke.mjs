@@ -489,7 +489,7 @@ async function run(browser) {
   await browser.goto(`${API}/api/auth/sso/start?as=super.contoh`);
   await browser.waitFor("location.pathname === '/' && document.body.innerText.includes('Admin Sistem Contoh')");
   await browser.click('a[href="/pengguna"]');
-  check("/pengguna lists the accounts", (await browser.waitFor(visibleRows)) === 7);
+  check("/pengguna lists the accounts", (await browser.waitFor(visibleRows)) === 10);
   check("the page says what it is for", Boolean(await browser.hasText("belum punya hak akses")));
   await browser.type('input[type="search"]', "staf.baru", { perKey: true });
   await browser.waitFor(`${visibleRows} === 1 && ${rowText("Staf Baru Contoh")} !== ''`);
@@ -661,6 +661,7 @@ async function run(browser) {
 
   await phaseThree(browser);
   await phaseFour(browser);
+  await decisionModules(browser);
   await phaseFive(browser);
   await historyAndVerification(browser);
   await gpsTracking(browser);
@@ -1208,7 +1209,7 @@ async function phaseFour(browser) {
   const adminUnread = (await apiGet(adminToken, "/api/notifications?unread=true&limit=1")).unreadCount;
   check(
     "the bell shows the number of requests waiting, not the unread count",
-    waitingNow === 3 &&
+    waitingNow === 4 &&
       adminUnread !== waitingNow &&
       Boolean(
         await browser.waitFor(
@@ -1280,7 +1281,10 @@ async function phaseFour(browser) {
 
   // 30. Keputusan: the list, a reason that is required, a decision, a refusal of the server.
   await browser.click('a[href="/keputusan"]');
-  check("/keputusan lists the requests waiting", Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 3`)));
+  check(
+    "/keputusan lists the requests waiting, the QC hold included",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 4 && ${rowText("Tahan QC")} !== ''`)),
+  );
   check(
     "a request shows the plate read by the camera next to the registered plate",
     (await browser.evaluate(rowText("Plat tidak cocok"))).includes("Kamera: ZZ0002CTN") && (await browser.evaluate(rowText("Selisih bruto"))).includes("dari toleransi"),
@@ -1299,7 +1303,7 @@ async function phaseFour(browser) {
     Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Disetujui') && document.querySelector('[data-testid="approval-outcome"]').innerText.includes('BA-SELISIH-BRUTO')`)),
   );
   await browser.pressEscape();
-  await browser.waitFor(`!document.querySelector('[role="dialog"]') && ${visibleRows} === 2`);
+  await browser.waitFor(`!document.querySelector('[role="dialog"]') && ${visibleRows} === 3`);
 
   await browser.click('button[aria-label^="Rincian Selisih tarra"]');
   await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`);
@@ -1433,6 +1437,114 @@ async function phaseFour(browser) {
     check(`${page} has no horizontal scroll on a phone`, await browser.evaluate(noHorizontalScroll));
   }
   await browser.viewport(1366, 900);
+  await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
+// --- the two decision modules: approvals for the weighbridge requests, qc_approvals for the QC holds ----
+
+async function decisionModules(browser) {
+  const adminToken = await apiSession("admin.contoh");
+  const [qcHold] = (await apiGet(adminToken, "/api/exceptions?status=PENDING&type=QC_HOLD")).items;
+  const decisionButton = (label) => `(document.querySelector('button[aria-label^="Rincian ${label}"]')?.innerText ?? '')`;
+
+  // 31a. Weighbridge only: the API hides the QC holds from it, in the list and in the detail.
+  const weighbridgeToken = await apiSession("keputusan.timbang");
+  const weighbridgeList = (await apiGet(weighbridgeToken, "/api/exceptions?limit=50")).items;
+  const hiddenDetail = await fetch(`${API}/api/exceptions/${qcHold?.id}`, { headers: { authorization: `Bearer ${weighbridgeToken}` } });
+  check(
+    "the API hides the QC holds from an account without qc_approvals",
+    Boolean(qcHold) && weighbridgeList.length > 0 && weighbridgeList.every((item) => item.type !== "QC_HOLD") && hiddenDetail.status === 404,
+    `${weighbridgeList.length} listed, detail ${hiddenDetail.status}`,
+  );
+  await staffSignIn(browser, "keputusan.timbang");
+  await browser.click('a[href="/keputusan"]');
+  check(
+    "a weighbridge-only account lists the plate request to decide and no QC hold",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 1 && ${decisionButton("Plat tidak cocok")}.includes('Putuskan') && ${rowText("Tahan QC")} === ''`)),
+  );
+  await browser.goto(`${WEB}/keputusan?permintaan=${encodeURIComponent(qcHold?.id ?? "")}`);
+  check(
+    "a QC hold opened by its address is not found for it, and shows no decision controls",
+    Boolean(await browser.waitFor(`(document.querySelector('[role="dialog"]')?.innerText ?? '').includes('kode 404')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`)),
+  );
+  await browser.pressEscape();
+  await signOut(browser);
+
+  // 31b. Weighbridge EDIT with qc_approvals VIEW: the QC hold is listed, read-only, with who decides it.
+  await staffSignIn(browser, "pengawas.timbang");
+  await browser.click('a[href="/keputusan"]');
+  check(
+    "an account that only reads QC holds lists one as Rincian, next to the plate request to decide",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 2 && ${decisionButton("Tahan QC")}.includes('Rincian') && ${decisionButton("Plat tidak cocok")}.includes('Putuskan')`)),
+  );
+  await browser.click('button[aria-label^="Rincian Tahan QC"]');
+  check(
+    "the QC hold opens read-only and says who decides it",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-read-only"]')?.innerText ?? '') === 'Diputuskan oleh pemegang hak Keputusan QC tingkat ubah.'`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`)),
+  );
+  await browser.screenshot("31a-keputusan-qc-hanya-lihat-light");
+  await browser.pressEscape();
+  await browser.click('button[aria-label^="Rincian Plat tidak cocok"]');
+  check("the plate request still opens with its decision controls", Boolean(await browser.waitFor(`Boolean(document.querySelector('[data-testid="approval-decide"]'))`)));
+  await browser.pressEscape();
+  await signOut(browser);
+
+  // 31c. QC only: Keputusan in the menu and in the bell, and the QC hold decided.
+  const qcToken = await apiSession("manajer.qc");
+  const qcList = (await apiGet(qcToken, "/api/exceptions?limit=50")).items;
+  const plate = weighbridgeList.find((item) => item.type === "PLATE" && item.status === "PENDING");
+  const refused = await fetch(`${API}/api/exceptions/${plate?.id}/decide`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${qcToken}`, "content-type": "application/json" },
+    body: JSON.stringify({ decision: "APPROVE" }),
+  });
+  check(
+    "the API lists only QC holds to a QC-only account and refuses it a plate request",
+    qcList.length === 1 && qcList[0].type === "QC_HOLD" && refused.status === 403,
+    `${qcList.map((item) => item.type).join(",")}, decide ${refused.status}`,
+  );
+  await staffSignIn(browser, "manajer.qc");
+  check(
+    "a QC-only account has Keputusan in its menu and the bell of the requests waiting",
+    (await menuLinks(browser)).includes("/keputusan") &&
+      Boolean(await browser.waitFor(`document.querySelector('[data-testid="notifications-bell"]')?.dataset.mode === 'approvals' && ${bellLabelText} === '1 permintaan menunggu keputusan'`)),
+  );
+  await browser.click('a[href="/keputusan"]');
+  check(
+    "from the menu, Keputusan lists the QC hold to decide",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && ${visibleRows} === 1 && ${decisionButton("Tahan QC")}.includes('Putuskan')`)) &&
+      Boolean(await browser.hasText("Hasil QC yang ditahan dan menunggu keputusan.")),
+  );
+  await browser.goto(`${WEB}/`);
+  await browser.click('[data-testid="notifications-bell"]');
+  check(
+    "the bell entry of the QC hold leads to its decision",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const entry = ${panelEntry("Hasil QC menunggu keputusan")};
+        return Boolean(entry) && entry.tagName === 'A' && entry.getAttribute('href') === '/keputusan?permintaan=${encodeURIComponent(qcHold?.id ?? "")}' &&
+          document.querySelector('[data-testid="notifications-panel"] [data-testid="bell-decisions"]')?.getAttribute('href') === '/keputusan';
+      })()`),
+    ),
+  );
+  await browser.evaluate(`${panelEntry("Hasil QC menunggu keputusan")}.setAttribute('data-smoke', 'follow'); true`);
+  await browser.click('[data-smoke="follow"]');
+  check(
+    "following it opens the QC hold with its decision controls",
+    Boolean(await browser.waitFor(`location.pathname === '/keputusan' && Boolean(document.querySelector('[data-testid="approval-decide"]')) && (document.querySelector('[role="dialog"]')?.innerText ?? '').includes('truk lanjut ke bongkar')`)),
+  );
+  const decided = await stat("POST /api/exceptions/:id/decide");
+  await browser.click("Setujui");
+  check(
+    "a QC-only account approves the QC hold",
+    Boolean(await browser.waitFor(`(document.querySelector('[data-testid="approval-outcome"]')?.innerText ?? '').includes('Keputusan: Disetujui')`)) &&
+      (await stat("POST /api/exceptions/:id/decide")) === decided + 1 &&
+      (await apiGet(qcToken, `/api/exceptions/${qcHold?.id}`)).exception?.status === "APPROVED",
+  );
+  await browser.pressEscape();
   await browser.goto(`${WEB}/`);
   await signOut(browser);
 }

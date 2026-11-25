@@ -71,6 +71,11 @@ describe("navigationFor", () => {
     expect(navigationFor(partner({ approvals: "EDIT", reports: "VIEW" }))).toEqual(["/"]);
   });
 
+  it("adds Keputusan for staff who hold only qc_approvals", () => {
+    expect(navigationFor(staff({ qc_approvals: "VIEW" }))).toEqual(["/", "/keputusan"]);
+    expect(navigationFor(partner({ qc_approvals: "EDIT" }))).toEqual(["/"]);
+  });
+
   it("adds the tank and seal pages for staff with plant_masters", () => {
     expect(navigationFor(staff({ plant_masters: "VIEW" }))).toEqual(["/", "/tangki", "/segel"]);
     expect(navigationFor(staff({ rfid_cards: "VIEW", plant_masters: "EDIT", reports: "VIEW" }))).toEqual(["/", "/kartu", "/tangki", "/segel", "/laporan", "/riwayat"]);

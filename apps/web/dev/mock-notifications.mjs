@@ -2,9 +2,11 @@
 // and text is made up.
 //
 // What the accounts of the mock find in their inbox:
-//   admin.contoh, super.contoh, petugas.lokal   (approvals EDIT) one request notification per request of the
-//                                               sample flow: the waiting ones unread, the decided one read; plus a
-//                                               notice of a type the web does not know
+//   admin.contoh, super.contoh, petugas.lokal   (approvals and qc_approvals EDIT) one request notification per
+//                                               request of the sample flow: the waiting ones unread, the decided one
+//                                               read; plus a notice of a type the web does not know
+//   manajer.qc                                  (qc_approvals EDIT) the QC hold, and the notice
+//   pengawas.timbang, keputusan.timbang         (approvals EDIT) the weighbridge requests, and the notice
 //   transporter.contoh                          the seeded DO sent to its company (unread), the notice (unread), and
 //                                               twelve older delivery orders (read), so "Muat lagi" has a next page
 //   pos.contoh                                  the notice only

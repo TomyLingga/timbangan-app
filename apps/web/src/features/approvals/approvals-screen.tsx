@@ -16,7 +16,7 @@ import { useApiQuery } from "@/hooks/use-api-query";
 import { useVisibleInterval } from "@/hooks/use-visible-interval";
 import { formatNumber } from "@/lib/format";
 import { DECISION_PARAM } from "@/lib/notifications";
-import { canSeeApprovals } from "@/lib/permissions";
+import { canDecide, canSeeApprovals, canView } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { ExceptionView, User } from "@/lib/types";
 import { exceptionStatusInfo, exceptionTypeLabel, referenceLabel, waitedFor } from "@/lib/weighing";
@@ -27,6 +27,19 @@ const LIST_LIMIT = 50;
 type Show = "PENDING" | "ALL";
 
 const kg = (value: number | null) => (value === null ? "-" : `${formatNumber(value)} kg`);
+
+/** What the list holds for this account: the API lists only the types of the modules it holds. */
+function pageDescription(user: User): string {
+  const weighbridge = canView(user, "approvals");
+  const qc = canView(user, "qc_approvals");
+  const what =
+    weighbridge && qc
+      ? "Permintaan dari timbangan saat plat tidak cocok atau berat melewati toleransi, dan hasil QC yang ditahan."
+      : qc
+        ? "Hasil QC yang ditahan dan menunggu keputusan."
+        : "Permintaan dari timbangan saat plat tidak cocok atau berat melewati toleransi.";
+  return `${what} Daftar diperbarui tiap 5 detik.`;
+}
 
 function columns(now: number): ReadonlyArray<Column<ExceptionView>> {
   return [
@@ -119,7 +132,7 @@ function ApprovalsPage({ user }: { user: User }) {
             </span>
           ) : null
         }
-        description="Permintaan dari timbangan saat plat tidak cocok atau berat melewati toleransi. Daftar diperbarui tiap 5 detik."
+        description={pageDescription(user)}
       />
 
       <Segmented<Show>
@@ -139,7 +152,7 @@ function ApprovalsPage({ user }: { user: User }) {
       ) : items.length === 0 ? (
         <ListEmpty
           title={show === "PENDING" ? "Tidak ada yang menunggu keputusan" : "Belum ada permintaan"}
-          hint={show === "PENDING" ? "Permintaan baru dari timbangan muncul di sini dengan sendirinya." : undefined}
+          hint={show === "PENDING" ? "Permintaan baru muncul di sini dengan sendirinya." : undefined}
         />
       ) : (
         <div data-testid="approval-list">
@@ -147,18 +160,22 @@ function ApprovalsPage({ user }: { user: User }) {
             columns={columns(now)}
             rows={items}
             rowKey={(view) => view.id}
-            actions={(view) => (
-              <Button
-                variant={view.status === "PENDING" ? "default" : "outline"}
-                size="sm"
-                className="h-10 md:h-8"
-                onClick={() => setOpenId(view.id)}
-                aria-label={`Rincian ${exceptionTypeLabel(view.type)} ${view.trip.plateDisplay ?? view.plateNo ?? ""}`.trim()}
-              >
-                {view.status === "PENDING" ? "Putuskan" : "Rincian"}
-                <ArrowRight aria-hidden="true" />
-              </Button>
-            )}
+            actions={(view) => {
+              // a request the account may only read opens as Rincian
+              const decide = view.status === "PENDING" && canDecide(user, view);
+              return (
+                <Button
+                  variant={decide ? "default" : "outline"}
+                  size="sm"
+                  className="h-10 md:h-8"
+                  onClick={() => setOpenId(view.id)}
+                  aria-label={`Rincian ${exceptionTypeLabel(view.type)} ${view.trip.plateDisplay ?? view.plateNo ?? ""}`.trim()}
+                >
+                  {decide ? "Putuskan" : "Rincian"}
+                  <ArrowRight aria-hidden="true" />
+                </Button>
+              );
+            }}
           />
         </div>
       )}
@@ -178,6 +195,13 @@ function ApprovalsPage({ user }: { user: User }) {
 export function ApprovalsScreen() {
   const { state } = useAuth();
   if (state.status !== "authenticated") return null;
-  if (!canSeeApprovals(state.user)) return <AccessDenied module="approvals" />;
+  if (!canSeeApprovals(state.user)) {
+    return (
+      <AccessDenied
+        module="approvals"
+        reason="Halaman ini untuk pemegang hak Keputusan selisih dan plat atau Keputusan QC. Minta admin sistem memberi Anda salah satunya."
+      />
+    );
+  }
   return <ApprovalsPage user={state.user} />;
 }

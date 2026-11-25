@@ -31,6 +31,7 @@ npm run build
 
 - Akun partner (kata sandi `contoh-123`): `pks.contoh.a` (pemasok), `transporter.contoh`; hak aksesnya bawaan partner menurut jenis perusahaannya.
 - Akun karyawan masuk lewat `http://localhost:3100/api/auth/sso/start?as=admin.contoh` (semua modul tingkat ubah kecuali Pengguna). Rute itu berperan sebagai portal: browser dikembalikan ke `/?token=…&appId=…` (tambahkan `&to=callback` untuk `/auth/sso`). Akun lain: `super.contoh` (semua modul), `pos.contoh` (pos registrasi, registrasi tingkat buat, kontrak tingkat lihat), `staf.baru` (belum punya hak akses).
+- Akun untuk memisahkan dua modul keputusan: `manajer.qc` (hanya Keputusan QC tingkat ubah), `pengawas.timbang` (Keputusan selisih dan plat tingkat ubah, Keputusan QC tingkat lihat), `keputusan.timbang` (hanya Keputusan selisih dan plat tingkat ubah). Seperti API asli, daftar Keputusan hanya memuat jenis permintaan dari modul yang dipegang akun.
 - `petugas.lokal` (kata sandi `contoh-123`) meniru akun darurat lokal (`npm run user:create -- --admin`): karyawan dengan semua modul tingkat ubah yang masuk dengan kata sandi.
 - Rute, kode galat, dan bentuk jawaban mengikuti API asli (`docs/fase-3-penyelarasan.md`), termasuk tiga rute `lookup` untuk form registrasi, `GET /api/admin/modules`, dan `PUT /api/admin/users/:id/permissions`.
 - Supir baru dari form berstatus "menunggu dikirim ke VCF" dan terkirim saat "Ambil dari VCF". Satu supir contoh selalu gagal dikirim, supaya tanda gagal dan alasannya bisa dilihat.

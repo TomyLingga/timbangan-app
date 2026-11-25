@@ -150,6 +150,11 @@ const users = [
   { id: "u-6", kind: "INTERNAL", username: "super.contoh", fullName: "Admin Sistem Contoh", permissions: everything(), partner: null },
   // dashboard is not one of the modules above (apps/api src/auth/permissions.ts); it opens the plant map on Beranda
   { id: "u-7", kind: "INTERNAL", username: "petugas.lokal", fullName: "Petugas Lokal Contoh", permissions: { ...everything(), dashboard: "VIEW" }, partner: null, password: "contoh-123" },
+  // the two decision modules apart (apps/api src/exceptions/service.ts visibleTypes): a QC manager, a weighbridge
+  // supervisor who only reads the QC holds, and one who does not see them at all
+  { id: "u-8", kind: "INTERNAL", username: "manajer.qc", fullName: "Manajer QC Contoh", permissions: { qc_approvals: "EDIT" }, partner: null },
+  { id: "u-9", kind: "INTERNAL", username: "pengawas.timbang", fullName: "Pengawas Timbang Contoh", permissions: { approvals: "EDIT", qc_approvals: "VIEW" }, partner: null },
+  { id: "u-10", kind: "INTERNAL", username: "keputusan.timbang", fullName: "Keputusan Timbang Contoh", permissions: { approvals: "EDIT" }, partner: null },
 ];
 users.forEach((user, index) => {
   user.employeeNo = user.kind === "INTERNAL" ? `EMP-CONTOH-${String(index + 1).padStart(2, "0")}` : null;
@@ -1592,6 +1597,13 @@ function raiseException(trip, fields) {
 
 const EXCEPTION_DECISION = { APPROVED: (row) => (row.type === "NET_OUT" ? "OK" : "APPROVE"), REJECTED: () => "REJECT", RETRY: (row) => row.decisionCode };
 
+/** The types an account may see, as apps/api src/exceptions/service.ts visibleTypes: weighbridge requests with approvals, QC holds with qc_approvals. */
+const WEIGHING_TYPES = ["PLATE", "GROSS_IN", "TARE_OUT", "NET_IN", "NET_OUT"];
+const QC_TYPES = ["QC_HOLD"];
+/** The guard of the list and the detail: approvals or qc_approvals VIEW. */
+const DECISION_VIEWERS = [["approvals", "VIEW"], ["qc_approvals", "VIEW"]];
+const visibleTypes = (user) => [...(can(user, "approvals", "VIEW") ? WEIGHING_TYPES : []), ...(can(user, "qc_approvals", "VIEW") ? QC_TYPES : [])];
+
 function exceptionView(row) {
   const trip = trips.find((item) => item.id === row.tripId);
   const vehicleRow = trip ? vehicleOf(trip) : null;
@@ -1712,7 +1724,19 @@ function seedWeighingSample() {
   bindCard(fourth.trip, rfidCards.find((card) => card.uid === "04A1B2C305"));
 
   // a field step ready for the temporary buttons
-  seed("v-3", "d-6", "IN", "QC");
+  const fifth = seed("v-3", "d-6", "IN", "QC");
+  // QC_HOLD: the QC form held the load (apps/api src/work/incoming.ts); decided by the holders of qc_approvals.
+  // The mock leaves the trip's steps alone, so the QC step above stays ready for the temporary button.
+  raiseException(fifth.trip, {
+    type: "QC_HOLD",
+    stationId: null,
+    stage: null,
+    liveWeightAt: null,
+    plateRead: null,
+    approverModule: "qc_approvals",
+    raisedAt: minutesAgo(8),
+    context: { disposition: "HOLD", reasonCode: "FFA_OUT", values: { FFA: 5.6, MOISTURE: 0.2 }, remark: "Sampel contoh" },
+  });
 }
 if (process.env.MOCK_FLOW !== "empty") seedWeighingSample();
 
@@ -1867,13 +1891,15 @@ function phaseFourRoutes() {
 
     // --- requests for a decision (approvals)
     "GET /api/exceptions": (request, response, url) => {
-      if (!guard(request, response, [["approvals", "VIEW"]], { staffOnly: true })) return 0;
+      const user = guard(request, response, DECISION_VIEWERS, { staffOnly: true });
+      if (!user) return 0;
       const list = (name) => (url.searchParams.get(name) ?? "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
       const statuses = list("status");
       const types = list("type");
+      const visible = visibleTypes(user);
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 50);
       const items = exceptions
-        .filter((row) => (!statuses.length || statuses.includes(row.status)) && (!types.length || types.includes(row.type)))
+        .filter((row) => visible.includes(row.type) && (!statuses.length || statuses.includes(row.status)) && (!types.length || types.includes(row.type)))
         .sort((a, b) => b.raisedAt.localeCompare(a.raisedAt))
         .slice(0, limit)
         .map(exceptionView);
@@ -1881,14 +1907,16 @@ function phaseFourRoutes() {
     },
 
     "GET /api/exceptions/:id": (request, response, url, id) => {
-      if (!guard(request, response, [["approvals", "VIEW"]], { staffOnly: true })) return 0;
+      const user = guard(request, response, DECISION_VIEWERS, { staffOnly: true });
+      if (!user) return 0;
       const row = exceptions.find((item) => item.id === id);
-      if (!row) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
+      if (!row || !visibleTypes(user).includes(row.type)) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
       return send(request, response, 200, { exception: exceptionView(row) });
     },
 
+    // the order of apps/api src/exceptions/decide.ts: the body, the status, then EDIT on the module of the request
     "POST /api/exceptions/:id/decide": async (request, response, url, id) => {
-      const user = guard(request, response, [["approvals", "EDIT"]], { staffOnly: true });
+      const user = guard(request, response, [["approvals", "EDIT"], ["qc_approvals", "EDIT"]], { staffOnly: true });
       if (!user) return 0;
       const row = exceptions.find((item) => item.id === id);
       if (!row) return fail(request, response, 404, "NOT_FOUND", "Permintaan tidak ditemukan.");
@@ -1899,14 +1927,18 @@ function phaseFourRoutes() {
       if (!allowed.includes(body.decision)) fields.decision = netOut ? "Keputusan harus OK, ADD_LOAD, atau REDUCE_LOAD." : "Keputusan harus APPROVE atau REJECT.";
       const reason = typeof body.reason === "string" ? body.reason.trim() : "";
       if (DIFFERENCE_TYPES.includes(row.type) && reason.length < 3) fields.reason = "Alasan wajib diisi, minimal 3 huruf.";
+      if (row.type === "QC_HOLD" && reason.length > 300) fields.reason = "Catatan keputusan paling banyak 300 huruf.";
       if (body.updateMasterTare && !(row.type === "TARE_OUT" && body.decision === "APPROVE")) fields.updateMasterTare = "Tarra master hanya bisa diganti pada selisih tarra yang disetujui.";
       if (Object.keys(fields).length > 0) return invalid(request, response, fields);
       if (row.status === "CANCELLED" || row.status === "EXPIRED") return fail(request, response, 409, "EXCEPTION_CANCELLED", "Permintaan ini sudah dibatalkan.");
       if (row.status !== "PENDING") return fail(request, response, 409, "ALREADY_DECIDED", "Permintaan ini sudah diputuskan.");
+      if (!can(user, row.approverModule, "EDIT")) return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
       const trip = trips.find((item) => item.id === row.tripId);
       Object.assign(row, { decidedBy: user.id, decidedAt: nowIso(), reason: reason || null });
       let weighing = null;
-      if (body.decision === "REJECT") row.status = "REJECTED";
+      // a QC hold weighs nothing; the mock does not move the trip's steps for it
+      if (row.type === "QC_HOLD") row.status = body.decision === "APPROVE" ? "APPROVED" : "REJECTED";
+      else if (body.decision === "REJECT") row.status = "REJECTED";
       else if (body.decision === "ADD_LOAD" || body.decision === "REDUCE_LOAD") Object.assign(row, { status: "RETRY", decisionCode: body.decision });
       else {
         row.status = "APPROVED";
@@ -3550,5 +3582,6 @@ server.listen(PORT, HOST, () => {
   console.log("Partner sign-in, password contoh-123: pks.contoh.a, transporter.contoh");
   console.log(`Staff sign-in: open http://${HOST}:${PORT}/api/auth/sso/start?as=admin.contoh`);
   console.log("  other staff: super.contoh (every module), pos.contoh (registration post), staf.baru (no access yet)");
+  console.log("  decisions: manajer.qc (QC holds only), pengawas.timbang (weighbridge, reads QC holds), keputusan.timbang (weighbridge only)");
   console.log("Local staff sign-in, password contoh-123: petugas.lokal (every module)");
 });

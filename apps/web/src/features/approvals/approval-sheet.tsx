@@ -14,7 +14,7 @@ import { useApiQuery } from "@/hooks/use-api-query";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { isApiError } from "@/lib/api-client";
 import { decisionErrorMessage, errorMessage } from "@/lib/messages";
-import { canDecide } from "@/lib/permissions";
+import { canDecide, deciderText } from "@/lib/permissions";
 import { api } from "@/lib/session";
 import type { ExceptionView, User } from "@/lib/types";
 import { decisionLabel, exceptionStatusInfo, exceptionTypeLabel, needsReason, referenceLabel, waitedFor } from "@/lib/weighing";
@@ -36,6 +36,8 @@ const CHOICES: Record<"default" | "NET_OUT", ReadonlyArray<{ value: Decision; la
 /** What each decision does, in the words of the decision table (docs/fase-4-rancangan.md, section 2). */
 function consequence(type: string): string {
   switch (type) {
+    case "QC_HOLD":
+      return "Setujui: QC selesai dan truk lanjut ke bongkar. Tolak: truk ditolak karena spesifikasi, lalu segel ulang, timbang 2, dan keluar.";
     case "PLATE":
       return "Setujui: timbang dilanjutkan dengan plat registrasi. Tolak: timbang tidak tersimpan dan supir diarahkan ke pos registrasi.";
     case "NET_OUT":
@@ -87,7 +89,7 @@ export function ApprovalSheet({ id, user, onClose, onDecided }: { id: string | n
                 {refusal ? <Notice tone="error">{refusal}</Notice> : null}
               </div>
               <Facts view={view} />
-              {view.status === "PENDING" && canDecide(user) ? (
+              {view.status === "PENDING" && canDecide(user, view) ? (
                 <DecisionForm
                   view={view}
                   onDecided={(message) => {
@@ -97,7 +99,9 @@ export function ApprovalSheet({ id, user, onClose, onDecided }: { id: string | n
                   }}
                 />
               ) : view.status === "PENDING" ? (
-                <Notice tone="warning">Akun Anda hanya bisa melihat. Keputusan butuh hak akses Keputusan tingkat ubah.</Notice>
+                <Notice tone="warning">
+                  <span data-testid="approval-read-only">{deciderText(view)}</span>
+                </Notice>
               ) : (
                 <Outcome view={view} />
               )}

@@ -11,16 +11,21 @@ import {
   canCreateDeliveryOrder,
   canCreateIncoming,
   canCreateOutgoing,
+  canDecide,
   canEdit,
   canEditDraft,
   canEditVehicle,
   canManageDeliveryOrders,
   canReissueSpj,
   canReviewRegistrations,
+  canSeeApprovals,
   canSeeSyncRuns,
   canSyncOdoo,
   canSyncVcf,
   canView,
+  deciderModule,
+  deciderText,
+  decisionModuleOf,
   grantAll,
   isStaff,
   levelChoices,
@@ -156,6 +161,46 @@ describe("actions follow the route table of the API", () => {
   it("reissues an SPJ with gate EDIT", () => {
     expect(canReissueSpj(staff({ gate: "EDIT" }))).toBe(true);
     expect(canReissueSpj(staff({ gate: "CREATE", registrations: "EDIT" }))).toBe(false);
+  });
+});
+
+describe("requests for a decision", () => {
+  const plate = { type: "PLATE", approverModule: "approvals" };
+  const qcHold = { type: "QC_HOLD", approverModule: "qc_approvals" };
+
+  it("maps QC holds to qc_approvals and the weighbridge requests to approvals", () => {
+    expect(["PLATE", "GROSS_IN", "TARE_OUT", "NET_IN", "NET_OUT"].map(decisionModuleOf)).toEqual(Array(5).fill("approvals"));
+    expect(decisionModuleOf("QC_HOLD")).toBe("qc_approvals");
+  });
+
+  it("takes the module of the request from its approverModule, and from its type when that is missing", () => {
+    expect(deciderModule({ type: "GROSS_IN", approverModule: "qc_approvals" })).toBe("qc_approvals");
+    expect(deciderModule({ type: "QC_HOLD", approverModule: "" })).toBe("qc_approvals");
+    expect(deciderModule({ type: "PLATE" })).toBe("approvals");
+  });
+
+  it("opens Keputusan with VIEW on either module, staff only", () => {
+    expect(canSeeApprovals(staff({ approvals: "VIEW" }))).toBe(true);
+    expect(canSeeApprovals(staff({ qc_approvals: "VIEW" }))).toBe(true);
+    expect(canSeeApprovals(staff({ qc: "EDIT" }))).toBe(false);
+    expect(canSeeApprovals(partner({ approvals: "EDIT", qc_approvals: "EDIT" }))).toBe(false);
+    expect(canSeeApprovals(null)).toBe(false);
+  });
+
+  it("decides a request only with EDIT on its module", () => {
+    const weighbridge = staff({ approvals: "EDIT", qc_approvals: "VIEW" });
+    expect([canDecide(weighbridge, plate), canDecide(weighbridge, qcHold)]).toEqual([true, false]);
+    const qcManager = staff({ qc_approvals: "EDIT" });
+    expect([canDecide(qcManager, plate), canDecide(qcManager, qcHold)]).toEqual([false, true]);
+    const both = staff({ approvals: "EDIT", qc_approvals: "EDIT" });
+    expect([canDecide(both, plate), canDecide(both, qcHold)]).toEqual([true, true]);
+    expect(canDecide(staff({ approvals: "VIEW", qc_approvals: "VIEW" }), plate)).toBe(false);
+    expect(canDecide(partner({ approvals: "EDIT", qc_approvals: "EDIT" }), plate)).toBe(false);
+  });
+
+  it("says who decides a request with the label of its module", () => {
+    expect(deciderText(qcHold)).toBe("Diputuskan oleh pemegang hak Keputusan QC tingkat ubah.");
+    expect(deciderText(plate)).toBe("Diputuskan oleh pemegang hak Keputusan selisih dan plat tingkat ubah.");
   });
 });
 

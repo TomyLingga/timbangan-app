@@ -122,10 +122,36 @@ export function canEditDraft(user: MaybeUser, registration: { status: string; di
 
 /** GET, POST and PATCH /api/stations and the machine key: weighbridge EDIT, staff only. */
 export const canManageStations = (user: MaybeUser) => isStaff(user) && canEdit(user, "weighbridge");
-/** GET /api/exceptions: approvals VIEW, staff only. */
-export const canSeeApprovals = (user: MaybeUser) => isStaff(user) && canView(user, "approvals");
-/** POST /api/exceptions/:id/decide: approvals EDIT (the API also checks the module of each request). */
-export const canDecide = (user: MaybeUser) => isStaff(user) && canEdit(user, "approvals");
+/**
+ * The module that decides a request of this type, as the API seeds it: QC holds for qc_approvals, the weighbridge
+ * requests for approvals (apps/api src/exceptions/service.ts visibleTypes, src/work/incoming.ts QC_DECIDER).
+ */
+export function decisionModuleOf(type: string): "approvals" | "qc_approvals" {
+  return type === "QC_HOLD" ? "qc_approvals" : "approvals";
+}
+
+/** The module whose EDIT decides this request: the request's own approverModule, which the API checks. */
+export function deciderModule(request: { type: string; approverModule?: string | null }): ModuleCode {
+  return (request.approverModule || decisionModuleOf(request.type)) as ModuleCode;
+}
+
+/** The line under a request the account may only read: who decides it. */
+export function deciderText(request: { type: string; approverModule?: string | null }): string {
+  const code = deciderModule(request);
+  return `Diputuskan oleh pemegang hak ${MODULE_LABELS[code] ?? code} tingkat ubah.`;
+}
+
+/**
+ * GET /api/exceptions: approvals or qc_approvals VIEW, staff only. The API lists only the types of the modules
+ * the account holds, so the list itself needs no filter here.
+ */
+export const canSeeApprovals = (user: MaybeUser) => isStaff(user) && (canView(user, "approvals") || canView(user, "qc_approvals"));
+/**
+ * POST /api/exceptions/:id/decide: approvals or qc_approvals EDIT to pass the route, then EDIT on the module of
+ * the request (apps/api src/exceptions/decide.ts).
+ */
+export const canDecide = (user: MaybeUser, request: { type: string; approverModule?: string | null }) =>
+  isStaff(user) && (canEdit(user, "approvals") || canEdit(user, "qc_approvals")) && canEdit(user, deciderModule(request));
 /** GET /api/reports/*: reports VIEW, staff only. */
 export const canSeeReports = (user: MaybeUser) => isStaff(user) && canView(user, "reports");
 /** GET /api/trips/:id/steps: any staff account. */
