@@ -141,6 +141,22 @@ export function canEditDraft(user: MaybeUser, registration: { status: string; di
   return registration.direction === "IN" ? canCreateIncoming(user) : canCreateOutgoing(user);
 }
 
+/**
+ * A draft, or a registration already sent (SUBMITTED or APPROVED) whose trucks have not all checked in: its sender
+ * changes it, and staff with registrations EDIT (owner, 26 November 2026). The API decides truck by truck.
+ */
+export function canChangeRegistration(
+  user: MaybeUser,
+  registration: { status: string; direction: "IN" | "OUT"; edit?: { allowed: boolean } },
+): boolean {
+  const status = registration.status.toUpperCase();
+  if (status === "DRAFT") return canEditDraft(user, registration);
+  if (status !== "SUBMITTED" && status !== "APPROVED") return false;
+  if (registration.edit && !registration.edit.allowed) return false;
+  if (isStaff(user)) return canEdit(user, "registrations");
+  return registration.direction === "IN" ? canCreateIncoming(user) : canCreateOutgoing(user);
+}
+
 // --- phase 4 ----------------------------------------------------------------------
 
 /** GET, POST and PATCH /api/stations and the machine key: weighbridge EDIT, staff only. */

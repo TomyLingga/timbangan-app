@@ -32,7 +32,7 @@ async function setup() {
   const other = await seedContract(database, { no: "PC-802/CONTOH", partnerId: companies.supplier1, productId: products.cpo });
   const sale = await seedContract(database, { no: "SC-801/CONTOH", direction: "OUT", partnerId: companies.customer1, productId: products.olein });
   const create = async (payload: object = { contractId: purchase }) => {
-    const response = await request("POST", "/api/shipment-requests", "inl", payload);
+    const response = await request("POST", "/api/shipment-requests", "inl", { supplierId: companies.supplier1, ...payload });
     if (response.statusCode !== 201) throw new Error(response.body);
     return response.json().shipmentRequest as { id: number; status: string };
   };
@@ -61,8 +61,11 @@ async function setup() {
 describe("shipment requests", () => {
   it("makes a draft on an open purchase contract, one open request per contract", async () => {
     const { request, purchase, other, sale, companies, audit } = await setup();
+    const noSupplier = await request("POST", "/api/shipment-requests", "inl", { contractId: purchase });
+    expect(noSupplier.statusCode).toBe(400);
+    expect(noSupplier.json().error.fields.map((field: { field: string }) => field.field)).toEqual(["supplierId"]);
     const created = await request("POST", "/api/shipment-requests", "inl", {
-      contractId: purchase, qtyPlanned: 120_000, deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30", remark: "Kirim bertahap",
+      supplierId: companies.supplier1, contractId: purchase, qtyPlanned: 120_000, deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30", remark: "Kirim bertahap",
     });
     expect(created.statusCode, created.body).toBe(201);
     const shipmentRequest = created.json().shipmentRequest;
@@ -71,6 +74,7 @@ describe("shipment requests", () => {
       contract: { id: purchase, contractNo: "PC-801/CONTOH", state: "OPEN", qtyContract: 300000, uom: "kg", tolerancePct: 0.3 },
       product: { name: "Minyak Contoh Mentah", category: "CPO" },
       partner: { id: companies.supplier1, name: "PT Sawit Satu" },
+      supplier: { id: companies.supplier1, name: "PT Sawit Satu" },
       qtyPlanned: 120000,
       uom: "kg",
       deliveryFrom: "2026-11-21",
@@ -85,19 +89,19 @@ describe("shipment requests", () => {
       cancelReason: null,
     });
 
-    const twice = await request("POST", "/api/shipment-requests", "inl", { contractId: purchase });
+    const twice = await request("POST", "/api/shipment-requests", "inl", { supplierId: companies.supplier1, contractId: purchase });
     expect(twice.statusCode).toBe(409);
     expect(twice.json().error.code).toBe("SHIPMENT_REQUEST_EXISTS");
-    const onSale = await request("POST", "/api/shipment-requests", "inl", { contractId: sale });
+    const onSale = await request("POST", "/api/shipment-requests", "inl", { supplierId: companies.supplier1, contractId: sale });
     expect(onSale.statusCode).toBe(400);
     expect(onSale.json().error.fields).toEqual([{ field: "contractId", message: "Kontrak beli tidak ditemukan atau tidak terbuka." }]);
-    const window = await request("POST", "/api/shipment-requests", "inl", { contractId: sale, deliveryFrom: "2026-11-30", deliveryUntil: "2026-11-21" });
+    const window = await request("POST", "/api/shipment-requests", "inl", { supplierId: companies.supplier1, contractId: sale, deliveryFrom: "2026-11-30", deliveryUntil: "2026-11-21" });
     expect(window.statusCode).toBe(400);
 
     // a supplier account reads only; a CREATE holder makes drafts but does not send them
-    expect((await request("POST", "/api/shipment-requests", "pks1", { contractId: purchase })).statusCode).toBe(403);
-    expect((await request("POST", "/api/shipment-requests", "pembaca", { contractId: purchase })).statusCode).toBe(403);
-    const byCreator = await request("POST", "/api/shipment-requests", "pembuat", { contractId: other });
+    expect((await request("POST", "/api/shipment-requests", "pks1", { supplierId: companies.supplier1, contractId: purchase })).statusCode).toBe(403);
+    expect((await request("POST", "/api/shipment-requests", "pembaca", { supplierId: companies.supplier1, contractId: purchase })).statusCode).toBe(403);
+    const byCreator = await request("POST", "/api/shipment-requests", "pembuat", { supplierId: companies.supplier1, contractId: other });
     expect(byCreator.statusCode, byCreator.body).toBe(201);
     expect((await request("POST", `/api/shipment-requests/${shipmentRequest.id}/send`, "pembuat")).statusCode).toBe(403);
     expect((await request("PATCH", `/api/shipment-requests/${shipmentRequest.id}`, "pembuat", { remark: "x" })).statusCode).toBe(403);
@@ -206,7 +210,7 @@ describe("shipment requests", () => {
     // a closed request stays readable by its supplier
     expect((await request("GET", `/api/shipment-requests/${draft.id}`, "pks1")).statusCode).toBe(200);
     // and the contract may get a new request
-    expect((await request("POST", "/api/shipment-requests", "inl", { contractId: other })).statusCode).toBe(201);
+    expect((await create({ contractId: other })).status).toBe("DRAFT");
 
     expect((await request("POST", `/api/shipment-requests/${onFirst.id}/cancel`, "inl", {})).statusCode).toBe(400);
     const cancelled = await request("POST", `/api/shipment-requests/${onFirst.id}/cancel`, "inl", { reason: "Kontrak diganti" });
@@ -224,7 +228,7 @@ describe("shipment requests", () => {
 
 describe("registering incoming trucks against shipment requests", () => {
   it("lets a supplier register only on a contract with a SENT request; staff need none", async () => {
-    const { call, request, sent, purchase, incoming } = await setup();
+    const { call, request, sent, create, purchase, incoming } = await setup();
     const refused = await call("POST", "/api/registrations", "pks1", incoming(purchase));
     expect(refused.statusCode).toBe(409);
     expect(refused.json().error).toEqual({
@@ -232,7 +236,7 @@ describe("registering incoming trucks against shipment requests", () => {
       message: "Kontrak PC-801/CONTOH belum dikirim INL ke perusahaan Anda. Truk hanya bisa didaftarkan untuk kontrak yang sudah dikirim.",
     });
     // a draft request is not enough
-    const draft = (await request("POST", "/api/shipment-requests", "inl", { contractId: purchase })).json().shipmentRequest;
+    const draft = await create({ contractId: purchase });
     expect((await call("POST", "/api/registrations", "pks1", incoming(purchase))).statusCode).toBe(409);
     await request("POST", `/api/shipment-requests/${draft.id}/cancel`, "inl", { reason: "Ulang" });
 

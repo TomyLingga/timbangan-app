@@ -1,10 +1,11 @@
 // Mock of the shipment requests of apps/api (src/shipment-requests/routes.ts, view.ts, and the request files of
 // src/attachments/routes.ts), for dev/mock-api.mjs. Every number and name is made up.
 //
-// The INL team picks a purchase contract, attaches the contract PDF and sends the request to the supplier's accounts.
-// A supplier account registers incoming trucks only on a contract with a SENT request (planRegistration in
-// dev/mock-api.mjs asks hasSentRequest). DRAFT -> SENT -> CLOSED; DRAFT or SENT -> CANCELLED. One open request per
-// contract.
+// The INL team picks a purchase contract and a mill (PKS, the supplier), attaches the contract PDF and sends the request
+// to the mill's accounts. A supplier account registers incoming trucks only on a contract with a SENT request to its
+// company (planRegistration in dev/mock-api.mjs asks hasSentRequest). DRAFT -> SENT -> CLOSED; DRAFT or SENT ->
+// CANCELLED. Since API migration 0018 a contract may be supplied by several mills: one open request per contract and
+// mill, and the requests that are not cancelled plan at most the contract quantity.
 //
 // Seeded: the two open contracts of PKS Contoh A (the account pks.contoh.a registers on both in dev/smoke.mjs) have a
 // request sent a few days ago, without a notification, so that account's inbox stays empty. PKS Contoh B has none.
@@ -20,7 +21,7 @@ const QTY_MESSAGE = "Quantity harus angka lebih dari 0.";
 
 const isDate = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
 
-export function createShipmentRequestsMock({ guard, send, fail, invalid, readJson, contracts, users, storedFiles, publicAttachment, linkedAnywhere, notify, seedPdf }) {
+export function createShipmentRequestsMock({ guard, send, fail, invalid, readJson, contracts, users, partnerById, storedFiles, publicAttachment, linkedAnywhere, notify, seedPdf }) {
   let nextId = 1;
   /** { id, status, contractId, partnerId, qtyPlanned, deliveryFrom, deliveryUntil, remark, files: [link], createdBy, createdAt, sentBy, ... } */
   const requests = [];
@@ -31,8 +32,14 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
   };
   const contractOf = (row) => contracts.find((item) => item.id === row.contractId);
 
-  function view(row) {
+  const round3 = (value) => Math.round(value * 1000) / 1000;
+  /** What the requests of a contract that are not cancelled plan together; `except` is left out. */
+  const requestedOn = (contractId, except = null) =>
+    round3(requests.filter((row) => row.contractId === contractId && row.status !== "CANCELLED" && row.id !== except).reduce((sum, row) => sum + (row.qtyPlanned ?? 0), 0));
+
+  function view(row, showRequested = true) {
     const contract = contractOf(row);
+    const supplier = partnerById(row.supplierId);
     return {
       id: row.id,
       status: row.status,
@@ -45,9 +52,11 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
         tolerancePct: contract.tolerancePct,
         validFrom: contract.validFrom,
         validUntil: contract.validUntil,
+        qtyRequested: showRequested ? requestedOn(contract.id) : null,
       },
       product: { id: contract.product.id, name: contract.product.name, category: contract.product.category },
       partner: { id: contract.partner.id, name: contract.partner.name },
+      supplier: { id: row.supplierId, name: supplier?.name ?? "-" },
       qtyPlanned: row.qtyPlanned,
       uom: contract.uom,
       deliveryFrom: row.deliveryFrom,
@@ -67,11 +76,32 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
     };
   }
 
-  const visibleTo = (user, row) => user.kind !== "PARTNER" || (row.partnerId === user.partner?.id && PARTNER_STATUSES.includes(row.status));
+  const visibleTo = (user, row) => user.kind !== "PARTNER" || (row.supplierId === user.partner?.id && PARTNER_STATUSES.includes(row.status));
+  const viewFor = (user) => (row) => view(row, user.kind !== "PARTNER");
   const notFound = (request, response) => fail(request, response, 404, "NOT_FOUND", "Permintaan pengiriman tidak ditemukan.");
-  const openExists = (request, response) => fail(request, response, 409, "SHIPMENT_REQUEST_EXISTS", "Kontrak ini sudah punya permintaan pengiriman yang masih terbuka.");
+  const openExists = (request, response) => fail(request, response, 409, "SHIPMENT_REQUEST_EXISTS", "Supplier ini sudah punya permintaan pengiriman yang masih terbuka untuk kontrak ini.");
   const purchaseContract = (id) => contracts.find((item) => String(item.id) === String(id) && item.direction === "IN" && item.state === "OPEN") ?? null;
-  const otherOpen = (contractId, except) => requests.some((row) => row.contractId === contractId && OPEN.includes(row.status) && row.id !== except);
+  const otherOpen = (contractId, supplierId, except) =>
+    requests.some((row) => row.contractId === contractId && row.supplierId === supplierId && OPEN.includes(row.status) && row.id !== except);
+  const isSupplier = (id) => {
+    const partner = partnerById(id);
+    return partner !== null && partner.id.startsWith("p-1");
+  };
+  /** 409 SHIPMENT_REQUEST_OVER_CONTRACT, as assertWithinContract in apps/api; null when it fits. */
+  function overContract(request, response, contract, qtyPlanned, except) {
+    if (qtyPlanned === null || qtyPlanned === undefined || contract.qtyContract === null) return null;
+    const others = requestedOn(contract.id, except);
+    if (round3(others + qtyPlanned) <= contract.qtyContract) return null;
+    const unit = contract.uom;
+    const remaining = round3(Math.max(contract.qtyContract - others, 0));
+    return fail(
+      request,
+      response,
+      409,
+      "SHIPMENT_REQUEST_OVER_CONTRACT",
+      `Permintaan ${qtyPlanned} ${unit} melebihi sisa kontrak ${contract.contractNo}: quantity kontrak ${contract.qtyContract} ${unit}, sudah diminta ${others} ${unit}, sisa ${remaining} ${unit}.`,
+    );
+  }
 
   /** The checks of the body shared by create and change; returns a fields object (empty when fine). */
   function checkFields(body) {
@@ -97,6 +127,7 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
         status: "SENT",
         contractId: contract.id,
         partnerId: contract.partner.id,
+        supplierId: contract.partner.id,
         qtyPlanned: null,
         deliveryFrom: null,
         deliveryUntil: null,
@@ -126,18 +157,20 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       const status = url.searchParams.get("status") ?? "";
       if (status && !STATUSES.includes(status)) return invalid(request, response, { status: "Status permintaan tidak dikenal." });
       const contractId = url.searchParams.get("contractId");
+      const supplierId = url.searchParams.get("supplierId");
       const q = (url.searchParams.get("q") ?? "").trim().toLowerCase();
       const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 20, 1), 50);
       const matches = requests
         .filter((row) => visibleTo(user, row))
-        .filter((row) => (!status || row.status === status) && (!contractId || row.contractId === contractId))
+        .filter((row) => (!status || row.status === status) && (!contractId || row.contractId === contractId) && (!supplierId || row.supplierId === supplierId))
         .filter((row) => {
           if (!q) return true;
           const contract = contractOf(row);
-          return contract.contractNo.toLowerCase().includes(q) || contract.partner.name.toLowerCase().includes(q);
+          const supplier = partnerById(row.supplierId);
+          return contract.contractNo.toLowerCase().includes(q) || contract.partner.name.toLowerCase().includes(q) || Boolean(supplier?.name.toLowerCase().includes(q));
         })
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-      return send(request, response, 200, { items: matches.slice(0, limit).map(view), total: matches.length });
+      return send(request, response, 200, { items: matches.slice(0, limit).map(viewFor(user)), total: matches.length });
     },
 
     "GET /api/shipment-requests/:id": (request, response, url, id) => {
@@ -145,7 +178,7 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       if (!user) return 0;
       const row = find(id);
       if (!row || !visibleTo(user, row)) return notFound(request, response);
-      return send(request, response, 200, { shipmentRequest: view(row), files: row.files.map(publicAttachment) });
+      return send(request, response, 200, { shipmentRequest: viewFor(user)(row), files: row.files.map(publicAttachment) });
     },
 
     "POST /api/shipment-requests": async (request, response) => {
@@ -153,6 +186,7 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       if (!user) return 0;
       const body = await readJson(request);
       if (body.contractId === undefined || body.contractId === null || body.contractId === "") return invalid(request, response, { contractId: "ID tidak valid." });
+      if (body.supplierId === undefined || body.supplierId === null || body.supplierId === "") return invalid(request, response, { supplierId: "ID tidak valid." });
       const fields = checkFields(body);
       if (Object.keys(fields).length > 0) return invalid(request, response, fields);
       if (body.deliveryFrom && body.deliveryUntil && body.deliveryUntil < body.deliveryFrom) {
@@ -160,13 +194,16 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       }
       const contract = purchaseContract(body.contractId);
       if (!contract) return invalid(request, response, { contractId: "Kontrak beli tidak ditemukan atau tidak terbuka." });
-      if (otherOpen(contract.id, null)) return openExists(request, response);
+      if (!isSupplier(body.supplierId)) return invalid(request, response, { supplierId: "Supplier harus partner supplier yang aktif." });
+      if (otherOpen(contract.id, body.supplierId, null)) return openExists(request, response);
+      if (overContract(request, response, contract, body.qtyPlanned, null)) return 0;
       const at = nowIso();
       const row = {
         id: `sr-${nextId++}`,
         status: "DRAFT",
         contractId: contract.id,
         partnerId: contract.partner.id,
+        supplierId: body.supplierId,
         qtyPlanned: body.qtyPlanned ?? null,
         deliveryFrom: body.deliveryFrom ?? null,
         deliveryUntil: body.deliveryUntil ?? null,
@@ -207,16 +244,22 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       if (body.contractId !== undefined && String(body.contractId) !== String(row.contractId)) {
         const contract = purchaseContract(body.contractId);
         if (!contract) return invalid(request, response, { contractId: "Kontrak beli tidak ditemukan atau tidak terbuka." });
-        if (otherOpen(contract.id, row.id)) return openExists(request, response);
         Object.assign(changes, { contractId: contract.id, partnerId: contract.partner.id });
       }
+      if (body.supplierId !== undefined && body.supplierId !== row.supplierId) {
+        if (!isSupplier(body.supplierId)) return invalid(request, response, { supplierId: "Supplier harus partner supplier yang aktif." });
+        changes.supplierId = body.supplierId;
+      }
+      if ((changes.contractId || changes.supplierId) && otherOpen(changes.contractId ?? row.contractId, changes.supplierId ?? row.supplierId, row.id)) return openExists(request, response);
+      const qty = body.qtyPlanned !== undefined ? body.qtyPlanned : row.qtyPlanned;
+      if ((changes.contractId || (body.qtyPlanned != null && body.qtyPlanned !== row.qtyPlanned)) && overContract(request, response, contracts.find((item) => item.id === (changes.contractId ?? row.contractId)), qty, row.id)) return 0;
       for (const name of ["qtyPlanned", "deliveryFrom", "deliveryUntil"]) if (body[name] !== undefined) changes[name] = body[name];
       if (body.remark !== undefined) changes.remark = trimmed(body.remark);
       const from = changes.deliveryFrom !== undefined ? changes.deliveryFrom : row.deliveryFrom;
       const until = changes.deliveryUntil !== undefined ? changes.deliveryUntil : row.deliveryUntil;
       if (from && until && until < from) return invalid(request, response, { deliveryUntil: "Tanggal akhir kirim tidak boleh sebelum tanggal mulai." });
       if (Object.keys(changes).length > 0) Object.assign(row, changes, { updatedAt: nowIso() });
-      return send(request, response, 200, { shipmentRequest: view(row) });
+      return send(request, response, 200, { shipmentRequest: viewFor(user)(row) });
     },
 
     "POST /api/shipment-requests/:id/send": (request, response, url, id) => {
@@ -229,7 +272,7 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
       if (row.files.length === 0) return fail(request, response, 409, "FILE_REQUIRED", "Lampirkan dokumen kontrak sebelum permintaan dikirim.");
       const at = nowIso();
       Object.assign(row, { status: "SENT", sentBy: user.id, sentAt: at, updatedAt: at });
-      notify({ id: row.id, contractNo: contractOf(row).contractNo, partnerId: row.partnerId });
+      notify({ id: row.id, contractNo: contractOf(row).contractNo, partnerId: row.supplierId });
       return send(request, response, 200, { shipmentRequest: view(row) });
     },
 
@@ -297,14 +340,24 @@ export function createShipmentRequestsMock({ guard, send, fail, invalid, readJso
     linked,
     /** A supplier reads the PDF of a request sent to its company (SENT or CLOSED). */
     partnerMayRead: (user, fileId) =>
-      requests.some((row) => row.partnerId === user.partner?.id && PARTNER_STATUSES.includes(row.status) && row.files.some((link) => link.fileId === fileId)),
+      requests.some((row) => row.supplierId === user.partner?.id && PARTNER_STATUSES.includes(row.status) && row.files.some((link) => link.fileId === fileId)),
     /** Whether the contract has a request sent to this supplier and not closed or cancelled. */
-    hasSentRequest: (contractId, partnerId) => requests.some((row) => row.contractId === contractId && row.partnerId === partnerId && row.status === "SENT"),
-    /** The open request of a contract as GET /api/contracts shows it: DRAFT or SENT for staff, SENT only for a partner. */
-    openRequestOf: (contractId, user) => {
-      const allowed = user.kind === "PARTNER" ? ["SENT"] : OPEN;
-      const row = requests.find((item) => item.contractId === contractId && allowed.includes(item.status));
-      return row ? { id: row.id, status: row.status, sentAt: row.sentAt } : null;
+    hasSentRequest: (contractId, supplierId) => requests.some((row) => row.contractId === contractId && row.supplierId === supplierId && row.status === "SENT"),
+    /** Whether a request on the contract was ever shown to this supplier (SENT or CLOSED). */
+    hasShownRequest: (contractId, supplierId) => requests.some((row) => row.contractId === contractId && row.supplierId === supplierId && PARTNER_STATUSES.includes(row.status)),
+    /** The request sent to a partner account's company, as GET /api/contracts shows it; null for staff. */
+    ownRequestOf: (contractId, user) => {
+      if (user.kind !== "PARTNER") return null;
+      const row = requests.find((item) => item.contractId === contractId && item.supplierId === user.partner?.id && item.status === "SENT");
+      return row ? { id: row.id, status: row.status, sentAt: row.sentAt, qtyPlanned: row.qtyPlanned } : null;
     },
+    /** The requests of a contract to every mill, for staff: open, sent, and what those not cancelled plan. */
+    summaryOf: (contractId) => ({
+      open: requests.filter((row) => row.contractId === contractId && OPEN.includes(row.status)).length,
+      sent: requests.filter((row) => row.contractId === contractId && row.status === "SENT").length,
+      qtyRequested: requestedOn(contractId),
+    }),
+    /** Whether any request on the contract was sent. */
+    anySent: (contractId) => requests.some((row) => row.contractId === contractId && row.status === "SENT"),
   };
 }

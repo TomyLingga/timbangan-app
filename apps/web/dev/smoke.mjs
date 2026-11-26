@@ -4,7 +4,8 @@
 //   NEXT_PUBLIC_API_URL=http://localhost:3110 NEXT_PUBLIC_SCANNER_URL=http://127.0.0.1:3290 npm run build
 //   node dev/smoke.mjs
 //
-// SMOKE_ONLY=gps, SMOKE_ONLY=pos or SMOKE_ONLY=pengiriman runs one part alone against a fresh mock. The pos part plays the scanner
+// SMOKE_ONLY=gps, SMOKE_ONLY=pos, SMOKE_ONLY=pengiriman, SMOKE_ONLY=pks or SMOKE_ONLY=ubah runs one part alone against a
+// fresh mock. The pos part plays the scanner
 // helper of the post PC on 127.0.0.1:3290 (SMOKE_SCANNER_PORT), with the protocol of the old application's helper.
 //
 // The script starts the mock API and `next start` on its own ports, so it does
@@ -104,6 +105,18 @@ async function run(browser) {
   // SMOKE_ONLY=pengiriman runs only the shipment requests, the DO to a customer and the Berita Acara print.
   if (process.env.SMOKE_ONLY === "pengiriman") {
     await shipmentAndCustomer(browser);
+    await millRequests(browser);
+    await changeAfterSend(browser);
+    return;
+  }
+  // SMOKE_ONLY=pks runs only the mills supplying a trader's contract (API migration 0018).
+  if (process.env.SMOKE_ONLY === "pks") {
+    await millRequests(browser);
+    return;
+  }
+  // SMOKE_ONLY=ubah runs only the change of a registration after it was sent.
+  if (process.env.SMOKE_ONLY === "ubah") {
+    await changeAfterSend(browser);
     return;
   }
   // 1. Server HTML of the sign-in page.
@@ -241,16 +254,17 @@ async function run(browser) {
   // 10. Admin: sync button, counts, list reload, Outgoing tab.
   await browser.click('a[href="/kontrak"]');
   const adminRows = await browser.waitFor(visibleRows);
-  check("admin sees all open incoming contracts", adminRows === 5, `${adminRows} rows`);
+  // five of the mills and the trader's contract 0130 that several mills supply (API migration 0018)
+  check("admin sees all open incoming contracts", adminRows === 6, `${adminRows} rows`);
   await browser.screenshot("03-kontrak-admin-light");
   await browser.click("Ambil dari Odoo");
   const summary = await browser.waitFor("[...document.querySelectorAll('p')].find((p) => p.innerText.startsWith('Selesai dalam'))?.innerText", 10000);
-  check("sync shows duration and counts", Boolean(summary) && summary.includes("13 kontrak") && summary.includes("Dilewati: 1."), summary ?? "no summary");
-  check("list reloads after the sync", (await browser.waitFor(`${visibleRows} === 6 && ${visibleRows}`)) === 6);
+  check("sync shows duration and counts", Boolean(summary) && summary.includes("14 kontrak") && summary.includes("Dilewati: 1."), summary ?? "no summary");
+  check("list reloads after the sync", (await browser.waitFor(`${visibleRows} === 7 && ${visibleRows}`)) === 7);
   await browser.click("Outgoing (penjualan)");
   check("Outgoing tab shows sales contracts with the customer PO", Boolean(await browser.waitFor(`${visibleRows} === 4`)) && Boolean(await browser.hasText("PO PO-CONTOH-0012")));
   await browser.goto(`${WEB}/`);
-  check("Beranda shows the last sync per data set", Boolean(await browser.hasText("Berhasil")) && Boolean(await browser.hasText("13 baris")));
+  check("Beranda shows the last sync per data set", Boolean(await browser.hasText("Berhasil")) && Boolean(await browser.hasText("14 baris")));
   await browser.screenshot("04-beranda-admin-light");
 
   // 11. Dark theme and phone layout.
@@ -262,7 +276,7 @@ async function run(browser) {
   await browser.viewport(390, 844, true);
   await browser.goto(`${WEB}/kontrak`);
   const cards = await browser.waitFor("[...document.querySelectorAll('main ul > li')].filter((li) => li.offsetParent !== null).length");
-  check("phone width shows cards instead of the table", cards === 6 && (await browser.evaluate(visibleRows)) === 0, `${cards} cards`);
+  check("phone width shows cards instead of the table", cards === 7 && (await browser.evaluate(visibleRows)) === 0, `${cards} cards`);
   check("phone width has no horizontal scroll", await browser.evaluate("document.documentElement.scrollWidth <= window.innerWidth"));
   await browser.screenshot("06-kontrak-phone-dark");
   await browser.click('button[aria-label="Buka menu"]');
@@ -685,6 +699,8 @@ async function run(browser) {
   await driverSharing(browser);
   await destinationPins(browser);
   await shipmentAndCustomer(browser);
+  await millRequests(browser);
+  await changeAfterSend(browser);
 }
 
 /**
@@ -2357,6 +2373,7 @@ async function shipmentAndCustomer(browser) {
   );
   await browser.click("Permintaan baru");
   await pickOption(browser, inSheet('input[name="contractLookup"]'), "0126/CONTOH");
+  await pickOption(browser, inSheet('input[name="supplierLookup"]'), "PKS Contoh B");
   await browser.fill(inSheet('input[name="qtyPlanned"]'), "50000");
   await browser.fill(inSheet('input[name="deliveryUntil"]'), isoDate(1));
   await browser.click(inSheet('button[type="submit"]'));
@@ -2531,6 +2548,217 @@ async function shipmentAndCustomer(browser) {
       String(plate?.reportNo ?? "").includes("BA-PLAT"),
   );
   await browser.goto(`${WEB}/`);
+  await signOut(browser);
+}
+
+/**
+ * Several mills on one trader's contract (owner, 26 November 2026; API migration 0018): the admin adds a mill together
+ * with its first account on the Pengguna page; staff ask 3.000 t, 2.000 t and 5.000 t of the trader's 10.000 t contract
+ * from three mills, and a fourth request is refused; the mill sees its own request and registers a truck with itself
+ * as asal PKS. Traders have no account, so no screen of a trader is checked.
+ */
+async function millRequests(browser) {
+  const TRADER_CONTRACT = "0130/CONTOH/CPO/XI/2026";
+
+  // 70. The admin makes a mill and its first account together.
+  await staffSignIn(browser, "super.contoh");
+  await browser.goto(`${WEB}/pengguna`);
+  await browser.click("Akun partner");
+  await browser.fill(inSheet('input[name="newPartnerName"]'), "PKS Contoh Lestari");
+  await browser.fill(inSheet('input[name="accountFullName"]'), "Admin PKS Lestari");
+  await browser.fill(inSheet('input[name="accountUsername"]'), "pks.lestari");
+  await browser.fill(inSheet('input[name="accountPassword"]'), "contoh-123");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "the admin makes a new mill and its first account in one go",
+    Boolean(await browser.hasText("PKS Contoh Lestari dan akun pks.lestari dibuat.")) && Boolean(await browser.waitFor(`${rowText("pks.lestari")}.includes('PKS Contoh Lestari')`)),
+  );
+  await browser.click("Akun partner");
+  await browser.fill(inSheet('input[name="newPartnerName"]'), " pks contoh lestari ");
+  await browser.fill(inSheet('input[name="accountFullName"]'), "Admin Kedua Lestari");
+  await browser.fill(inSheet('input[name="accountUsername"]'), "pks.lestari2");
+  await browser.fill(inSheet('input[name="accountPassword"]'), "contoh-123");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "a mill name already there is not made twice: the form picks that mill instead",
+    Boolean(await browser.waitFor(`(document.querySelector('[role="dialog"]')?.innerText ?? '').includes('PKS dengan nama ini sudah ada.')`)) &&
+      Boolean(await browser.waitFor(`Boolean(document.querySelector('[role="dialog"] input[name="accountPartnerLookup"]'))`)),
+  );
+  await browser.click(inSheet('button[type="submit"]'));
+  check("saving again makes only the second account of that mill", Boolean(await browser.hasText("Akun pks.lestari2 untuk PKS Contoh Lestari dibuat.")));
+  await browser.screenshot("70-akun-pks-baru-light");
+  const admin = await apiSession("super.contoh");
+  for (const [name, username] of [["PKS Contoh Melati", "pks.melati"], ["PKS Contoh Kenanga", "pks.kenanga"]]) {
+    await apiCall(admin, "POST", "/api/admin/users", { username, fullName: `Admin ${name}`, password: "contoh-123", newPartner: { name } });
+  }
+  const millId = async (name) => (await apiGet(admin, `/api/partners?role=supplier&q=${encodeURIComponent(name)}`)).items?.[0]?.id;
+  const [trader] = (await apiGet(admin, `/api/contracts?direction=IN&q=${encodeURIComponent(TRADER_CONTRACT)}`)).items;
+  await apiCall(admin, "POST", "/api/shipment-requests", { contractId: trader.id, supplierId: await millId("Melati"), qtyPlanned: 2000000 });
+  await apiCall(admin, "POST", "/api/shipment-requests", { contractId: trader.id, supplierId: await millId("Kenanga"), qtyPlanned: 5000000 });
+
+  // 71. Staff ask the third mill for 3.000 t; the contract is then fully asked for, and a fourth request is refused.
+  await browser.goto(`${WEB}/permintaan-pengiriman`);
+  await browser.click("Permintaan baru");
+  await pickOption(browser, inSheet('input[name="contractLookup"]'), TRADER_CONTRACT);
+  check(
+    "the request form tells the contract quantity and what other mills are already asked for",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="contract-requested"]')} === 'Kontrak 10.000.000 Kg · sudah diminta 7.000.000 Kg · sisa 3.000.000 Kg'`)),
+    await browser.evaluate(textOf('[data-testid="contract-requested"]')),
+  );
+  await pickOption(browser, inSheet('input[name="supplierLookup"]'), "PKS Contoh Lestari");
+  await browser.fill(inSheet('input[name="qtyPlanned"]'), "3000000");
+  await browser.click(inSheet('button[type="submit"]'));
+  const lestariPath = await browser.waitFor("location.pathname.startsWith('/permintaan-pengiriman/sr-') && location.pathname");
+  check(
+    "the request names the mill and the trader apart",
+    Boolean(lestariPath) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="request-facts"]')}.includes('PKS pengirim PKS Contoh Lestari') && ${textOf('[data-testid="request-facts"]')}.includes('Partner kontrak Pedagang Contoh A')`)),
+    await browser.evaluate(textOf('[data-testid="request-facts"]')),
+  );
+  check(
+    "the request page lists every request of the contract, one per mill",
+    Boolean(
+      await browser.waitFor(`(() => {
+        const text = ${textOf('[data-testid="contract-requests"]')};
+        return text.includes('Permintaan untuk kontrak ini (3)') && text.includes('PKS Contoh Melati') && text.includes('PKS Contoh Kenanga') && text.includes('3.000.000 Kg');
+      })()`),
+    ),
+  );
+  await browser.goto(`${WEB}/permintaan-pengiriman`);
+  await browser.click("Permintaan baru");
+  await pickOption(browser, inSheet('input[name="contractLookup"]'), TRADER_CONTRACT);
+  await pickOption(browser, inSheet('input[name="supplierLookup"]'), "PKS Contoh B");
+  await browser.fill(inSheet('input[name="qtyPlanned"]'), "1");
+  await browser.click(inSheet('button[type="submit"]'));
+  check(
+    "a fourth request above the contract is refused with the numbers",
+    Boolean(
+      await browser.waitFor(
+        `(document.querySelector('[role="dialog"]')?.innerText ?? '').includes('Permintaan 1 Kg melebihi sisa kontrak ${TRADER_CONTRACT}: quantity kontrak 10000000 Kg, sudah diminta 10000000 Kg, sisa 0 Kg.')`,
+      ),
+    ),
+  );
+  await browser.screenshot("71-permintaan-lebih-dari-kontrak-light");
+  await browser.pressEscape();
+  await browser.goto(`${WEB}${lestariPath}`);
+  await chooseFile(browser, '[data-testid="request-files"]', { name: "kontrak-pedagang-uji.pdf", type: "application/pdf", text: PDF_TEXT });
+  await browser.waitFor(`${textOf('[data-testid="request-files"]')}.includes('kontrak-pedagang-uji.pdf')`);
+  await browser.click("Kirim ke supplier");
+  await browser.click(inSheet('button[type="submit"]'));
+  check("the request goes to the mill, not to the trader", Boolean(await browser.hasText(`Permintaan ${TRADER_CONTRACT} dikirim ke PKS Contoh Lestari.`)));
+  await signOut(browser);
+
+  // 72. The mill sees its own request only and registers a truck with itself as asal PKS.
+  await partnerSignIn(browser, "pks.lestari");
+  await browser.click('a[href="/permintaan-pengiriman"]');
+  check(
+    "the mill lists only the request sent to it",
+    Boolean(await browser.waitFor(`location.pathname === '/permintaan-pengiriman' && ${visibleRows} === 1 && ${rowText(TRADER_CONTRACT)}.includes('3.000.000')`)),
+  );
+  const mill = await partnerApiSession("pks.lestari");
+  const offered = await apiGet(mill, "/api/contracts?direction=IN&requestSent=true");
+  check(
+    "the API offers the mill the trader's contract with its own request and quantity",
+    offered.items?.length === 1 && offered.items[0].contractNo === TRADER_CONTRACT && offered.items[0].shipmentRequest?.qtyPlanned === 3000000 && offered.items[0].requests === null,
+  );
+  await browser.goto(`${WEB}${lestariPath}`);
+  await browser.click("Daftarkan truk");
+  check(
+    "the incoming form shows the mill as asal PKS, taken from the account",
+    Boolean(await browser.waitFor(`${textOf('[data-testid="origin-own"]')}.includes('PKS Contoh Lestari')`)),
+  );
+  await fillTruck(browser, { scope: "main", prefix: "truck", plate: "ZZ 0031 PKS", licence: "CONTOH0310", newVehicle: { type: "TANGKI" }, newDriver: { fullName: "Supir PKS Lestari" } });
+  await browser.click("Kirim registrasi");
+  check(
+    "the registration keeps the trader as partner and the mill as asal PKS",
+    Boolean(await browser.waitFor("location.pathname.startsWith('/registrasi/r-')")) &&
+      Boolean(await browser.waitFor(`${pageText}.includes('Asal PKS PKS Contoh Lestari') && ${pageText}.includes('Partner Pedagang Contoh A')`)),
+  );
+  await browser.screenshot("72-registrasi-asal-pks-light");
+  const others = await apiGet(await partnerApiSession("pks.melati"), "/api/registrations?direction=IN");
+  check("another mill does not see that truck", others.total === 0);
+  await signOut(browser);
+}
+
+/**
+ * A registration changed after it was sent (owner, 26 November 2026): the transporter's truck that checked in is
+ * locked and says why, the other one changes its vehicle and gets a new SPJ to print, and the old barcode stops at
+ * the post. Staff with registrations EDIT get the same button; staff with CREATE do not.
+ */
+async function changeAfterSend(browser) {
+  const admin = await apiSession("admin.contoh");
+  const transporter = await partnerApiSession("transporter.contoh");
+  const ofTransporter = (item) => item.transporter?.name === "Transporter Contoh A";
+  let order = (await apiGet(transporter, "/api/delivery-orders?status=ACCEPTED&limit=50")).items.find((item) => ofTransporter(item) && item.qtyRemaining >= 20000);
+  if (!order) {
+    // a fresh mock: the DO sent to the transporter is accepted first
+    order = (await apiGet(transporter, "/api/delivery-orders?status=SENT&limit=50")).items.find((item) => ofTransporter(item) && item.qtyRemaining >= 20000);
+    await apiCall(transporter, "POST", `/api/delivery-orders/${order?.id}/accept`, { truckCount: 2 });
+  }
+  const newTruck = (plate, licence, name) => ({
+    vehicle: { plateDisplay: plate, vehicleTypeCode: "TANGKI" },
+    driver: { licenceNo: licence, fullName: name, licenceClass: "B2 UMUM", licenceValidUntil: isoDate(2) },
+  });
+  const made = await apiCall(transporter, "POST", "/api/registrations", {
+    direction: "OUT",
+    submit: true,
+    allocations: [{ deliveryOrderId: order?.id, qtyPlanned: 20000 }],
+    trips: [newTruck("ZZ 0041 UBH", "CONTOH0411", "Supir Ubah Satu"), newTruck("ZZ 0042 UBH", "CONTOH0412", "Supir Ubah Dua")],
+  });
+  const id = made.registration.id;
+  if (made.registration.status === "SUBMITTED") await apiCall(admin, "POST", `/api/registrations/${id}/approve`, {});
+  const approved = (await apiGet(transporter, `/api/registrations/${id}`)).registration;
+  const [first, second] = approved.trips;
+  const card = (await apiGet(admin, "/api/rfid-cards?status=AVAILABLE&limit=1")).items[0];
+  await apiCall(admin, "POST", "/api/gate/check-in", { token: first.spj.barcodeToken, cardUid: card.uid, closeCargo: false, flexiBag: false });
+  const oldToken = second.spj.barcodeToken;
+
+  // 73. The transporter sees which truck is locked and why, and changes the other one.
+  await partnerSignIn(browser, "transporter.contoh");
+  await browser.goto(`${WEB}/registrasi/${encodeURIComponent(id)}`);
+  check(
+    "a sent registration offers Ubah and says which truck is locked and why",
+    Boolean(await browser.waitFor(`Boolean(document.querySelector('[data-testid="change-sent"]'))`)) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="trip-1-locked"]')} === 'Tidak bisa diubah: truk sudah check-in di pos.'`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="trip-2-locked"]'))`)),
+  );
+  await browser.click('[data-testid="change-sent"]');
+  check(
+    "the form leaves the truck that checked in out and says so",
+    Boolean(await browser.waitFor(`location.pathname.endsWith('/ubah') && document.querySelectorAll('[data-truck]').length === 1`)) &&
+      Boolean(await browser.waitFor(`${textOf('[data-testid="sent-edit-notice"]')}.includes('Truk 1 (ZZ 0041 UBH) sudah check-in di pos')`)) &&
+      !(await browser.evaluate(`Boolean(document.querySelector('button[aria-label^="Hapus DO"]'))`)) &&
+      !(await browser.evaluate(`[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Simpan draf')`)),
+  );
+  await fillTruck(browser, { scope: '[data-truck="1"]', prefix: "trucks.0", plate: "ZZ 0043 UBH", licence: "CONTOH0412", newVehicle: { type: "TANGKI" } });
+  await browser.click("Simpan perubahan");
+  check(
+    "after a vehicle change the page tells to print the new SPJ of that truck",
+    Boolean(await browser.waitFor(`location.pathname === ${JSON.stringify(`/registrasi/${id}`)}`)) &&
+      Boolean(await browser.hasText("Truk 2 punya SPJ baru. Cetak SPJ-nya untuk supir; SPJ lama tidak berlaku lagi di pos.")),
+  );
+  await browser.screenshot("73-ubah-setelah-kirim-light");
+  const changed = (await apiGet(transporter, `/api/registrations/${id}`)).registration;
+  const oldAtGate = await fetch(`${API}/api/gate/check-in`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${admin}`, "content-type": "application/json" },
+    body: JSON.stringify({ token: oldToken, cardUid: card.uid, closeCargo: false, flexiBag: false }),
+  });
+  check(
+    "the old barcode is refused at the post and the truck carries the new plate",
+    oldAtGate.status === 409 && (await oldAtGate.json()).error?.code === "SPJ_REVOKED" && changed.trips[1]?.vehicle?.plateDisplay === "ZZ 0043 UBH" && changed.trips[1].spj?.barcodeToken !== oldToken,
+  );
+  await signOut(browser);
+
+  // 74. Staff with registrations EDIT may change it too; the desk with CREATE may not.
+  await staffSignIn(browser, "admin.contoh");
+  await browser.goto(`${WEB}/registrasi/${encodeURIComponent(id)}`);
+  const staffSees = Boolean(await browser.waitFor(`Boolean(document.querySelector('[data-testid="change-sent"]'))`));
+  await signOut(browser);
+  await staffSignIn(browser, "pos.contoh");
+  await browser.goto(`${WEB}/registrasi/${encodeURIComponent(id)}`);
+  await browser.waitFor(`document.body.innerText.includes(${JSON.stringify(approved.regNo)})`);
+  check("staff with EDIT get Ubah on a sent registration, the desk with CREATE does not", staffSees && !(await browser.evaluate(`Boolean(document.querySelector('[data-testid="change-sent"]'))`)));
   await signOut(browser);
 }
 

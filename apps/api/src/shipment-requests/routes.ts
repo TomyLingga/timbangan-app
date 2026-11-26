@@ -23,15 +23,16 @@ import { listShipmentRequests, requestedOnContract, shipmentRequestsVisibleTo } 
 const QTY_MESSAGE = "Quantity harus angka lebih dari 0.";
 const fields = {
   contractId: idNumber,
-  // the mill the request goes to; the partner of the contract when absent (a contract supplied by its own partner)
-  supplierId: idNumber.optional(),
+  // the mill (PKS) the request goes to; only mills get supplier accounts (owner, 26 November 2026), so it is
+  // always named, never taken from the contract's partner
+  supplierId: idNumber,
   qtyPlanned: z.number(QTY_MESSAGE).positive(QTY_MESSAGE).max(1_000_000_000_000, QTY_MESSAGE).nullable().optional(),
   deliveryFrom: dateText("Tanggal mulai kirim").nullable().optional(),
   deliveryUntil: dateText("Tanggal akhir kirim").nullable().optional(),
   remark: z.string("Keterangan harus berupa teks.").trim().max(1000, "Keterangan terlalu panjang.").nullable().optional(),
 };
 const createBody = z.object(fields);
-const patchBody = z.object({ ...fields, contractId: fields.contractId.optional() });
+const patchBody = z.object({ ...fields, contractId: fields.contractId.optional(), supplierId: fields.supplierId.optional() });
 type Changes = Partial<typeof shipmentRequests.$inferInsert>;
 /** What may still change once the request has been sent. */
 const LATE_FIELDS = new Set(["qtyPlanned", "deliveryUntil", "remark"]);
@@ -160,7 +161,7 @@ export function registerShipmentRequestRoutes(app: FastifyInstance, context: App
     const shipmentRequest = await orm
       .transaction(async (tx) => {
         const contract = await purchaseContract(tx, body.contractId);
-        const supplierId = await supplierOf(tx, body.supplierId ?? contract.partnerId);
+        const supplierId = await supplierOf(tx, body.supplierId);
         await assertNoOtherOpen(tx, contract.id, supplierId, null);
         await assertWithinContract(tx, contract, body.qtyPlanned, null);
         const siteId = contract.siteId ?? (await defaultSite(tx)).id;

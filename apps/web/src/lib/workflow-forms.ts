@@ -59,6 +59,8 @@ export function currentLookup<T>(lookup: Lookup<T>, key: string): Lookup<T> {
 export interface TruckValues {
   /** Local key for React lists; never sent. */
   key: string;
+  /** The truck already in a sent registration that this one changes; absent for a new truck. */
+  tripId?: string | number;
   plate: string;
   vehicle: Lookup<LookupVehicle>;
   vehicleTypeCode: string;
@@ -226,6 +228,7 @@ export function truckPayload(truck: TruckValues): Record<string, unknown> {
 
   body.driver = driver.state === "found" ? { id: driver.item.id } : driverPayload(newDriverValues(truck));
 
+  if (truck.tripId !== undefined) body.id = truck.tripId;
   const containerNo = text(truck.containerNo).toUpperCase();
   if (containerNo) body.containerNo = containerNo;
   const handoverNo = text(truck.handoverNo);
@@ -310,6 +313,11 @@ export function letterPayload(letter: LetterValues, allocationSeq: number): Reco
 export interface IncomingValues {
   contracts: Contract[];
   transporter: PartnerRef | null;
+  /**
+   * Asal PKS: the mill the truck comes from (API migration 0018). Staff may name it; a mill's account never sends it,
+   * the API takes the account's own company. Absent: the API keeps what a draft had.
+   */
+  origin?: PartnerRef | null;
   plannedDate: string;
   truck: TruckValues;
   /** One per contract, in the same order. */
@@ -334,6 +342,7 @@ export function validateIncoming(values: IncomingValues, context: FormContext): 
 export interface RegistrationBody {
   direction: "IN" | "OUT";
   transporterId?: string | number;
+  originPartnerId?: string | number | null;
   plannedDate?: string;
   remark?: string;
   closeCargo?: boolean;
@@ -352,6 +361,7 @@ function commonFields(body: RegistrationBody, values: { plannedDate: string; rem
 export function incomingPayload(values: IncomingValues, submit: boolean): RegistrationBody {
   const body: RegistrationBody = { direction: "IN", submit, allocations: [], trips: [] };
   if (values.transporter) body.transporterId = values.transporter.id;
+  if (values.origin !== undefined) body.originPartnerId = values.origin?.id ?? null;
   commonFields(body, values);
   body.allocations = values.contracts.map((contract) => ({ contractId: contract.id }));
   body.trips = [
@@ -454,6 +464,7 @@ function formPath(direction: Direction, path: string): string | null {
   if (TOP_FIELDS.has(path)) return path;
   if (path === "allocations") return direction === "IN" ? "contracts" : "orders";
   if (path === "transporterId") return direction === "IN" ? "transporter" : null;
+  if (path === "originPartnerId") return direction === "IN" ? "origin" : null;
   const allocation = /^allocations\.(\d+)\.qtyPlanned$/.exec(path);
   if (allocation) return direction === "OUT" ? `orders.${allocation[1]}.qty` : null;
   const letter = /^trips\.0\.letters\.(\d+)\.(.+)$/.exec(path);
@@ -492,6 +503,8 @@ const asText = (value: number | string | null | undefined): string => (value ===
 export function truckFromTrip(trip: Trip, key: string): TruckValues {
   return {
     ...emptyTruck(key),
+    // a draft is written again as a whole; a truck of a sent registration is changed in place
+    ...(trip.edit ? { tripId: trip.id } : {}),
     plate: trip.vehicle?.plateDisplay ?? "",
     licenceNo: trip.driver?.licenceNo ?? "",
     containerNo: trip.containerNo ?? "",
@@ -522,6 +535,7 @@ export function incomingFromDraft(registration: Registration, parameters: readon
       syncedAt: null,
     })),
     transporter: registration.transporter,
+    origin: registration.originPartner ?? null,
     plannedDate: registration.plannedDate ?? "",
     truck: trip ? truckFromTrip(trip, "truck") : emptyTruck("truck"),
     letters: allocations.map((allocation) => {
@@ -544,13 +558,24 @@ export function incomingFromDraft(registration: Registration, parameters: readon
 }
 
 /** `orders` are the delivery orders the draft names, as GET /api/delivery-orders/:id answers them. */
+/** The trucks of a registration its form may still change: all of a draft, the open ones of a sent registration. */
+export function changeableTrips(registration: Registration): Trip[] {
+  return registration.trips.filter((trip) => trip.edit?.allowed ?? true);
+}
+
 export function outgoingFromDraft(registration: Registration, orders: readonly DeliveryOrder[]): OutgoingValues {
+  const open = changeableTrips(registration);
+  const sent = registration.status.toUpperCase() !== "DRAFT";
   return {
     orders: registration.allocations.flatMap((allocation) => {
       const order = orders.find((item) => String(item.id) === String(allocation.deliveryOrder?.id));
-      return order ? [{ order, qty: asText(allocation.qtyPlanned) }] : [];
+      // a sent registration: the quantity its open trucks carry; the trucks that checked in keep theirs
+      const qty = sent
+        ? open.reduce((sum, trip) => sum + (Number(trip.allocations.find((share) => share.seq === allocation.seq)?.qtyPlanned) || 0), 0)
+        : allocation.qtyPlanned;
+      return order ? [{ order, qty: asText(qty) }] : [];
     }),
-    trucks: registration.trips.map((trip) => truckFromTrip(trip, `draft-${trip.seq}`)),
+    trucks: open.map((trip) => truckFromTrip(trip, `draft-${trip.seq}`)),
     plannedDate: registration.plannedDate ?? "",
     remark: registration.remark ?? "",
   };

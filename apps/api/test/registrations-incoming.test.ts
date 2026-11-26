@@ -136,7 +136,8 @@ describe("incoming registration", () => {
     expect(submitted.statusCode).toBe(200);
     expect(submitted.json().registration).toMatchObject({ status: "APPROVED", trips: [{ status: "ISSUED", spj: { spjNo: expect.any(String) } }] });
     expect((await call("POST", `/api/registrations/${draft.id}/submit`, "pks1")).json().error.code).toBe("INVALID_STATE");
-    expect((await call("PUT", `/api/registrations/${draft.id}`, "pks1", incoming([contracts.c1]))).json().error.code).toBe("INVALID_STATE");
+    // a sent registration may still change while its truck has not checked in (test/registration-edit.test.ts)
+    expect((await call("PUT", `/api/registrations/${draft.id}`, "pks1", incoming([contracts.c1]))).statusCode).toBe(200);
   });
 
   it("creates a vehicle and a driver in place; the driver is queued for the registry and sent at once", async () => {

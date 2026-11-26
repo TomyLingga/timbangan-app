@@ -23,11 +23,14 @@ export function SubmitBar({
   error,
   onDraft,
   onSubmit,
+  sent = false,
 }: {
   pending: "draft" | "submit" | null;
   error: string | null;
   onDraft: () => void;
   onSubmit: () => void;
+  /** A registration already sent: one button that saves the change, no draft. */
+  sent?: boolean;
 }) {
   return (
     <div className="sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur lg:-mx-6 lg:px-6">
@@ -39,13 +42,15 @@ export function SubmitBar({
         ) : null}
       </div>
       <div className="flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="outline" size="lg" onClick={onDraft} disabled={pending !== null}>
-          {pending === "draft" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
-          Simpan draf
-        </Button>
+        {sent ? null : (
+          <Button type="button" variant="outline" size="lg" onClick={onDraft} disabled={pending !== null}>
+            {pending === "draft" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
+            Simpan draf
+          </Button>
+        )}
         <Button type="button" size="lg" onClick={onSubmit} disabled={pending !== null}>
           {pending === "submit" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Send aria-hidden="true" />}
-          Kirim registrasi
+          {sent ? "Simpan perubahan" : "Kirim registrasi"}
         </Button>
       </div>
     </div>

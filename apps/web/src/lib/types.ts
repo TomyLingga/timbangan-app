@@ -91,10 +91,12 @@ export interface Contract {
   state: string;
   syncedAt: string | null;
   /**
-   * The open shipment request of the contract (API migration 0017): DRAFT or SENT for staff, SENT only for a
-   * partner account; null without one. Absent from an older API.
+   * A partner account: the shipment request sent to its company (API migration 0018), with its quantity; null
+   * without one. Staff: always null, they get `requests`. Absent from an older API.
    */
-  shipmentRequest?: { id: string | number; status: string; sentAt: string | null } | null;
+  shipmentRequest?: { id: string | number; status: string; sentAt: string | null; qtyPlanned?: number | null } | null;
+  /** Staff: the requests of the contract to every mill (open, sent) and what those not cancelled plan together. */
+  requests?: { open: number; sent: number; qtyRequested: number } | null;
 }
 
 /** A person named on a record: who made, sent, closed or cancelled it. */
@@ -116,9 +118,14 @@ export interface ShipmentRequest {
     tolerancePct: number | null;
     validFrom: string | null;
     validUntil: string | null;
+    /** Staff: what the requests of the contract that are not cancelled plan together; null for a supplier account. */
+    qtyRequested?: number | null;
   };
   product: { id: string | number; name: string; category: string | null };
+  /** The partner of the contract (a trader, or the mill itself). */
   partner: PartnerRef;
+  /** The mill (PKS) the request is sent to (API migration 0018). */
+  supplier: PartnerRef;
   qtyPlanned: number | null;
   uom: string | null;
   deliveryFrom: string | null;
@@ -315,9 +322,12 @@ export interface Partner {
   id: string | number;
   name: string;
   code: string | null;
+  address?: string | null;
   isSupplier: boolean;
   isCustomer: boolean;
   isTransporter: boolean;
+  /** Null for a partner kept only in this application (a mill that sells through a trader). */
+  erpSystem?: string | null;
 }
 
 export interface Destination {
@@ -458,6 +468,8 @@ export interface Trip {
   extraSpbe?: string | null;
   passportNo?: string | null;
   allocations: TripAllocation[];
+  /** In a registration's detail: whether the truck may still change, and why not (API, 26 November 2026). */
+  edit?: { allowed: boolean; reason: string | null };
   spj: Spj | null;
   card: { uid: string; label: string | null } | null;
   checkedInAt: string | null;
@@ -485,6 +497,8 @@ export interface Registration {
   flowCode: string;
   status: string;
   partner: PartnerRef;
+  /** Asal PKS: the mill the truck comes from (API migration 0018); null when not known. */
+  originPartner?: PartnerRef | null;
   transporter: PartnerRef | null;
   plannedDate: string | null;
   truckCount: number;
@@ -502,6 +516,16 @@ export interface Registration {
   findings: Finding[];
   allocations: RegistrationAllocation[];
   trips: Trip[];
+  /** In the detail: whether the registration may still change, and whether its contracts or DOs are fixed. */
+  edit?: { allowed: boolean; allocationsLocked: boolean; reason: string | null };
+}
+
+/** What happened to the SPJ of a truck when a sent registration changed (PUT /api/registrations/:id). */
+export interface SpjChange {
+  tripId: string | number;
+  seq: number;
+  plateNo: string | null;
+  change: "REISSUED" | "ISSUED" | "WITHDRAWN" | "CANCELLED";
 }
 
 /** A list row: the registration without its trips. */

@@ -20,7 +20,8 @@ import { cargoMarkText } from "@/lib/cargo-marks";
 import { formatDate, formatDateTime, formatNumber, formatQuantity } from "@/lib/format";
 import { gateErrorMessage, transitionErrorMessage } from "@/lib/messages";
 import { positionLink } from "@/lib/gps";
-import { canCancelRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canTrackVehicles, canView, isStaff } from "@/lib/permissions";
+import { canCancelRegistration, canChangeRegistration, canEditDraft, canReissueSpj, canReviewRegistrations, canTrackVehicles, canView, isStaff } from "@/lib/permissions";
+import { changeNotice } from "@/lib/registration-changes";
 import { api } from "@/lib/session";
 import { registrationStatusInfo, registryStatusInfo, tripStatusInfo } from "@/lib/status";
 import type { Registration, Trip, User } from "@/lib/types";
@@ -102,6 +103,11 @@ function TripCard({
             Truk {trip.seq} · <span className="whitespace-nowrap">{trip.vehicle?.plateDisplay ?? "-"}</span>
           </h3>
           {trip.tripNo ? <p className="text-xs text-muted-foreground">Nomor trip {trip.tripNo}</p> : null}
+          {trip.edit && !trip.edit.allowed && ["SUBMITTED", "APPROVED"].includes(registration.status.toUpperCase()) ? (
+            <p className="text-xs text-muted-foreground" data-testid={`trip-${trip.seq}-locked`}>
+              Tidak bisa diubah: {trip.edit.reason?.toLowerCase() ?? "truk ini terkunci."}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {canTrackVehicles(user) && positionLink(trip) ? (
@@ -262,7 +268,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [pending, setPending] = useState<PendingAction>(null);
   const [reissuing, setReissuing] = useState<Trip | null>(null);
-  const [notice, setNotice] = useState<string | null>(CREATED_NOTICES[searchParams.get("baru") ?? ""] ?? null);
+  const [notice, setNotice] = useState<string | null>(changeNotice(searchParams) ?? CREATED_NOTICES[searchParams.get("baru") ?? ""] ?? null);
 
   const query = useApiQuery(`${id}|${reloadToken}`, (signal) =>
     api.request<{ registration: Registration }>(`/api/registrations/${encodeURIComponent(id)}`, { signal }),
@@ -275,6 +281,8 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
   const reviewer = canReviewRegistrations(user);
   const anyCheckedIn = registration.trips.some((trip) => trip.checkedInAt || trip.status.toUpperCase() === "CHECKED_IN");
   const mayChangeDraft = canEditDraft(user, registration);
+  // a sent registration: its sender, or staff with registrations EDIT, before its trucks check in
+  const mayChangeSent = status !== "DRAFT" && canChangeRegistration(user, registration);
   const mayCancel = canCancelRegistration(user, registration) && ["DRAFT", "SUBMITTED", "APPROVED"].includes(status) && !anyCheckedIn;
 
   async function act(action: string, body: unknown, message: string): Promise<string | null> {
@@ -358,6 +366,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4">
           <Fact label="Arah">{DIRECTION_LABELS[registration.direction] ?? registration.direction}</Fact>
           <Fact label="Partner">{registration.partner?.name ?? "-"}</Fact>
+          {registration.direction === "IN" ? <Fact label="Asal PKS">{registration.originPartner?.name ?? "-"}</Fact> : null}
           <Fact label="Transporter">{registration.transporter?.name ?? "-"}</Fact>
           <Fact label="Tanggal datang">{formatDate(registration.plannedDate)}</Fact>
           <Fact label="Jumlah truk">{formatNumber(registration.truckCount ?? registration.trips.length)}</Fact>
@@ -406,7 +415,7 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
         </ul>
       </section>
 
-      {status === "DRAFT" || mayCancel ? (
+      {status === "DRAFT" || mayCancel || mayChangeSent ? (
         <div className="flex flex-wrap gap-2 border-t pt-4">
           {mayChangeDraft ? (
             <>
@@ -421,6 +430,14 @@ function RegistrationView({ user, id }: { user: User; id: string }) {
                 </Link>
               </Button>
             </>
+          ) : null}
+          {mayChangeSent ? (
+            <Button asChild variant="outline">
+              <Link href={`/registrasi/${encodeURIComponent(id)}/ubah`} data-testid="change-sent">
+                <Pencil aria-hidden="true" />
+                Ubah
+              </Link>
+            </Button>
           ) : null}
           {mayCancel ? (
             <Button variant="outline" onClick={() => setPending("cancel")}>

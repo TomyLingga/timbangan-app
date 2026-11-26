@@ -16,6 +16,7 @@ import {
   spjDocuments,
   tripAllocations,
   tripFiles,
+  type TripStatus,
   trips,
   vehicles,
   vehicleTypes,
@@ -25,7 +26,7 @@ import { AppError, invalid, invalidState, refused } from "../errors.js";
 import { dateText, idNumber, lettersAndDigits } from "../http.js";
 import { nextDocumentNo } from "../numbering.js";
 import { defaultSite, readSetting, siteById } from "../settings.js";
-import { issueSpj } from "../trips/spj.js";
+import { issueSpj, revokeSpj } from "../trips/spj.js";
 import { ARRIVED_STATUSES } from "../trips/view.js";
 import { SLIP_LABEL } from "../attachments/view.js";
 import { hasSentRequest, hasShownRequest } from "../shipment-requests/view.js";
@@ -73,6 +74,8 @@ const letterBody = z.object({
   quality: z.record(z.string(), z.number("Nilai spek harus angka.")).optional(),
 });
 const tripBody = z.object({
+  // a truck already in the registration, when a sent registration is changed (amendRegistration); ignored otherwise
+  id: idNumber.optional(),
   vehicle: vehicleBody,
   driver: driverBody,
   containerNo: text("Nomor kontainer", 30),
@@ -173,20 +176,44 @@ export function splitQuantity(total: number, trucks: number): number[] | null {
   return Array.from({ length: trucks }, (_, index) => (index === trucks - 1 ? milli - each * (trucks - 1) : each) / 1000);
 }
 
+/** What the trucks of a sent registration that may no longer change keep: per allocation, and their vehicles and drivers. */
+interface Kept {
+  held: number[];
+  vehicleIds: number[];
+  driverIds: number[];
+}
+
+type FlowCode = "IN_CPO" | "IN_GOODS" | "OUT_BULK" | "OUT_PACKED";
+
+/** A registration body checked and resolved, before anything of it is written. */
+interface Prepared {
+  resolved: Resolved[];
+  first: Resolved;
+  site: Awaited<ReturnType<typeof siteById>>;
+  flowCode: FlowCode;
+  transporterId: number | null;
+  originPartnerId: number | null;
+  picked: { vehicleId: number | null; driverId: number | null }[];
+  shares: (number | null)[][];
+  requested: (number | null)[];
+  newDrivers: number[];
+}
+
 /**
- * Writes the content of a registration as a draft: new when `existing` is absent, else in place of the
- * draft's allocations and trips. Vehicles and drivers entered in place are created. Throws 400, 403-like
- * refusals (409) and leaves the transaction to roll back. Answers the registration id and the new drivers.
- * `createdVia` marks a new registration made another way than the form: "SCAN" for a walk-in from a scanned letter.
+ * Checks a registration body and resolves it: its contracts or DOs, flow and site, transporter, asal PKS, vehicles and
+ * drivers (created in place when needed) and the quantity of each truck. Shared by a new registration, a draft written
+ * again and a sent registration changed, so all three pass the same rules. `registrationId` is the registration being
+ * written (its own quantities do not count against a DO); `kept` what its locked trucks keep.
  */
-export async function writeRegistration(
+async function prepareRegistration(
   tx: Orm,
   account: Account,
   body: RegistrationInput,
   now: Date,
-  existing?: { id: number; regNo: string; createdBy: number; originPartnerId?: number | null },
-  createdVia?: "SCAN",
-): Promise<{ id: number; newDrivers: number[] }> {
+  registrationId: number | null,
+  keptOrigin: number | null | undefined,
+  kept?: Kept,
+): Promise<Prepared> {
   const fields: Field[] = [];
   const keys = body.allocations.map((allocation) => (body.direction === "IN" ? allocation.contractId : allocation.deliveryOrderId));
   if (body.direction === "IN") {
@@ -199,20 +226,6 @@ export async function writeRegistration(
   }
   if (!fields.length && new Set(keys).size !== keys.length) fields.push({ field: "allocations", message: "Kontrak atau DO yang sama dipilih dua kali." });
   if (fields.length) throw fail(fields);
-
-  // drafts being replaced give back what they held before anything is computed again; the weighbridge slips of a
-  // truck are kept by its place in the list and linked again to the new row
-  const keptSlips = existing
-    ? await tx
-        .select({ seq: trips.seq, fileId: tripFiles.fileId, label: tripFiles.label, addedBy: tripFiles.addedBy, addedAt: tripFiles.addedAt })
-        .from(tripFiles)
-        .innerJoin(trips, eq(trips.id, tripFiles.tripId))
-        .where(and(eq(trips.registrationId, existing.id), eq(tripFiles.label, SLIP_LABEL)))
-    : [];
-  if (existing) {
-    await tx.delete(trips).where(eq(trips.registrationId, existing.id));
-    await tx.delete(registrationAllocations).where(eq(registrationAllocations.registrationId, existing.id));
-  }
 
   const own = account.kind === "PARTNER" ? (account.partner?.id ?? -1) : null;
   const resolved: Resolved[] = [];
@@ -264,7 +277,7 @@ export async function writeRegistration(
   // asal PKS: the supplier account's own company; staff may name the mill, a draft keeps the one it had
   let originPartnerId: number | null = null;
   if (body.direction === "IN") {
-    const given = own ?? (body.originPartnerId !== undefined ? body.originPartnerId : (existing?.originPartnerId ?? null));
+    const given = own ?? (body.originPartnerId !== undefined ? body.originPartnerId : (keptOrigin ?? null));
     if (own === null && given !== null) {
       const [mill] = await tx.select({ isSupplier: partners.isSupplier }).from(partners).where(eq(partners.id, given));
       if (!mill?.isSupplier) throw invalid("originPartnerId", "Asal PKS harus partner supplier.");
@@ -394,7 +407,9 @@ export async function writeRegistration(
   const requested: (number | null)[] = resolved.map(() => null);
   if (body.direction === "OUT") {
     for (const [index, item] of resolved.entries()) {
-      const wanted = body.allocations[index]?.qtyPlanned ?? (item.qty === null ? 0 : await doRemaining(tx, item.id, item.qty, existing?.id ?? null));
+      // without a quantity: what the DO has left, less what the registration's locked trucks keep of it
+      const wanted =
+        body.allocations[index]?.qtyPlanned ?? (item.qty === null ? 0 : round3((await doRemaining(tx, item.id, item.qty, registrationId)) - (kept?.held[index] ?? 0)));
       const split = wanted > 0 ? splitQuantity(wanted, body.trips.length) : null;
       if (!split) {
         fields.push({ field: `allocations.${index}.qtyPlanned`, message: wanted > 0 ? `Quantity terlalu kecil untuk ${body.trips.length} truk.` : "Sisa DO sudah habis. Isi quantity." });
@@ -417,18 +432,126 @@ export async function writeRegistration(
   }
   if (fields.length) throw fail(fields);
 
-  const vehicleIds = picked.map((item) => item.vehicleId);
+  const vehicleIds = [...(kept?.vehicleIds ?? []), ...picked.map((item) => item.vehicleId)];
   if (new Set(vehicleIds).size !== vehicleIds.length) throw refused("DUPLICATE_VEHICLE", "Satu kendaraan dipakai dua kali dalam registrasi ini.");
-  const driverIds = picked.map((item) => item.driverId);
+  const driverIds = [...(kept?.driverIds ?? []), ...picked.map((item) => item.driverId)];
   if (new Set(driverIds).size !== driverIds.length) throw refused("DUPLICATE_DRIVER", "Satu supir dipakai dua kali dalam registrasi ini.");
+  return { resolved, first, site, flowCode: flowCode as FlowCode, transporterId, originPartnerId, picked, shares, requested, newDrivers };
+}
+
+/** Sums quantities when they share one unit; null when none is known or the units differ. */
+const summer = (resolved: Resolved[]) => {
+  const sameUnit = new Set(resolved.map((item) => item.uom.trim().toLowerCase())).size === 1;
+  return (values: (number | null)[]) => (values.some((value) => value !== null) && sameUnit ? round3(values.reduce<number>((total, value) => total + (value ?? 0), 0)) : null);
+};
+
+/** The columns of a truck taken from its part of the body. */
+function tripColumns(body: RegistrationInput, trip: RegistrationInput["trips"][number], picked: Prepared["picked"][number] | undefined, transporterId: number | null, qtyPlanned: number | null) {
+  const letters = trip.letters ?? [];
+  const nets = letters.map((letter) => letter.originNetKg).filter((value): value is number => value !== undefined);
+  const tares = letters.map((letter) => letter.originTareKg).filter((value): value is number => value !== undefined && value > 0);
+  const docNet = nets.length ? nets.reduce((total, value) => total + value, 0) : null;
+  const docTare = tares.length ? Math.min(...tares) : null;
+  return {
+    vehicleId: picked?.vehicleId ?? null,
+    driverId: picked?.driverId ?? null,
+    transporterId,
+    containerNo: trip.containerNo ?? null,
+    extraSpbe: body.direction === "OUT" ? trip.extraSpbe || null : null,
+    passportNo: body.direction === "OUT" ? trip.passportNo || null : null,
+    qtyPlanned,
+    plannedArrival: trip.plannedArrival ?? body.plannedDate ?? null,
+    docNetKg: docNet,
+    docTareKg: docTare,
+    docGrossKg: docNet !== null && docTare !== null ? docNet + docTare : null,
+    remark: trip.remark ?? null,
+  };
+}
+
+/** The share of a truck in each allocation, with the letter of the mill and its declared quality. */
+async function insertShares(tx: Orm, tripId: number, allocationIds: number[], trip: RegistrationInput["trips"][number], own: (number | null)[]): Promise<void> {
+  const letters = trip.letters ?? [];
+  for (const [allocationIndex, allocationId] of allocationIds.entries()) {
+    const letter = letters.find((item) => item.allocationSeq === allocationIndex + 1);
+    const [share] = await tx
+      .insert(tripAllocations)
+      .values({
+        tripId,
+        registrationAllocationId: allocationId,
+        seq: allocationIndex + 1,
+        qtyPlanned: own[allocationIndex] ?? null,
+        handoverNo: letter?.handoverNo ?? trip.handoverNo ?? null,
+        spbNo: letter?.spbNo ?? null,
+        spbDate: letter?.spbDate ?? null,
+        originTicketNo: letter?.originTicketNo ?? null,
+        originGrossKg: letter?.originGrossKg ?? null,
+        originTareKg: letter?.originTareKg ?? null,
+        originNetKg: letter?.originNetKg ?? null,
+      })
+      .returning({ id: tripAllocations.id });
+    if (!share) throw new Error("The trip allocation was not created.");
+    const quality = Object.entries(letter?.quality ?? {});
+    if (quality.length) {
+      await tx.insert(qualityValues).values(quality.map(([parameterCode, value]) => ({ parameterCode, value, source: "DECLARED" as const, tripAllocationId: share.id })));
+    }
+  }
+}
+
+/** Writes the allocations of the registration, in the order of the body. */
+async function insertAllocations(tx: Orm, registrationId: number, resolved: Resolved[], qty: (number | null)[]): Promise<number[]> {
+  const allocationIds: number[] = [];
+  for (const [index, item] of resolved.entries()) {
+    const [row] = await tx
+      .insert(registrationAllocations)
+      .values({
+        registrationId, seq: index + 1, contractId: item.contractId, deliveryOrderId: item.deliveryOrderId, qtyPlanned: qty[index] ?? null,
+        contractNo: item.contractNo, doNo: item.doNo, tolerancePct: item.tolerancePct,
+      })
+      .returning({ id: registrationAllocations.id });
+    if (!row) throw new Error("The allocation was not created.");
+    allocationIds.push(row.id);
+  }
+  return allocationIds;
+}
+
+/**
+ * Writes the content of a registration as a draft: new when `existing` is absent, else in place of the
+ * draft's allocations and trips. Vehicles and drivers entered in place are created. Throws 400, 403-like
+ * refusals (409) and leaves the transaction to roll back. Answers the registration id and the new drivers.
+ * `createdVia` marks a new registration made another way than the form: "SCAN" for a walk-in from a scanned letter.
+ */
+export async function writeRegistration(
+  tx: Orm,
+  account: Account,
+  body: RegistrationInput,
+  now: Date,
+  existing?: { id: number; regNo: string; createdBy: number; originPartnerId?: number | null },
+  createdVia?: "SCAN",
+): Promise<{ id: number; newDrivers: number[] }> {
+  // drafts being replaced give back what they held before anything is computed again; the weighbridge slips of a
+  // truck are kept by its place in the list and linked again to the new row
+  const keptSlips = existing
+    ? await tx
+        .select({ seq: trips.seq, fileId: tripFiles.fileId, label: tripFiles.label, addedBy: tripFiles.addedBy, addedAt: tripFiles.addedAt })
+        .from(tripFiles)
+        .innerJoin(trips, eq(trips.id, tripFiles.tripId))
+        .where(and(eq(trips.registrationId, existing.id), eq(tripFiles.label, SLIP_LABEL)))
+    : [];
+  if (existing) {
+    await tx.delete(trips).where(eq(trips.registrationId, existing.id));
+    await tx.delete(registrationAllocations).where(eq(registrationAllocations.registrationId, existing.id));
+  }
+  const { resolved, first, site, flowCode, transporterId, originPartnerId, picked, shares, requested, newDrivers } = await prepareRegistration(
+    tx, account, body, now, existing?.id ?? null, existing?.originPartnerId,
+  );
+  const isStaff = account.kind === "INTERNAL";
 
   // write
-  const sameUnit = new Set(resolved.map((item) => item.uom.trim().toLowerCase())).size === 1;
-  const sum = (values: (number | null)[]) => (values.some((value) => value !== null) && sameUnit ? round3(values.reduce<number>((total, value) => total + (value ?? 0), 0)) : null);
+  const sum = summer(resolved);
   const values = {
     siteId: site.id,
     direction: body.direction,
-    flowCode: flowCode as "IN_CPO" | "IN_GOODS" | "OUT_BULK" | "OUT_PACKED",
+    flowCode,
     partnerId: first.partnerId,
     originPartnerId,
     transporterId,
@@ -456,78 +579,239 @@ export async function writeRegistration(
     registrationId = created.id;
   }
 
-  const allocationIds: number[] = [];
-  for (const [index, item] of resolved.entries()) {
-    const [row] = await tx
-      .insert(registrationAllocations)
-      .values({
-        registrationId, seq: index + 1, contractId: item.contractId, deliveryOrderId: item.deliveryOrderId, qtyPlanned: requested[index] ?? null,
-        contractNo: item.contractNo, doNo: item.doNo, tolerancePct: item.tolerancePct,
-      })
-      .returning({ id: registrationAllocations.id });
-    if (!row) throw new Error("The allocation was not created.");
-    allocationIds.push(row.id);
-  }
+  const allocationIds = await insertAllocations(tx, registrationId, resolved, requested);
 
   for (const [index, trip] of body.trips.entries()) {
     const own = shares[index] ?? [];
-    const letters = trip.letters ?? [];
-    const nets = letters.map((letter) => letter.originNetKg).filter((value): value is number => value !== undefined);
-    const tares = letters.map((letter) => letter.originTareKg).filter((value): value is number => value !== undefined && value > 0);
-    const docNet = nets.length ? nets.reduce((total, value) => total + value, 0) : null;
-    const docTare = tares.length ? Math.min(...tares) : null;
     const [created] = await tx
       .insert(trips)
-      .values({
-        siteId: site.id,
-        registrationId,
-        seq: index + 1,
-        status: "DRAFT",
-        vehicleId: picked[index]?.vehicleId ?? null,
-        driverId: picked[index]?.driverId ?? null,
-        transporterId,
-        containerNo: trip.containerNo ?? null,
-        extraSpbe: body.direction === "OUT" ? trip.extraSpbe || null : null,
-        passportNo: body.direction === "OUT" ? trip.passportNo || null : null,
-        qtyPlanned: sum(own),
-        plannedArrival: trip.plannedArrival ?? body.plannedDate ?? null,
-        docNetKg: docNet,
-        docTareKg: docTare,
-        docGrossKg: docNet !== null && docTare !== null ? docNet + docTare : null,
-        remark: trip.remark ?? null,
-        createdAt: now,
-        updatedAt: now,
-      })
+      .values({ siteId: site.id, registrationId, seq: index + 1, status: "DRAFT", ...tripColumns(body, trip, picked[index], transporterId, sum(own)), createdAt: now, updatedAt: now })
       .returning({ id: trips.id });
     if (!created) throw new Error("The trip was not created.");
     const slips = keptSlips.filter((slip) => slip.seq === index + 1);
     if (slips.length) await tx.insert(tripFiles).values(slips.map(({ seq: _seq, ...slip }) => ({ ...slip, tripId: created.id })));
-    for (const [allocationIndex, allocationId] of allocationIds.entries()) {
-      const letter = letters.find((item) => item.allocationSeq === allocationIndex + 1);
-      const [share] = await tx
-        .insert(tripAllocations)
-        .values({
-          tripId: created.id,
-          registrationAllocationId: allocationId,
-          seq: allocationIndex + 1,
-          qtyPlanned: own[allocationIndex] ?? null,
-          handoverNo: letter?.handoverNo ?? trip.handoverNo ?? null,
-          spbNo: letter?.spbNo ?? null,
-          spbDate: letter?.spbDate ?? null,
-          originTicketNo: letter?.originTicketNo ?? null,
-          originGrossKg: letter?.originGrossKg ?? null,
-          originTareKg: letter?.originTareKg ?? null,
-          originNetKg: letter?.originNetKg ?? null,
-        })
-        .returning({ id: tripAllocations.id });
-      if (!share) throw new Error("The trip allocation was not created.");
-      const quality = Object.entries(letter?.quality ?? {});
-      if (quality.length) {
-        await tx.insert(qualityValues).values(quality.map(([parameterCode, value]) => ({ parameterCode, value, source: "DECLARED" as const, tripAllocationId: share.id })));
+    await insertShares(tx, created.id, allocationIds, trip, own);
+  }
+  return { id: registrationId, newDrivers };
+}
+
+/** What happened to the SPJ of a truck when a sent registration changed; the partner prints the new ones. */
+export interface SpjChange {
+  tripId: number;
+  seq: number;
+  plateNo: string | null;
+  /** REISSUED: new SPJ and barcode (plate, vehicle or driver changed); ISSUED: a new truck got its first SPJ;
+   * WITHDRAWN: the SPJ was revoked until logistics approves the change; CANCELLED: the truck was removed. */
+  change: "REISSUED" | "ISSUED" | "WITHDRAWN" | "CANCELLED";
+}
+
+/** Trucks that went through the post: they stay as they are when a sent registration changes. */
+const LOCKED_STATUSES: TripStatus[] = [...ARRIVED_STATUSES];
+/** Trucks that no longer count: neither changed nor locked. */
+const GONE_STATUSES: TripStatus[] = ["CANCELLED", "EXPIRED"];
+
+const findingKey = (finding: { code: string; tripSeq?: number; allocationSeq?: number }) => `${finding.code}|${finding.tripSeq ?? ""}|${finding.allocationSeq ?? ""}`;
+
+/**
+ * Changes a registration that was already sent (SUBMITTED or APPROVED; owner, 26 November 2026: "data yg dikirim
+ * transporter atau supplier, jika belum di scan barcode / di proses di INL, masih bisa di edit"). Trucks that checked in
+ * at the post (or later) are locked; the body lists the trucks the registration keeps besides them: one with `id` is
+ * changed in place, one without is added, an open truck left out is cancelled. Contracts or DOs change only while no
+ * truck has checked in. The body passes the same checks as a new registration. A change that brings a finding the
+ * registration did not have sends it back to logistics review: the SPJ of its open trucks is withdrawn until approved.
+ * Otherwise a truck whose plate, vehicle or driver changed gets a new SPJ (the printed barcode shows the old plate) and
+ * the others keep theirs, with the copies frozen on the trip refreshed.
+ */
+export async function amendRegistration(
+  tx: Orm,
+  account: Account,
+  current: typeof registrations.$inferSelect,
+  body: RegistrationInput,
+  now: Date,
+): Promise<{ newDrivers: number[]; spjChanges: SpjChange[]; before: unknown; after: unknown }> {
+  const id = current.id;
+  const tripRows = await tx.select().from(trips).where(eq(trips.registrationId, id)).orderBy(trips.seq).for("update");
+  const locked = tripRows.filter((trip) => LOCKED_STATUSES.includes(trip.status));
+  const open = tripRows.filter((trip) => !LOCKED_STATUSES.includes(trip.status) && !GONE_STATUSES.includes(trip.status));
+  const allocationRows = await tx.select().from(registrationAllocations).where(eq(registrationAllocations.registrationId, id)).orderBy(registrationAllocations.seq);
+  const lockedMessage = (trip: (typeof tripRows)[number]) => `Truk ${trip.plateNo ?? trip.seq} sudah check-in di pos dan tidak bisa diubah.`;
+
+  if (current.direction === "IN" && locked.length > 0) {
+    throw refused("REGISTRATION_LOCKED", `${lockedMessage(locked[0] as (typeof tripRows)[number])} Registrasi ini tidak bisa diubah lagi.`);
+  }
+  const seen = new Set<number>();
+  for (const [index, trip] of body.trips.entries()) {
+    if (trip.id === undefined) continue;
+    const row = tripRows.find((item) => item.id === trip.id);
+    if (row && LOCKED_STATUSES.includes(row.status)) throw refused("TRIP_LOCKED", lockedMessage(row));
+    if (!row || !open.includes(row) || seen.has(trip.id)) throw invalid(`trips.${index}.id`, "Truk ini tidak ada di registrasi atau sudah dibatalkan.");
+    seen.add(trip.id);
+  }
+  const keysNow = allocationRows.map((row) => (current.direction === "IN" ? row.contractId : row.deliveryOrderId));
+  const keysBody = body.allocations.map((allocation) => (body.direction === "IN" ? allocation.contractId : allocation.deliveryOrderId));
+  const allocationsChanged = keysNow.length !== keysBody.length || keysNow.some((key, index) => key !== keysBody[index]);
+  if (allocationsChanged && locked.length > 0) {
+    throw refused("ALLOCATIONS_LOCKED", "Kontrak atau DO tidak bisa diubah: sudah ada truk yang check-in di pos.");
+  }
+
+  // what the locked trucks keep: their quantities, vehicles and drivers
+  const lockedShares = locked.length
+    ? await tx.select().from(tripAllocations).where(inArray(tripAllocations.tripId, locked.map((trip) => trip.id)))
+    : [];
+  const holding = locked.filter((trip) => trip.status !== "REJECTED");
+  const kept: Kept = {
+    held: allocationRows.map((row) =>
+      round3(lockedShares.filter((share) => share.registrationAllocationId === row.id && holding.some((trip) => trip.id === share.tripId)).reduce((sum, share) => sum + (share.qtyPlanned ?? 0), 0)),
+    ),
+    vehicleIds: holding.map((trip) => trip.vehicleId).filter((value): value is number => value !== null),
+    driverIds: holding.map((trip) => trip.driverId).filter((value): value is number => value !== null),
+  };
+  const snapshot = async () => ({
+    status: (await tx.select({ status: registrations.status }).from(registrations).where(eq(registrations.id, id)))[0]?.status,
+    allocations: (await tx.select().from(registrationAllocations).where(eq(registrationAllocations.registrationId, id)).orderBy(registrationAllocations.seq)).map((row) => ({
+      contractId: row.contractId, deliveryOrderId: row.deliveryOrderId, qtyPlanned: row.qtyPlanned,
+    })),
+    trips: (await tx.select().from(trips).where(eq(trips.registrationId, id)).orderBy(trips.seq)).map((row) => ({
+      id: row.id, seq: row.seq, status: row.status, vehicleId: row.vehicleId, driverId: row.driverId, containerNo: row.containerNo, qtyPlanned: row.qtyPlanned,
+      plannedArrival: row.plannedArrival, docNetKg: row.docNetKg, remark: row.remark,
+    })),
+  });
+  const before = await snapshot();
+
+  const { resolved, first, flowCode, transporterId, originPartnerId, picked, shares, requested, newDrivers } = await prepareRegistration(
+    tx, account, body, now, id, current.originPartnerId, kept,
+  );
+  const sum = summer(resolved);
+
+  // allocations: rebuilt while no truck has checked in, else only their quantities change
+  let allocationIds: number[];
+  const total = requested.map((value, index) => (value === null && !kept.held[index] ? null : round3((value ?? 0) + (kept.held[index] ?? 0))));
+  const rewritten = open.map((trip) => trip.id);
+  if (rewritten.length) await tx.delete(tripAllocations).where(inArray(tripAllocations.tripId, rewritten));
+  if (allocationsChanged) {
+    const gone = tripRows.filter((trip) => GONE_STATUSES.includes(trip.status)).map((trip) => trip.id);
+    if (gone.length) await tx.delete(tripAllocations).where(inArray(tripAllocations.tripId, gone));
+    await tx.delete(registrationAllocations).where(eq(registrationAllocations.registrationId, id));
+    allocationIds = await insertAllocations(tx, id, resolved, total);
+  } else {
+    allocationIds = allocationRows.map((row) => row.id);
+    for (const [index, row] of allocationRows.entries()) {
+      await tx.update(registrationAllocations).set({ qtyPlanned: total[index] ?? null }).where(eq(registrationAllocations.id, row.id));
+    }
+  }
+
+  // trucks: changed in place, added, or cancelled when left out
+  const spjChanges: SpjChange[] = [];
+  const changedIdentity = new Set<number>();
+  const added: number[] = [];
+  let nextSeq = Math.max(0, ...tripRows.map((trip) => trip.seq)) + 1;
+  for (const [index, trip] of body.trips.entries()) {
+    const own = shares[index] ?? [];
+    const columns = tripColumns(body, trip, picked[index], transporterId, sum(own));
+    const row = trip.id === undefined ? undefined : open.find((item) => item.id === trip.id);
+    let tripId: number;
+    if (row) {
+      if (row.vehicleId !== columns.vehicleId || row.driverId !== columns.driverId) changedIdentity.add(row.id);
+      await tx.update(trips).set({ ...columns, updatedAt: now }).where(eq(trips.id, row.id));
+      tripId = row.id;
+    } else {
+      const [created] = await tx
+        .insert(trips)
+        .values({ siteId: current.siteId, registrationId: id, seq: nextSeq++, status: "READY", ...columns, createdAt: now, updatedAt: now })
+        .returning({ id: trips.id });
+      if (!created) throw new Error("The trip was not created.");
+      tripId = created.id;
+      added.push(created.id);
+    }
+    await insertShares(tx, tripId, allocationIds, trip, own);
+  }
+  const removed = open.filter((trip) => !seen.has(trip.id));
+  const REMOVED = "Truk dihapus dari registrasi oleh pengirimnya.";
+  for (const trip of removed) {
+    await tx.update(trips).set({ status: "CANCELLED", cancelledAt: now, cancelReason: REMOVED, updatedAt: now }).where(eq(trips.id, trip.id));
+    if (trip.status === "ISSUED") spjChanges.push({ tripId: trip.id, seq: trip.seq, plateNo: trip.plateNo, change: "CANCELLED" });
+    await revokeSpj(tx, trip.id, account.id, now, REMOVED);
+  }
+
+  const liveCount = holding.length + body.trips.length;
+  await tx
+    .update(registrations)
+    .set({
+      flowCode,
+      partnerId: first.partnerId,
+      originPartnerId,
+      transporterId,
+      plannedDate: body.plannedDate ?? null,
+      truckCount: liveCount,
+      qtyTotal: sum(total),
+      uom: first.uom,
+      closeCargo: body.closeCargo ?? null,
+      flexiBag: body.flexiBag ?? null,
+      remark: body.remark ?? null,
+      updatedAt: now,
+    })
+    .where(eq(registrations.id, id));
+
+  // the same checks as a new registration; a finding it did not have sends it back to review
+  const findings = await checkRegistration(tx, id, now);
+  const review = (await readSetting<Record<string, string>>(tx, current.siteId, "registration_review"))?.[flowCode] ?? "ON_FAILED_CHECK";
+  const known = new Set(current.checkFindings.map(findingKey));
+  const fresh = findings.filter((finding) => !known.has(findingKey(finding)));
+  const keptIds = body.trips.map((trip) => trip.id).filter((value): value is number => value !== undefined);
+  const plateOf = async (tripId: number) => (await tx.select({ plateNo: trips.plateNo, seq: trips.seq }).from(trips).where(eq(trips.id, tripId)))[0];
+  if (current.status === "APPROVED" && (review === "ALWAYS" || (review !== "NEVER" && fresh.length > 0))) {
+    const reason = "Registrasi diubah dan menunggu tinjauan logistik.";
+    for (const tripId of keptIds) {
+      const row = open.find((item) => item.id === tripId);
+      if (row?.status === "ISSUED") spjChanges.push({ tripId, seq: row.seq, plateNo: row.plateNo, change: "WITHDRAWN" });
+      await revokeSpj(tx, tripId, account.id, now, reason);
+    }
+    await tx.update(trips).set({ status: "READY", updatedAt: now }).where(inArray(trips.id, [...keptIds, ...added].length ? [...keptIds, ...added] : [-1]));
+    await tx.update(registrations).set({ status: "SUBMITTED", submittedAt: now, checkFindings: findings, updatedAt: now }).where(eq(registrations.id, id));
+  } else if (current.status === "APPROVED") {
+    await tx.update(registrations).set({ checkFindings: findings, updatedAt: now }).where(eq(registrations.id, id));
+    for (const tripId of keptIds) {
+      const row = open.find((item) => item.id === tripId);
+      if (!row) continue;
+      if (changedIdentity.has(tripId) || row.status !== "ISSUED") {
+        await revokeSpj(tx, tripId, account.id, now, "Kendaraan atau supir truk diubah.");
+        await issueSpj(tx, tripId, account.id, now);
+        const shown = await plateOf(tripId);
+        spjChanges.push({ tripId, seq: row.seq, plateNo: shown?.plateNo ?? null, change: row.status === "ISSUED" ? "REISSUED" : "ISSUED" });
+      } else {
+        await refreshFrozen(tx, tripId, now);
+      }
+    }
+    for (const tripId of added) {
+      await issueSpj(tx, tripId, account.id, now);
+      const shown = await plateOf(tripId);
+      spjChanges.push({ tripId, seq: shown?.seq ?? 0, plateNo: shown?.plateNo ?? null, change: "ISSUED" });
+    }
+  } else {
+    // still waiting for review: it stays so, or is approved now when nothing is left to review
+    await tx.update(trips).set({ status: "READY", updatedAt: now }).where(inArray(trips.id, [...keptIds, ...added].length ? [...keptIds, ...added] : [-1]));
+    await tx.update(registrations).set({ checkFindings: findings, updatedAt: now }).where(eq(registrations.id, id));
+    if (review === "NEVER" || (review !== "ALWAYS" && findings.length === 0)) {
+      await approve(tx, id, account.id, now, null);
+      for (const tripId of [...keptIds, ...added]) {
+        const shown = await plateOf(tripId);
+        spjChanges.push({ tripId, seq: shown?.seq ?? 0, plateNo: shown?.plateNo ?? null, change: "ISSUED" });
       }
     }
   }
-  return { id: registrationId, newDrivers };
+  spjChanges.sort((a, b) => a.seq - b.seq);
+  return { newDrivers, spjChanges, before, after: await snapshot() };
+}
+
+/** Takes the plate, driver name and licence again onto the trip, as issueSpj froze them; the SPJ itself stays. */
+async function refreshFrozen(tx: Orm, tripId: number, now: Date): Promise<void> {
+  const [row] = await tx
+    .select({ plateNo: vehicles.plateNo, driverName: drivers.fullName, licenceNo: drivers.licenceNo })
+    .from(trips)
+    .leftJoin(vehicles, eq(vehicles.id, trips.vehicleId))
+    .leftJoin(drivers, eq(drivers.id, trips.driverId))
+    .where(eq(trips.id, tripId));
+  if (row) await tx.update(trips).set({ ...row, updatedAt: now }).where(eq(trips.id, tripId));
 }
 
 /** Runs the checks on a draft and stores the findings; the draft stays a draft. */

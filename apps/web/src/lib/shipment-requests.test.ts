@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canChangeRequestFiles,
+  contractRequestText,
   canRemoveRequestFile,
   deliveryWindowText,
   registerHref,
@@ -32,6 +33,7 @@ function request(extra: Partial<ShipmentRequest> = {}): ShipmentRequest {
     contract: { id: 31, contractNo: "PC-CONTOH-01", state: "OPEN", qtyContract: 300000, uom: "kg", tolerancePct: 0.3, validFrom: "2026-11-01", validUntil: null },
     product: { id: 1, name: "CPO", category: "CPO" },
     partner: { id: "p-1", name: "PKS Contoh" },
+    supplier: { id: "p-1", name: "PKS Contoh" },
     qtyPlanned: 120000,
     uom: "kg",
     deliveryFrom: "2026-11-21",
@@ -106,12 +108,13 @@ describe("what a request offers", () => {
 });
 
 describe("the request form", () => {
-  it("needs a contract, a positive quantity, and an end date not before the start", () => {
-    const empty = { contractId: "", qtyPlanned: "", deliveryFrom: "", deliveryUntil: "", remark: "" };
-    expect(validateShipmentRequest(empty, "create")).toEqual({ contractId: "Pilih kontrak beli." });
-    expect(validateShipmentRequest({ ...empty, contractId: "31", qtyPlanned: "0" }, "create").qtyPlanned).toBe("Isi quantity lebih dari nol, tanpa titik ribuan.");
-    expect(validateShipmentRequest({ ...empty, contractId: "31", qtyPlanned: "120000" }, "create")).toEqual({});
-    expect(validateShipmentRequest({ ...empty, contractId: "31", deliveryFrom: "2026-11-30", deliveryUntil: "2026-11-21" }, "draft").deliveryUntil).toBe(
+  it("needs a contract, a mill, a positive quantity, and an end date not before the start", () => {
+    const empty = { contractId: "", supplierId: "", qtyPlanned: "", deliveryFrom: "", deliveryUntil: "", remark: "" };
+    expect(validateShipmentRequest(empty, "create")).toEqual({ contractId: "Pilih kontrak beli.", supplierId: "Pilih PKS yang mengirim." });
+    const picked = { ...empty, contractId: "31", supplierId: "p-160" };
+    expect(validateShipmentRequest({ ...picked, qtyPlanned: "0" }, "create").qtyPlanned).toBe("Isi quantity lebih dari nol, tanpa titik ribuan.");
+    expect(validateShipmentRequest({ ...picked, qtyPlanned: "120000" }, "create")).toEqual({});
+    expect(validateShipmentRequest({ ...picked, deliveryFrom: "2026-11-30", deliveryUntil: "2026-11-21" }, "draft").deliveryUntil).toBe(
       "Tanggal akhir kirim tidak boleh sebelum tanggal mulai.",
     );
     // a sent request keeps its contract
@@ -120,15 +123,24 @@ describe("the request form", () => {
 
   it("sends only filled fields on create, every field of a draft, and the three late fields of a sent request", () => {
     const values = shipmentRequestValues(request());
-    expect(values).toEqual({ contractId: "31", qtyPlanned: "120000", deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30", remark: "Kirim bertahap" });
-    expect(shipmentRequestPayload({ ...values, qtyPlanned: "", remark: " " }, "create")).toEqual({ contractId: "31", deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30" });
+    expect(values).toEqual({ contractId: "31", supplierId: "p-1", qtyPlanned: "120000", deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30", remark: "Kirim bertahap" });
+    expect(shipmentRequestPayload({ ...values, qtyPlanned: "", remark: " " }, "create")).toEqual({ contractId: "31", supplierId: "p-1", deliveryFrom: "2026-11-21", deliveryUntil: "2026-11-30" });
     expect(shipmentRequestPayload({ ...values, qtyPlanned: "1500,5", remark: "" }, "draft")).toEqual({
       contractId: "31",
+      supplierId: "p-1",
       qtyPlanned: 1500.5,
       deliveryFrom: "2026-11-21",
       deliveryUntil: "2026-11-30",
       remark: null,
     });
     expect(shipmentRequestPayload({ ...values, deliveryUntil: "" }, "sent")).toEqual({ qtyPlanned: 120000, deliveryUntil: null, remark: "Kirim bertahap" });
+  });
+
+  it("tells the contract quantity, what is already asked for, and what is left", () => {
+    expect(contractRequestText(10_000_000, 5_000_000, "kg")).toBe("Kontrak 10.000.000 kg · sudah diminta 5.000.000 kg · sisa 5.000.000 kg");
+    // the request being changed is not counted twice
+    expect(contractRequestText(10_000_000, 5_000_000, "kg", 3_000_000)).toBe("Kontrak 10.000.000 kg · sudah diminta 2.000.000 kg · sisa 8.000.000 kg");
+    expect(contractRequestText(10_000_000, 12_000_000, "kg")).toBe("Kontrak 10.000.000 kg · sudah diminta 12.000.000 kg · sisa 0 kg");
+    expect(contractRequestText(null, null, "kg")).toBe("sudah diminta 0 kg");
   });
 });

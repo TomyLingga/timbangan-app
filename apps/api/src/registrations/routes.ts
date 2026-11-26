@@ -11,6 +11,7 @@ import { forbidden, invalid, invalidState, notFound } from "../errors.js";
 import { idParams, lettersAndDigits, likeText, limitParam, searchParam } from "../http.js";
 import { expireDueTrips } from "../trips/view.js";
 import {
+  amendRegistration,
   approve,
   assertRequestsSent,
   cancelTrips,
@@ -115,23 +116,34 @@ export function registerRegistrationRoutes(app: FastifyInstance, context: AppCon
     return reply.code(201).send({ registration: newDrivers.length ? await one(orm, registration.id) : registration });
   });
 
+  // A draft is written again as a whole. A registration already sent (SUBMITTED or APPROVED) may still change while
+  // its trucks have not checked in at the post (owner, 26 November 2026): by the company that sent it, or by staff
+  // with registrations EDIT. `spjChanges` tells which trucks got a new SPJ (to print again), lost it until review, or
+  // were removed; it is empty for a draft.
   app.put("/api/registrations/:id", writers, async (request) => {
     const { id } = idParams.parse(request.params);
     const body = registrationBody.parse(request.body);
     const account = accountOf(request);
     if (!mayWrite(account, body.direction)) throw forbidden();
     const now = context.now();
-    const newDrivers = await orm.transaction(async (tx) => {
+    await expireDueTrips(orm, now);
+    const { newDrivers, spjChanges } = await orm.transaction(async (tx) => {
       const current = await lock(tx, id, account);
-      if (current.status !== "DRAFT") throw invalidState("Hanya registrasi berstatus DRAFT yang bisa diubah.");
       if (current.direction !== body.direction) throw invalid("direction", "Arah registrasi tidak bisa diubah.");
-      const written = await writeRegistration(tx, account, body, now, current);
-      if (body.submit) await submitRegistration(tx, id, account.id, now);
-      else await storeFindings(tx, id, now);
-      return written.newDrivers;
+      if (current.status === "DRAFT") {
+        const written = await writeRegistration(tx, account, body, now, current);
+        if (body.submit) await submitRegistration(tx, id, account.id, now);
+        else await storeFindings(tx, id, now);
+        return { newDrivers: written.newDrivers, spjChanges: [] };
+      }
+      if (current.status !== "SUBMITTED" && current.status !== "APPROVED") throw invalidState("Registrasi ini sudah selesai, ditolak, atau dibatalkan, jadi tidak bisa diubah.");
+      if (account.kind === "INTERNAL" && !can(account, "registrations", "EDIT")) throw forbidden();
+      const amended = await amendRegistration(tx, account, current, body, now);
+      await writeAudit(tx, request, now, { action: "REGISTRATION_CHANGED", entityType: "registration", entityId: id, before: amended.before, after: amended.after });
+      return { newDrivers: amended.newDrivers, spjChanges: amended.spjChanges };
     });
     await pushDrivers(request, newDrivers);
-    return { registration: await one(orm, id) };
+    return { registration: await one(orm, id), spjChanges };
   });
 
   app.post("/api/registrations/:id/submit", writers, async (request) => {

@@ -24,7 +24,7 @@ import {
   requestActions,
   shipmentRequestStatusInfo,
 } from "@/lib/shipment-requests";
-import type { ShipmentRequestDetail, User } from "@/lib/types";
+import type { Page, ShipmentRequest, ShipmentRequestDetail, User } from "@/lib/types";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -72,7 +72,7 @@ function ShipmentRequestView({ user, id }: { user: User; id: string }) {
           <StatusBadge info={shipmentRequestStatusInfo(request.status)} />
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          {request.partner.name} · {request.product.name}
+          {request.supplier.name} · {request.product.name}
         </p>
       </div>
 
@@ -118,10 +118,14 @@ function ShipmentRequestView({ user, id }: { user: User; id: string }) {
       <section className="rounded-2xl border bg-card p-4 sm:p-5">
         <h2 className="text-sm font-semibold">Data permintaan</h2>
         <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3 lg:grid-cols-4" data-testid="request-facts">
-          <Fact label="Supplier">{request.partner.name}</Fact>
+          <Fact label="PKS pengirim">{request.supplier.name}</Fact>
+          <Fact label="Partner kontrak">{request.partner.name}</Fact>
           <Fact label="Barang">{request.product.name}</Fact>
           <Fact label="Quantity rencana">{request.qtyPlanned === null ? "Mengikuti sisa kontrak" : formatQuantity(request.qtyPlanned, request.uom)}</Fact>
           <Fact label="Quantity kontrak">{formatQuantity(request.contract.qtyContract, request.contract.uom)}</Fact>
+          {staff && request.contract.qtyRequested != null ? (
+            <Fact label="Sudah diminta (semua PKS)">{formatQuantity(request.contract.qtyRequested, request.contract.uom)}</Fact>
+          ) : null}
           <Fact label="Toleransi kontrak">{request.contract.tolerancePct === null ? "-" : `${formatNumber(request.contract.tolerancePct)}%`}</Fact>
           <Fact label="Masa kirim">{deliveryWindowText(request)}</Fact>
           <Fact label="Kontrak berlaku">
@@ -136,6 +140,8 @@ function ShipmentRequestView({ user, id }: { user: User; id: string }) {
           {request.cancelReason ? <Fact label="Alasan batal">{request.cancelReason}</Fact> : null}
         </dl>
       </section>
+
+      {staff ? <ContractRequests contractId={request.contract.id} currentId={request.id} /> : null}
 
       <section aria-labelledby="request-files" className="rounded-2xl border bg-card p-4 sm:p-5">
         <h2 id="request-files" className="text-sm font-semibold">
@@ -180,6 +186,45 @@ function ShipmentRequestView({ user, id }: { user: User; id: string }) {
         <RequestActionSheet request={{ ...request, fileCount: files.length }} action={pending} onClose={() => setPending(null)} onDone={done} />
       ) : null}
     </div>
+  );
+}
+
+/** Every request of the contract, one per mill: who was asked for how much. Staff only. */
+function ContractRequests({ contractId, currentId }: { contractId: string | number; currentId: string | number }) {
+  const query = useApiQuery(`contract-requests|${contractId}`, (signal) =>
+    api.request<Page<ShipmentRequest>>("/api/shipment-requests", { query: { contractId: String(contractId), limit: 50 }, signal }),
+  );
+  const items = query.data?.items ?? [];
+  return (
+    <section aria-labelledby="contract-requests" className="rounded-2xl border bg-card p-4 sm:p-5" data-testid="contract-requests">
+      <h2 id="contract-requests" className="text-sm font-semibold">
+        Permintaan untuk kontrak ini ({formatNumber(items.length)})
+      </h2>
+      <p className="mt-1 text-xs text-muted-foreground">Satu kontrak bisa dipasok beberapa PKS. Jumlah semua permintaan yang tidak batal tidak boleh melebihi quantity kontrak.</p>
+      {query.hasError ? (
+        <p className="mt-3 text-sm text-destructive">Daftar permintaan belum bisa dimuat.</p>
+      ) : (
+        <ul className="mt-3 divide-y">
+          {items.map((item) => (
+            <li key={String(item.id)} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
+              <span className="min-w-0">
+                {String(item.id) === String(currentId) ? (
+                  <span className="font-medium">{item.supplier.name}</span>
+                ) : (
+                  <Link href={`/permintaan-pengiriman/${encodeURIComponent(String(item.id))}`} className="font-medium text-link underline-offset-4 hover:underline">
+                    {item.supplier.name}
+                  </Link>
+                )}
+              </span>
+              <span className="flex items-center gap-2">
+                <span className="whitespace-nowrap">{item.qtyPlanned === null ? "Tanpa quantity" : formatQuantity(item.qtyPlanned, item.uom)}</span>
+                <StatusBadge info={shipmentRequestStatusInfo(item.status)} />
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 

@@ -4,7 +4,22 @@ import { alias } from "drizzle-orm/pg-core";
 import type { Account } from "../auth/guard.js";
 import type { Orm } from "../db/client.js";
 import { deliveryOrders, erpContracts, partners, products, registrationAllocations, registrations, trips, users } from "../db/schema.js";
-import { loadTrips } from "../trips/view.js";
+import { ARRIVED_STATUSES, loadTrips } from "../trips/view.js";
+
+/** Statuses in which a registration may still be changed (a draft fully, a sent one truck by truck). */
+const CHANGEABLE = ["DRAFT", "SUBMITTED", "APPROVED"];
+
+/**
+ * Whether a truck of the registration may still be changed or removed, and why not (amendRegistration in
+ * service.ts holds the same rules). Who may change it is a matter of the account's level, not told here.
+ */
+export function tripEditState(registrationStatus: string, tripStatus: string): { allowed: boolean; reason: string | null } {
+  if (!CHANGEABLE.includes(registrationStatus)) return { allowed: false, reason: "Registrasi sudah selesai, ditolak, atau dibatalkan." };
+  if ((ARRIVED_STATUSES as string[]).includes(tripStatus)) return { allowed: false, reason: "Truk sudah check-in di pos." };
+  if (tripStatus === "CANCELLED") return { allowed: false, reason: "Truk sudah dibatalkan." };
+  if (tripStatus === "EXPIRED") return { allowed: false, reason: "SPJ truk sudah kedaluwarsa." };
+  return { allowed: true, reason: null };
+}
 
 const transporterOf = alias(partners, "registration_transporter");
 const originOf = alias(partners, "registration_origin");
@@ -124,7 +139,25 @@ export async function loadRegistrations(orm: Orm, ids: number[], withTrips = tru
             product: { id: row.productId, name: row.productName, category: row.productCategory },
             partner: { id: row.partnerId, name: row.partnerName },
           })),
-        ...(withTrips ? { trips: tripViews.filter((trip) => trip.registrationId === r.id) } : {}),
+        ...(withTrips
+          ? (() => {
+              const own = tripViews.filter((trip) => trip.registrationId === r.id).map((trip) => ({ ...trip, edit: tripEditState(r.status, trip.status) }));
+              const arrived = own.some((trip) => (ARRIVED_STATUSES as string[]).includes(trip.status));
+              return {
+                trips: own,
+                // the registration as a whole: whether it may change, and whether its contracts or DOs are fixed
+                edit: {
+                  allowed: CHANGEABLE.includes(r.status) && !(r.direction === "IN" && arrived),
+                  allocationsLocked: arrived,
+                  reason: !CHANGEABLE.includes(r.status)
+                    ? "Registrasi sudah selesai, ditolak, atau dibatalkan."
+                    : r.direction === "IN" && arrived
+                      ? "Truk sudah check-in di pos."
+                      : null,
+                },
+              };
+            })()
+          : {}),
       },
     ]),
   );

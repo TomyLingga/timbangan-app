@@ -71,6 +71,8 @@ const products = {
 
 partners.transporterB = { id: "p-302", name: "Transporter Contoh B" };
 partners.customerC = { id: "p-203", name: "Customer Contoh C" };
+// a trader on a purchase contract supplied by several mills (API migration 0018); traders get no account
+partners.traderA = { id: "p-150", name: "Pedagang Contoh A" };
 
 /** The id prefix says what a made-up partner is: p-1 supplier, p-2 customer, p-3 transporter. */
 const partnerRole = (partner) => ({ 1: "supplier", 2: "customer", 3: "transporter" })[partner.id[2]];
@@ -326,6 +328,8 @@ const contracts = [
   contract("0047/CONTOH/STEARIN/XI/2026", "OUT", partners.customerA, products.stearin, 600000, { customerPoNo: "PO-CONTOH-0013" }),
   contract("0048/CONTOH/PFAD/XI/2026", "OUT", partners.customerB, products.pfad, 120000, { validUntil: "2026-11-30" }),
   contract("0031/CONTOH/OLEIN/X/2026", "OUT", partners.customerA, products.olein, 900000, { state: "CLOSED", validFrom: "2026-10-01", validUntil: "2026-10-31", customerPoNo: "PO-CONTOH-0007" }),
+  // the trader's contract that several mills supply (dev/smoke.mjs: 3.000 t, 2.000 t and 5.000 t of 10.000 t)
+  contract("0130/CONTOH/CPO/XI/2026", "IN", partners.traderA, products.cpo, 10000000),
 ];
 
 // --- in-memory state --------------------------------------------------------
@@ -651,6 +655,36 @@ const normalizeToken = (value) => String(value ?? "").toUpperCase().replace(/[\s
 const normalizeUid = (value) => String(value ?? "").toUpperCase().replace(/[\s:-]+/g, "");
 const findPartner = (id) => Object.values(partners).find((partner) => partner.id === id) ?? null;
 const ref = (partner) => (partner ? { id: partner.id, name: partner.name } : null);
+
+/** A partner as GET /api/partners shows it; a partner added here has no ERP reference. */
+const publicPartner = (partner) => ({
+  id: partner.id,
+  name: partner.name,
+  code: partner.local ? null : partner.id.toUpperCase(),
+  address: partner.address ?? null,
+  isSupplier: partnerRole(partner) === "supplier",
+  isCustomer: partnerRole(partner) === "customer",
+  isTransporter: partnerRole(partner) === "transporter",
+  erpSystem: partner.local || partnerRole(partner) === "transporter" ? null : "ODOO",
+});
+
+let nextLocalPartner = 160;
+/** A partner kept only here: the same name (case and outer spaces aside) is refused with its id. */
+function addLocalPartner(name, address, role) {
+  const trimmed = typeof name === "string" ? name.trim() : "";
+  if (trimmed.length < 2 || trimmed.length > 200) return { problem: validation({ name: "Nama partner wajib diisi, 2 sampai 200 huruf." }) };
+  if (!role) return { problem: validation({ isSupplier: "Pilih minimal satu jenis partner: supplier, transporter, atau customer." }) };
+  const same = Object.values(partners).find((partner) => partner.name.trim().toLowerCase() === trimmed.toLowerCase());
+  if (same) {
+    const answer = problem(409, "PARTNER_EXISTS", `Partner dengan nama ${same.name} sudah ada.`);
+    answer.body.error.partnerId = same.id;
+    return { problem: answer };
+  }
+  const prefix = { supplier: 1, customer: 2, transporter: 3 }[role];
+  const partner = { id: `p-${prefix}${nextLocalPartner++}`, name: trimmed, address: typeof address === "string" && address.trim() ? address.trim() : null, local: true };
+  partners[`local${partner.id}`] = partner;
+  return { partner };
+}
 const numberOrNull = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
 const daysAgoIso = (days) => new Date(Date.now() - days * 86_400_000).toISOString();
 
@@ -900,6 +934,7 @@ function publicRegistration(registration, withTrips = true) {
     flowCode: registration.flowCode,
     status: registration.status,
     partner: ref(registration.partner),
+    originPartner: ref(registration.originPartner ?? null),
     transporter: ref(findPartner(registration.transporterId)),
     plannedDate: registration.plannedDate,
     truckCount: own.length,
@@ -916,7 +951,7 @@ function publicRegistration(registration, withTrips = true) {
     reviewNote: registration.reviewNote,
     findings: registration.findings,
     allocations,
-    ...(withTrips ? { trips: own.map(publicTrip) } : {}),
+    ...(withTrips ? { trips: own.map((trip) => ({ ...publicTrip(trip), edit: tripEdit(registration, trip) })), edit: registrationEdit(registration) } : {}),
   };
 }
 
@@ -1041,8 +1076,10 @@ function planRegistration(user, body) {
   for (const [index, entry] of allocationsIn.entries()) {
     if (direction === "IN") {
       const row = contracts.find((item) => item.id === entry?.contractId);
-      if (!row || row.direction !== "IN" || row.state !== "OPEN" || (isPartner && row.partner.id !== user.partner.id)) {
-        return { problem: problem(409, "CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan milik perusahaan Anda.") };
+      // a mill reaches its own contracts and those INL sent it a request on, whoever their partner is (0018)
+      const reachable = row && (!isPartner || row.partner.id === user.partner.id || shipmentMock?.hasShownRequest(row.id, user.partner.id));
+      if (!row || !reachable || row.direction !== "IN" || row.state !== "OPEN") {
+        return { problem: problem(409, "CONTRACT_NOT_AVAILABLE", "Kontrak tidak ditemukan, tidak terbuka, atau bukan untuk perusahaan Anda.") };
       }
       // a supplier account registers only on a contract INL sent it (migration 0017); staff need no request
       if (isPartner && !shipmentMock?.hasSentRequest(row.id, user.partner.id)) return { problem: shipmentRequestRequired(row.contractNo) };
@@ -1061,6 +1098,19 @@ function planRegistration(user, body) {
   }
   const keys = allocations.map((allocation) => allocation.source.id);
   if (new Set(keys).size !== keys.length) return { problem: validation({ allocations: "Kontrak atau DO yang sama dipilih dua kali." }) };
+  if (direction === "IN" && new Set(allocations.map((allocation) => allocation.source.partner.id)).size > 1) {
+    const listed = allocations.map((allocation) => `${allocation.source.contractNo} (${allocation.source.partner.name})`).join(", ");
+    return { problem: problem(409, "CONTRACT_PARTNER_MISMATCH", `Kontrak dalam satu registrasi harus dari partner yang sama: ${listed}.`) };
+  }
+  // asal PKS: a supplier account's own company; staff may name a supplier
+  let originPartner = null;
+  if (direction === "IN") {
+    if (isPartner) originPartner = user.partner;
+    else if (body.originPartnerId) {
+      originPartner = findPartner(body.originPartnerId);
+      if (!originPartner || partnerRole(originPartner) !== "supplier") return { problem: validation({ originPartnerId: "Asal PKS harus partner supplier." }) };
+    }
+  } else if (body.originPartnerId) return { problem: validation({ originPartnerId: "Asal PKS hanya untuk registrasi masuk." }) };
   const flows = new Set(allocations.map((allocation) => settings.flowByCategory[direction][allocation.source.product.category] ?? `${direction}_OTHER`));
   if (flows.size > 1) return { problem: validation({ allocations: "Semua kontrak atau DO dalam satu registrasi harus satu jalur barang." }) };
   const [flowCode] = flows;
@@ -1199,6 +1249,7 @@ function planRegistration(user, body) {
       submit,
       flowCode,
       partner: allocations[0].source.partner,
+      originPartner,
       transporterId,
       plannedDate: isDate(body.plannedDate) ? body.plannedDate : null,
       remark: optionalText(body.remark),
@@ -1216,6 +1267,7 @@ function writeRegistration(registration, plan, user) {
     direction: plan.direction,
     flowCode: plan.flowCode,
     partner: plan.partner,
+    originPartner: plan.originPartner ?? null,
     transporterId: plan.transporterId,
     plannedDate: plan.plannedDate,
     remark: plan.remark,
@@ -1310,6 +1362,113 @@ function writeRegistration(registration, plan, user) {
       steps: [],
     });
   });
+}
+
+/** Whether a truck may still be changed, and why not (tripEditState in apps/api registrations/view.ts). */
+const CHANGEABLE = ["DRAFT", "SUBMITTED", "APPROVED"];
+function tripEdit(registration, trip) {
+  if (!CHANGEABLE.includes(registration.status)) return { allowed: false, reason: "Registrasi sudah selesai, ditolak, atau dibatalkan." };
+  if (ARRIVED.includes(trip.status)) return { allowed: false, reason: "Truk sudah check-in di pos." };
+  if (trip.status === "CANCELLED") return { allowed: false, reason: "Truk sudah dibatalkan." };
+  if (trip.status === "EXPIRED") return { allowed: false, reason: "SPJ truk sudah kedaluwarsa." };
+  return { allowed: true, reason: null };
+}
+function registrationEdit(registration) {
+  const arrived = tripsOf(registration).some((trip) => ARRIVED.includes(trip.status));
+  const open = CHANGEABLE.includes(registration.status);
+  const lockedIn = registration.direction === "IN" && arrived;
+  return {
+    allowed: open && !lockedIn,
+    allocationsLocked: arrived,
+    reason: !open ? "Registrasi sudah selesai, ditolak, atau dibatalkan." : lockedIn ? "Truk sudah check-in di pos." : null,
+  };
+}
+
+/**
+ * A sent registration changed before its trucks check in (amendRegistration in apps/api registrations/service.ts):
+ * a truck with `id` changes in place, one without is added, an open truck left out is cancelled; trucks that checked
+ * in stay. Returns { problem } or { spjChanges }.
+ */
+function amendRegistration(registration, plan, body, user) {
+  const all = tripsOf(registration).map(refreshTrip);
+  const locked = all.filter((trip) => ARRIVED.includes(trip.status));
+  const open = all.filter((trip) => !ARRIVED.includes(trip.status) && !DEAD_TRIP.includes(trip.status));
+  const lockedText = (trip) => `Truk ${vehicleOf(trip)?.plateNo ?? trip.seq} sudah check-in di pos dan tidak bisa diubah.`;
+  if (registration.direction === "IN" && locked.length > 0) return { problem: problem(409, "REGISTRATION_LOCKED", `${lockedText(locked[0])} Registrasi ini tidak bisa diubah lagi.`) };
+  const ids = body.trips.map((trip) => trip?.id ?? null);
+  for (const [index, id] of ids.entries()) {
+    if (id === null) continue;
+    const row = all.find((trip) => trip.id === id);
+    if (row && ARRIVED.includes(row.status)) return { problem: problem(409, "TRIP_LOCKED", lockedText(row)) };
+    if (!row || !open.includes(row) || ids.indexOf(id) !== index) return { problem: validation({ [`trips.${index}.id`]: "Truk ini tidak ada di registrasi atau sudah dibatalkan." }) };
+  }
+  const keyOf = (allocation) => allocation.contractId ?? allocation.deliveryOrderId;
+  const changedAllocations = plan.allocations.length !== registration.allocations.length || plan.allocations.some((allocation, index) => keyOf(allocation) !== keyOf(registration.allocations[index]));
+  if (changedAllocations && locked.length > 0) return { problem: problem(409, "ALLOCATIONS_LOCKED", "Kontrak atau DO tidak bisa diubah: sudah ada truk yang check-in di pos.") };
+
+  // the trucks of the body are built as for a new registration, then put in place of the open ones
+  const scratch = { id: `scratch-${nextRegistrationId++}` };
+  writeRegistration(scratch, plan, user);
+  const built = tripsOf(scratch);
+  const known = new Set(registration.findings.map((finding) => `${finding.code}|${finding.tripSeq ?? ""}|${finding.allocationSeq ?? ""}`));
+  for (const key of ["direction", "flowCode", "partner", "originPartner", "transporterId", "plannedDate", "remark", "closeCargo", "flexiBag", "allocations"]) registration[key] = scratch[key];
+  const changes = [];
+  const identity = new Set();
+  const added = [];
+  let nextSeq = Math.max(0, ...all.map((trip) => trip.seq)) + 1;
+  built.forEach((fresh, index) => {
+    const id = ids[index];
+    trips.splice(trips.indexOf(fresh), 1);
+    if (id) {
+      const row = open.find((trip) => trip.id === id);
+      if (row.vehicleId !== fresh.vehicleId || row.driverId !== fresh.driverId) identity.add(row.id);
+      for (const key of ["vehicleId", "driverId", "containerNo", "extraSpbe", "passportNo", "plannedArrival", "handoverNo", "qtyPlanned", "docGrossKg", "docTareKg", "docNetKg", "allocations"]) row[key] = fresh[key];
+    } else {
+      Object.assign(fresh, { registrationId: registration.id, seq: nextSeq++, status: "READY" });
+      trips.push(fresh);
+      added.push(fresh);
+    }
+  });
+  const kept = open.filter((trip) => ids.includes(trip.id));
+  for (const trip of open.filter((item) => !ids.includes(item.id))) {
+    if (trip.spj) changes.push({ tripId: trip.id, seq: trip.seq, plateNo: vehicleOf(trip)?.plateNo ?? null, change: "CANCELLED" });
+    Object.assign(trip, { status: "CANCELLED", cancelReason: "Truk dihapus dari registrasi oleh pengirimnya." });
+    revokeSpj(trip);
+  }
+  const findings = computeFindings(registration);
+  const fresh = findings.filter((finding) => !known.has(`${finding.code}|${finding.tripSeq ?? ""}|${finding.allocationSeq ?? ""}`));
+  registration.findings = findings;
+  const review = settings.registrationReview[registration.flowCode] === "ON_FAILED_CHECK";
+  const note = (trip, change) => changes.push({ tripId: trip.id, seq: trip.seq, plateNo: vehicleOf(trip)?.plateNo ?? null, change });
+  if (registration.status === "APPROVED" && review && fresh.length > 0) {
+    for (const trip of kept) {
+      if (trip.spj) note(trip, "WITHDRAWN");
+      revokeSpj(trip);
+      trip.status = "READY";
+    }
+    registration.status = "SUBMITTED";
+    registration.submittedAt = nowIso();
+  } else if (registration.status === "APPROVED") {
+    for (const trip of kept) {
+      if (!identity.has(trip.id) && trip.spj) continue;
+      const had = Boolean(trip.spj);
+      revokeSpj(trip);
+      issueSpj(trip);
+      note(trip, had ? "REISSUED" : "ISSUED");
+    }
+    for (const trip of added) {
+      issueSpj(trip);
+      note(trip, "ISSUED");
+    }
+  } else if (findings.length === 0 || !review) {
+    registration.status = "APPROVED";
+    for (const trip of [...kept, ...added]) {
+      issueSpj(trip);
+      note(trip, "ISSUED");
+    }
+  }
+  changes.sort((a, b) => a.seq - b.seq);
+  return { spjChanges: changes };
 }
 
 function seedRegistration({ partner, transporter, vehicleId, driverId, contractNo, plannedDate, issuedDaysAgo }) {
@@ -3144,12 +3303,20 @@ const routes = {
         (item) =>
           item.direction === direction &&
           (includeClosed || item.state !== "CLOSED") &&
-          // A partner account only sees the contracts of its own company.
-          (user.kind !== "PARTNER" || item.partner.id === user.partner.id) &&
+          // A partner account sees the contracts of its own company and those with a request sent to it (0018).
+          (user.kind !== "PARTNER" || item.partner.id === user.partner.id || shipmentMock?.ownRequestOf(item.id, user)) &&
           (!q || item.contractNo.toLowerCase().includes(q) || item.partner.name.toLowerCase().includes(q)),
       )
-      .map((item) => ({ ...item, shipmentRequest: shipmentMock?.openRequestOf(item.id, user) ?? null }))
-      .filter((item) => requestSent === null || (item.shipmentRequest?.status === "SENT") === (requestSent === "true"));
+      .map((item) => ({
+        ...item,
+        shipmentRequest: shipmentMock?.ownRequestOf(item.id, user) ?? null,
+        requests: user.kind === "PARTNER" ? null : (shipmentMock?.summaryOf(item.id) ?? null),
+      }))
+      .filter((item) => {
+        if (requestSent === null) return true;
+        const sent = user.kind === "PARTNER" ? item.shipmentRequest !== null : Boolean(shipmentMock?.anySent(item.id));
+        return sent === (requestSent === "true");
+      });
     return send(request, response, 200, { items: matches.slice(0, limit), total: matches.length });
   },
 
@@ -3233,6 +3400,47 @@ const routes = {
       return fail(request, response, 409, "LAST_ADMIN", "Harus ada sedikitnya satu akun internal aktif yang bisa mengatur hak akses.");
     }
     return send(request, response, 200, { user: adminUser(target) });
+  },
+
+  // A partner account for an existing company, or for a new mill made together with it (POST /api/admin/users).
+  "POST /api/admin/users": async (request, response) => {
+    if (!guard(request, response, [["users", "EDIT"]], { staffOnly: true })) return 0;
+    const body = await readJson(request);
+    const fields = {};
+    if (typeof body.username !== "string" || !/^[A-Za-z0-9._-]{3,60}$/.test(body.username.trim())) fields.username = "Username 3 sampai 60 huruf, angka, titik, garis bawah, atau tanda minus.";
+    if (typeof body.fullName !== "string" || body.fullName.trim().length < 2) fields.fullName = "Nama lengkap wajib diisi, 2 sampai 200 huruf.";
+    if (typeof body.password !== "string" || body.password.length < 8) fields.password = "Kata sandi paling sedikit 8 karakter.";
+    if (Object.keys(fields).length > 0) return invalid(request, response, fields);
+    if (Boolean(body.partnerId) === Boolean(body.newPartner)) return invalid(request, response, { partnerId: "Pilih perusahaan yang sudah ada atau isi nama PKS baru, salah satu saja." });
+    const username = body.username.trim();
+    if (users.some((user) => user.username.toLowerCase() === username.toLowerCase())) return fail(request, response, 409, "USERNAME_TAKEN", `Username ${username} sudah dipakai.`);
+    let company;
+    if (body.newPartner) {
+      const made = addLocalPartner(body.newPartner.name, body.newPartner.address, "supplier");
+      if (made.problem) return reply(request, response, made.problem);
+      company = made.partner;
+    } else {
+      company = findPartner(body.partnerId);
+      if (!company) return invalid(request, response, { partnerId: "Perusahaan tidak ditemukan atau tidak aktif." });
+    }
+    const role = partnerRole(company);
+    const user = {
+      id: `u-${users.length + 1}`,
+      kind: "PARTNER",
+      username,
+      fullName: body.fullName.trim(),
+      permissions:
+        role === "supplier"
+          ? { contracts: "VIEW", shipment_requests: "VIEW", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" }
+          : { delivery_orders: "EDIT", registrations: "CREATE", vehicles: "CREATE", drivers: "CREATE", gps: "VIEW" },
+      partner: company,
+      password: body.password,
+      employeeNo: null,
+      isActive: true,
+      lastLoginAt: null,
+    };
+    users.push(user);
+    return send(request, response, 201, { user: adminUser(user) });
   },
 
   "PATCH /api/admin/users/:id": async (request, response, url, id) => {
@@ -3392,15 +3600,17 @@ const routes = {
       request,
       response,
       url,
-      matches.map((partner) => ({
-        id: partner.id,
-        name: partner.name,
-        code: partner.id.toUpperCase(),
-        isSupplier: partnerRole(partner) === "supplier",
-        isCustomer: partnerRole(partner) === "customer",
-        isTransporter: partnerRole(partner) === "transporter",
-      })),
+      matches.map(publicPartner),
     );
+  },
+
+  // a partner that is not in the ERP (a mill selling through a trader), as POST /api/partners in apps/api
+  "POST /api/partners": async (request, response) => {
+    if (!guard(request, response, [["shipment_requests", "CREATE"]], { staffOnly: true })) return 0;
+    const body = await readJson(request);
+    const made = addLocalPartner(body.name, body.address, body.isSupplier === true ? "supplier" : body.isTransporter === true ? "transporter" : body.isCustomer === true ? "customer" : null);
+    if (made.problem) return reply(request, response, made.problem);
+    return send(request, response, 201, { partner: publicPartner(made.partner) });
   },
 
 
@@ -3706,8 +3916,9 @@ const routes = {
       createdVia: user.kind === "INTERNAL" ? "OPERATOR" : "PORTAL",
       createdBy: { id: user.id, fullName: user.fullName },
       createdAt: nowIso(),
-      // whose registration it is: the supplier of an incoming one, the transporter of an outgoing one
-      ownerPartnerId: plan.direction === "IN" ? plan.partner.id : plan.transporterId,
+      // whose registration it is: the mill (asal PKS) or the contract's partner of an incoming one, the transporter of an
+      // outgoing one
+      ownerPartnerId: plan.direction === "IN" ? (plan.originPartner?.id ?? plan.partner.id) : plan.transporterId,
       submittedAt: null,
       reviewedAt: null,
       reviewNote: null,
@@ -3725,8 +3936,17 @@ const routes = {
     const registration = registrations.find((item) => item.id === id);
     if (!registration || !canReach(user, registration)) return fail(request, response, 404, "NOT_FOUND", "Registrasi tidak ditemukan.");
     const body = await readJson(request);
-    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Hanya registrasi berstatus DRAFT yang bisa diubah.");
     if (body.direction !== registration.direction) return invalid(request, response, { direction: "Arah registrasi tidak bisa diubah." });
+    if (registration.status === "SUBMITTED" || registration.status === "APPROVED") {
+      // a sent registration: its sender, or staff with registrations EDIT, while its trucks have not checked in
+      if (user.kind === "INTERNAL" && !can(user, "registrations", "EDIT")) return fail(request, response, 403, "FORBIDDEN", "Anda tidak berhak membuka bagian ini.");
+      const { plan, problem: refused } = planRegistration(user, body);
+      if (refused) return reply(request, response, refused);
+      const outcome = amendRegistration(registration, plan, body, user);
+      if (outcome.problem) return reply(request, response, outcome.problem);
+      return send(request, response, 200, { registration: publicRegistration(registration), spjChanges: outcome.spjChanges });
+    }
+    if (registration.status !== "DRAFT") return fail(request, response, 409, "INVALID_STATE", "Registrasi ini sudah selesai, ditolak, atau dibatalkan, jadi tidak bisa diubah.");
     const { plan, problem: refused } = planRegistration(user, body);
     if (refused) return reply(request, response, refused);
     writeRegistration(registration, plan, user);
@@ -4162,6 +4382,7 @@ shipmentMock = createShipmentRequestsMock({
   readJson,
   contracts,
   users,
+  partnerById: findPartner,
   storedFiles,
   publicAttachment,
   linkedAnywhere,

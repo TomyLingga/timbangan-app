@@ -6,12 +6,14 @@ import { ActionSheet } from "@/components/action-sheet";
 import { ContractLookup } from "@/components/contract-lookup";
 import { TextAreaField, TextField } from "@/components/form-fields";
 import { FormSheet } from "@/components/form-sheet";
+import { PartnerLookup } from "@/components/partner-lookup";
 import { useAction } from "@/hooks/use-form";
 import { isApiError } from "@/lib/api-client";
 import { formatQuantity } from "@/lib/format";
 import { shipmentRequestErrorMessage } from "@/lib/messages";
 import { api } from "@/lib/session";
 import {
+  contractRequestText,
   EMPTY_SHIPMENT_REQUEST,
   sendBlocker,
   shipmentRequestPayload,
@@ -19,12 +21,24 @@ import {
   validateShipmentRequest,
   type ShipmentRequestValues,
 } from "@/lib/shipment-requests";
-import type { Contract, ShipmentRequest } from "@/lib/types";
+import type { Contract, PartnerRef, ShipmentRequest } from "@/lib/types";
 import type { FormErrors } from "@/lib/workflow-forms";
 
 const requestPath = (request: Pick<ShipmentRequest, "id">) => `/api/shipment-requests/${encodeURIComponent(String(request.id))}`;
 
-/** A new request (`request` null) or a change of one: a draft fully, a sent one only quantity, end date and remark. */
+/** The contract as the form shows it: who it is with, its goods, and how much of it the requests already plan. */
+interface ChosenContract {
+  contractNo: string;
+  detail: string;
+  qtyContract: number | null;
+  qtyRequested: number | null;
+  uom: string | null;
+}
+
+/**
+ * A new request (`request` null) or a change of one: a draft fully, a sent one only quantity, end date and remark.
+ * The request goes to one mill (PKS); a contract may be supplied by several mills, each with its own request.
+ */
 export function ShipmentRequestFormSheet({
   request,
   onClose,
@@ -37,9 +51,20 @@ export function ShipmentRequestFormSheet({
   const mode = request === null ? "create" : request.status.toUpperCase() === "DRAFT" ? "draft" : "sent";
   const [values, setValues] = useState<ShipmentRequestValues>(request ? shipmentRequestValues(request) : EMPTY_SHIPMENT_REQUEST);
   const [errors, setErrors] = useState<FormErrors>({});
-  const [contract, setContract] = useState<Pick<Contract, "contractNo"> & { detail: string } | null>(
-    request ? { contractNo: request.contract.contractNo, detail: `${request.partner.name} · ${request.product.name}` } : null,
+  const [contract, setContract] = useState<ChosenContract | null>(
+    request
+      ? {
+          contractNo: request.contract.contractNo,
+          detail: `${request.partner.name} · ${request.product.name}`,
+          qtyContract: request.contract.qtyContract,
+          qtyRequested: request.contract.qtyRequested ?? null,
+          uom: request.contract.uom,
+        }
+      : null,
   );
+  const [supplier, setSupplier] = useState<PartnerRef | null>(request ? request.supplier : null);
+  // the request being changed is already in the sum of the contract
+  const own = request && request.status.toUpperCase() !== "CANCELLED" ? (request.qtyPlanned ?? 0) : 0;
   const [formError, setFormError] = useState<string | null>(null);
   const save = useAction();
 
@@ -75,7 +100,7 @@ export function ShipmentRequestFormSheet({
       description={
         mode === "sent"
           ? "Permintaan sudah dikirim, jadi yang bisa diubah hanya quantity, tanggal akhir kirim, dan keterangan."
-          : "Satu permintaan untuk satu kontrak beli. Setelah disimpan, lampirkan PDF kontrak lalu kirim ke supplier."
+          : "Satu permintaan untuk satu kontrak dan satu PKS. Kontrak yang dipasok beberapa PKS diberi satu permintaan per PKS. Setelah disimpan, lampirkan PDF kontrak lalu kirim."
       }
       pending={save.pending}
       error={formError}
@@ -89,9 +114,15 @@ export function ShipmentRequestFormSheet({
             name="contractLookup"
             placeholder="Cari nomor kontrak atau supplier"
             value={contract}
-            hint="Supplier dan barang terisi dari kontrak."
-            onSelect={(chosen) => {
-              setContract({ contractNo: chosen.contractNo, detail: `${chosen.partner.name} · ${chosen.product.name} · ${formatQuantity(chosen.qtyContract, chosen.uom)}` });
+            hint="Partner kontrak dan barang terisi dari kontrak."
+            onSelect={(chosen: Contract) => {
+              setContract({
+                contractNo: chosen.contractNo,
+                detail: `${chosen.partner.name} · ${chosen.product.name} · ${formatQuantity(chosen.qtyContract, chosen.uom)}`,
+                qtyContract: chosen.qtyContract === null ? null : Number(chosen.qtyContract),
+                qtyRequested: chosen.requests?.qtyRequested ?? null,
+                uom: chosen.uom,
+              });
               set("contractId", String(chosen.id));
             }}
             onClear={() => {
@@ -101,8 +132,25 @@ export function ShipmentRequestFormSheet({
             error={errors.contractId}
           />
           {contract ? <p className="rounded-md bg-muted px-3 py-2 text-sm">{contract.detail}</p> : null}
+          <PartnerLookup
+            role="supplier"
+            label="PKS pengirim"
+            name="supplierLookup"
+            placeholder="Cari nama PKS"
+            value={supplier}
+            onChange={(chosen) => {
+              setSupplier(chosen);
+              set("supplierId", chosen ? String(chosen.id) : "");
+            }}
+            error={errors.supplierId}
+          />
         </>
       )}
+      {contract ? (
+        <p className="text-sm text-muted-foreground" data-testid="contract-requested">
+          {contractRequestText(contract.qtyContract, contract.qtyRequested, contract.uom, own)}
+        </p>
+      ) : null}
       <TextField
         label="Quantity rencana (kg)"
         name="qtyPlanned"
@@ -179,14 +227,14 @@ export function RequestActionSheet({
         title={`Kirim permintaan ${no}`}
         description={
           blocker ??
-          `Permintaan dan PDF kontrak dikirim ke akun ${request.partner.name}. Setelah itu supplier bisa mendaftarkan truk untuk kontrak ini. Yang masih bisa diubah hanya quantity, tanggal akhir kirim, dan keterangan.`
+          `Permintaan dan PDF kontrak dikirim ke akun ${request.supplier.name}. Setelah itu PKS ini bisa mendaftarkan truk untuk kontrak ini. Yang masih bisa diubah hanya quantity, tanggal akhir kirim, dan keterangan.`
         }
         submitLabel="Kirim ke supplier"
         onClose={onClose}
         onConfirm={async () => {
           if (blocker) return blocker;
           const failure = await transition(request, "send");
-          if (!failure) onDone(`Permintaan ${no} dikirim ke ${request.partner.name}.`);
+          if (!failure) onDone(`Permintaan ${no} dikirim ke ${request.supplier.name}.`);
           return failure;
         }}
       />
@@ -196,7 +244,7 @@ export function RequestActionSheet({
     return (
       <ActionSheet
         title={`Tutup permintaan ${no}`}
-        description="Setelah ditutup, supplier tidak bisa mendaftarkan truk baru untuk kontrak ini. Kontrak boleh diberi permintaan baru."
+        description={`Setelah ditutup, ${request.supplier.name} tidak bisa mendaftarkan truk baru untuk kontrak ini. Kontrak boleh diberi permintaan baru.`}
         submitLabel="Tutup permintaan"
         onClose={onClose}
         onConfirm={async () => {
@@ -210,7 +258,7 @@ export function RequestActionSheet({
   return (
     <ActionSheet
       title={`Batalkan permintaan ${no}`}
-      description="Permintaan yang dibatalkan tidak bisa dipakai lagi. Supplier tidak bisa mendaftarkan truk baru untuk kontrak ini."
+      description={`Permintaan yang dibatalkan tidak bisa dipakai lagi. ${request.supplier.name} tidak bisa mendaftarkan truk baru untuk kontrak ini.`}
       submitLabel="Batalkan permintaan"
       reasonLabel="Alasan"
       reasonRequired="Isi alasan pembatalan."

@@ -8,7 +8,7 @@ import { AttachmentList, type ListedFile } from "@/components/attachments";
 import { ContractLookup } from "@/components/contract-lookup";
 import { TextAreaField, TextField } from "@/components/form-fields";
 import { ListError, ListSkeleton, Notice, PageHeader } from "@/components/page-parts";
-import { TransporterLookup } from "@/components/partner-lookup";
+import { PartnerLookup, TransporterLookup } from "@/components/partner-lookup";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/features/auth/auth-provider";
 import { dropErrors, FormSection, SubmitBar, focusFirstInvalid } from "@/features/registrations/form-parts";
@@ -18,10 +18,11 @@ import { MAX_TRIP_SLIPS } from "@/lib/attachments";
 import { formatNumber, formatQuantity } from "@/lib/format";
 import { isApiError } from "@/lib/api-client";
 import { registrationErrorMessage } from "@/lib/messages";
+import { changeQuery } from "@/lib/registration-changes";
 import { isStaff } from "@/lib/permissions";
 import { documentTotals, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
-import type { Contract, ContractList, PartnerRef, QualityParameter, Registration, UploadedFile, VehicleType } from "@/lib/types";
+import type { Contract, ContractList, PartnerRef, QualityParameter, Registration, SpjChange, UploadedFile, VehicleType } from "@/lib/types";
 import {
   emptyLetter,
   emptyTruck,
@@ -107,6 +108,7 @@ function IncomingFormBody({
   parameters,
   draft,
   supplier,
+  ownCompany,
   chosenContract,
   contractMissing,
 }: {
@@ -116,16 +118,22 @@ function IncomingFormBody({
   draft: Registration | null;
   /** A supplier account: only contracts with a shipment request sent to it are offered. */
   supplier: boolean;
+  /** The company of a supplier account, shown as the asal PKS. */
+  ownCompany?: string | null;
   /** The contract of the shipment request the form was opened from (`?kontrak=`). */
   chosenContract: Contract | null;
   /** The address named a contract that is not offered any more. */
   contractMissing: boolean;
 }) {
   const router = useRouter();
+  // a registration already sent is changed in place: no draft, no slips (they are added on its page)
+  const sent = draft !== null && draft.status.toUpperCase() !== "DRAFT";
   const [initial] = useState(() => (draft ? incomingFromDraft(draft, parameters) : null));
   const [contracts, setContracts] = useState<Contract[]>(initial?.contracts ?? (chosenContract ? [chosenContract] : []));
   const [letters, setLetters] = useState<LetterValues[]>(initial?.letters ?? (chosenContract ? [emptyLetter(parameters)] : []));
   const [transporter, setTransporter] = useState<PartnerRef | null>(initial?.transporter ?? null);
+  // asal PKS: staff name it; a mill's account sends nothing and the API takes its own company
+  const [origin, setOrigin] = useState<PartnerRef | null>(initial?.origin ?? null);
   const [plannedDate, setPlannedDate] = useState(initial?.plannedDate || plantToday());
   const [truck, setTruck] = useState<TruckValues>(() => initial?.truck ?? emptyTruck("truck"));
   const [remark, setRemark] = useState(initial?.remark ?? "");
@@ -154,7 +162,7 @@ function IncomingFormBody({
   );
 
   async function save(submit: boolean) {
-    const values = { contracts, transporter, plannedDate, truck, letters, remark };
+    const values = { contracts, transporter, ...(supplier ? {} : { origin }), plannedDate, truck, letters, remark };
     const found = validateIncoming(values, { types, parameters, currentYear: new Date().getFullYear() });
     setErrors(found);
     setFormError(null);
@@ -167,12 +175,16 @@ function IncomingFormBody({
     try {
       // New slips can only be linked to a saved truck: the registration is saved as a draft first, the slips are
       // linked, and only then is it sent.
-      const linkFirst = pendingSlips.length > 0;
-      const { registration } = await api.request<{ registration: Registration }>(
+      const linkFirst = !sent && pendingSlips.length > 0;
+      const { registration, spjChanges } = await api.request<{ registration: Registration; spjChanges?: SpjChange[] }>(
         draft ? `/api/registrations/${encodeURIComponent(String(draft.id))}` : "/api/registrations",
         { method: draft ? "PUT" : "POST", body: incomingPayload(values, submit && !linkFirst) },
       );
       const id = encodeURIComponent(String(registration.id));
+      if (sent) {
+        router.push(`/registrasi/${id}?${changeQuery(spjChanges ?? [])}`);
+        return;
+      }
       if (linkFirst) {
         const tripId = registration.trips[0]?.id;
         try {
@@ -199,7 +211,7 @@ function IncomingFormBody({
   return (
     <form noValidate onSubmit={(event) => event.preventDefault()} className="flex flex-col gap-5">
       <PageHeader
-        title={draft ? `Ubah draf ${draft.regNo}` : "Registrasi incoming"}
+        title={draft ? (sent ? `Ubah ${draft.regNo}` : `Ubah draf ${draft.regNo}`) : "Registrasi incoming"}
         description="Satu registrasi untuk satu truk. Truk boleh membawa beberapa kontrak dari partner yang sama."
       />
 
@@ -258,6 +270,26 @@ function IncomingFormBody({
 
       <FormSection title="2. Pengiriman">
         <div className="grid gap-4 sm:grid-cols-2">
+          {supplier ? (
+            <div className="min-w-0" data-testid="origin-own">
+              <p className="text-sm font-medium">Asal PKS</p>
+              <p className="mt-1 text-sm text-muted-foreground">{ownCompany ?? "Perusahaan Anda"} (dari akun yang masuk)</p>
+            </div>
+          ) : (
+            <PartnerLookup
+              role="supplier"
+              label="Asal PKS"
+              name="originLookup"
+              placeholder="Cari nama PKS"
+              optional
+              value={origin}
+              onChange={(partner) => {
+                setOrigin(partner);
+                setErrors((current) => dropErrors(current, "origin"));
+              }}
+              error={errors.origin}
+            />
+          )}
           <TransporterLookup
             label="Transporter"
             name="transporterLookup"
@@ -324,6 +356,12 @@ function IncomingFormBody({
         ) : null}
       </FormSection>
 
+      {sent ? (
+        <Notice tone="warning">
+          Registrasi ini sudah dikirim. Bila plat, kendaraan, atau supir diganti, SPJ lama dicabut dan SPJ baru harus dicetak. Slip timbang ditambah dari halaman registrasi.
+        </Notice>
+      ) : null}
+      {sent ? null : (
       <FormSection
         title="5. Slip timbang"
         description="Slip dari timbangan PKS untuk truk ini, paling banyak tiga berkas. Slip ikut terkirim saat registrasi disimpan."
@@ -354,12 +392,13 @@ function IncomingFormBody({
           testId="form-slips"
         />
       </FormSection>
+      )}
 
       <FormSection title="6. Catatan">
         <TextAreaField label="Catatan" name="remark" optional rows={2} value={remark} onChange={setRemark} />
       </FormSection>
 
-      <SubmitBar pending={pending} error={formError} onDraft={() => void save(false)} onSubmit={() => void save(true)} />
+      <SubmitBar pending={pending} error={formError} onDraft={() => void save(false)} onSubmit={() => void save(true)} sent={sent} />
     </form>
   );
 }
@@ -407,6 +446,7 @@ export function IncomingForm({ draft = null, contractId = null }: { draft?: Regi
       parameters={parameters.data.items}
       draft={draft}
       supplier={supplier}
+      ownCompany={state.status === "authenticated" ? (state.user.partner?.name ?? null) : null}
       chosenContract={chosen}
       contractMissing={Boolean(named) && chosen === null}
     />

@@ -54,14 +54,16 @@ function columnsFor(staff: boolean): ReadonlyArray<Column<ShipmentRequest>> {
     staff
       ? {
           id: "supplier",
-          header: "Supplier dan barang",
+          header: "PKS dan partner kontrak",
           cellClassName: "max-w-56",
           cell: (request) => (
             <>
-              <span className="block truncate" title={request.partner.name}>
-                {request.partner.name}
+              <span className="block truncate" title={request.supplier.name}>
+                {request.supplier.name}
               </span>
-              <span className="block text-xs text-muted-foreground">{request.product.name}</span>
+              <span className="block truncate text-xs text-muted-foreground" title={request.partner.name}>
+                {request.partner.id === request.supplier.id ? request.product.name : `${request.partner.name} · ${request.product.name}`}
+              </span>
             </>
           ),
         }

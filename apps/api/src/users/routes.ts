@@ -5,11 +5,14 @@ import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { writeAudit } from "../audit.js";
 import { accountOf, type Guards } from "../auth/guard.js";
-import { countAdmins, PERMISSION_LEVELS, type Permissions, permissionsOf, replacePermissions } from "../auth/permissions.js";
+import { hashPassword } from "../auth/passwords.js";
+import { countAdmins, partnerDefaults, PERMISSION_LEVELS, type Permissions, permissionsOf, replacePermissions } from "../auth/permissions.js";
 import type { Orm } from "../db/client.js";
 import { authSessions, modules, partners, users } from "../db/schema.js";
-import { AppError, notFound } from "../errors.js";
-import { idParams, likeText, limitParam, searchParam } from "../http.js";
+import { AppError, invalid, notFound } from "../errors.js";
+import { idNumber, idParams, likeText, limitParam, searchParam } from "../http.js";
+import { insertLocalPartner, localPartnerFields } from "../partners/routes.js";
+import { MIN_PASSWORD_LENGTH } from "./create-user.js";
 
 const listQuery = z.object({ q: searchParam, limit: limitParam });
 const LEVEL_MESSAGE = "Tingkat harus VIEW, CREATE, EDIT, atau null.";
@@ -17,6 +20,20 @@ const permissionsBody = z.object({
   permissions: z.record(z.string(), z.enum(PERMISSION_LEVELS, LEVEL_MESSAGE).nullable(), "permissions harus berupa objek kode modul ke tingkat."),
 });
 const activeBody = z.object({ isActive: z.boolean("isActive harus true atau false.") });
+const USERNAME_MESSAGE = "Username 3 sampai 60 huruf, angka, titik, garis bawah, atau tanda minus.";
+const FULL_NAME_MESSAGE = "Nama lengkap wajib diisi, 2 sampai 200 huruf.";
+const PASSWORD_MESSAGE = `Kata sandi paling sedikit ${MIN_PASSWORD_LENGTH} karakter.`;
+/**
+ * A partner account, for an existing company (partnerId) or for a mill that is not in the system yet (newPartner,
+ * made a local supplier partner in the same transaction). Staff accounts come from the portal (SSO).
+ */
+const partnerAccountBody = z.object({
+  username: z.string(USERNAME_MESSAGE).trim().regex(/^[A-Za-z0-9._-]{3,60}$/, USERNAME_MESSAGE),
+  fullName: z.string(FULL_NAME_MESSAGE).trim().min(2, FULL_NAME_MESSAGE).max(200, FULL_NAME_MESSAGE),
+  password: z.string(PASSWORD_MESSAGE).min(MIN_PASSWORD_LENGTH, PASSWORD_MESSAGE).max(200, "Kata sandi terlalu panjang."),
+  partnerId: idNumber.optional(),
+  newPartner: z.object(localPartnerFields, "newPartner harus berupa objek nama dan alamat.").optional(),
+});
 
 const userColumns = {
   id: users.id,
@@ -71,6 +88,47 @@ export function registerUserAdminRoutes(app: FastifyInstance, context: AppContex
     const where = pattern ? or(ilike(users.username, pattern), ilike(users.fullName, pattern), ilike(users.employeeNo, pattern)) : undefined;
     const [counted] = await orm.select({ total: count() }).from(users).where(where);
     return { items: await listUsers(orm, where, query.limit), total: counted?.total ?? 0 };
+  });
+
+  // A partner account. With newPartner, the mill and its first account are made together: a refused account (a
+  // username in use) leaves no partner behind, and a mill name already there is refused with its partnerId.
+  app.post("/api/admin/users", { preHandler: [guards.authenticate, guards.requireInternal, guards.requirePermission("users", "EDIT")] }, async (request, reply) => {
+    const body = partnerAccountBody.parse(request.body);
+    if ((body.partnerId === undefined) === (body.newPartner === undefined)) {
+      throw invalid("partnerId", "Pilih perusahaan yang sudah ada atau isi nama PKS baru, salah satu saja.");
+    }
+    const now = context.now();
+    const passwordHash = await hashPassword(body.password);
+    const user = await orm.transaction(async (tx) => {
+      const [taken] = await tx.select({ id: users.id }).from(users).where(eq(sql`lower(${users.username})`, body.username.toLowerCase()));
+      if (taken) throw new AppError(409, "USERNAME_TAKEN", `Username ${body.username} sudah dipakai.`);
+      let company: { id: number; isSupplier: boolean; isTransporter: boolean; isCustomer: boolean; isActive: boolean } | undefined;
+      if (body.newPartner) {
+        company = { ...(await insertLocalPartner(tx, request, now, { ...body.newPartner, isSupplier: true, isTransporter: false, isCustomer: false })), isActive: true };
+      } else {
+        [company] = await tx
+          .select({ id: partners.id, isSupplier: partners.isSupplier, isTransporter: partners.isTransporter, isCustomer: partners.isCustomer, isActive: partners.isActive })
+          .from(partners)
+          .where(eq(partners.id, body.partnerId ?? -1));
+        if (!company?.isActive) throw invalid("partnerId", "Perusahaan tidak ditemukan atau tidak aktif.");
+      }
+      const [created] = await tx
+        .insert(users)
+        .values({ kind: "PARTNER", partnerId: company.id, username: body.username, fullName: body.fullName, passwordHash, createdAt: now, updatedAt: now })
+        .returning({ id: users.id });
+      if (!created) throw new Error("The account was not created.");
+      const granted = partnerDefaults(company);
+      await replacePermissions(tx, created.id, granted, accountOf(request).id, now);
+      await writeAudit(tx, request, now, {
+        action: "USER_CREATED",
+        entityType: "user",
+        entityId: created.id,
+        before: null,
+        after: { kind: "PARTNER", username: body.username, partnerId: company.id, newPartner: body.newPartner !== undefined, permissions: granted },
+      });
+      return one(tx, created.id);
+    });
+    return reply.code(201).send({ user });
   });
 
   app.get("/api/admin/modules", viewers, async () => ({

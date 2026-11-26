@@ -1,10 +1,11 @@
 // Shipment requests (API migration 0017, owner's flow of 25 November 2026, incoming step 1): the INL team picks a
-// purchase contract, attaches the contract PDF and sends the request to the supplier's accounts. A supplier account
-// registers incoming trucks only on a contract whose request was sent. DRAFT -> SENT -> CLOSED; DRAFT or SENT ->
-// CANCELLED. The API (apps/api src/shipment-requests/routes.ts) checks every rule again; these helpers decide what
+// purchase contract and the mill (PKS) to deliver it, attaches the contract PDF and sends the request to the mill's
+// accounts. A mill registers incoming trucks only on a contract whose request was sent to it. A contract may be
+// supplied by several mills, each with its own request and quantity (migration 0018). DRAFT -> SENT -> CLOSED;
+// DRAFT or SENT -> CANCELLED. The API (apps/api src/shipment-requests/routes.ts) checks every rule again; these helpers decide what
 // the pages offer and what the forms send.
 
-import { formatDate } from "@/lib/format";
+import { formatDate, formatQuantity } from "@/lib/format";
 import { canCreate, canTypeIncoming, isStaff } from "@/lib/permissions";
 import type { StatusInfo } from "@/lib/status";
 import type { ShipmentRequest, User } from "@/lib/types";
@@ -79,17 +80,34 @@ export function registerHref(user: MaybeUser, request: Pick<ShipmentRequest, "st
   return `/registrasi/baru?${new URLSearchParams({ arah: "in", [CONTRACT_PARAM]: String(request.contract.id) })}`;
 }
 
+/**
+ * The quantity of a contract and what its requests already plan, for the request form: "Kontrak 10.000.000 kg ·
+ * sudah diminta 3.000.000 kg · sisa 7.000.000 kg". `except` is the quantity of the request being changed, which the
+ * sum already holds. Without a contract quantity only the requested part is told.
+ */
+export function contractRequestText(qtyContract: number | null, qtyRequested: number | null | undefined, uom: string | null, except = 0): string {
+  const asked = Math.max((qtyRequested ?? 0) - except, 0);
+  const parts = [`sudah diminta ${formatQuantity(asked, uom)}`];
+  if (qtyContract !== null) {
+    parts.unshift(`Kontrak ${formatQuantity(qtyContract, uom)}`);
+    parts.push(`sisa ${formatQuantity(Math.max(Math.round((qtyContract - asked) * 1000) / 1000, 0), uom)}`);
+  }
+  return parts.join(" · ");
+}
+
 // --- the form ------------------------------------------------------------------------------------------------------
 
 export interface ShipmentRequestValues {
   contractId: string;
+  /** The mill (PKS) the request goes to. */
+  supplierId: string;
   qtyPlanned: string;
   deliveryFrom: string;
   deliveryUntil: string;
   remark: string;
 }
 
-export const EMPTY_SHIPMENT_REQUEST: ShipmentRequestValues = { contractId: "", qtyPlanned: "", deliveryFrom: "", deliveryUntil: "", remark: "" };
+export const EMPTY_SHIPMENT_REQUEST: ShipmentRequestValues = { contractId: "", supplierId: "", qtyPlanned: "", deliveryFrom: "", deliveryUntil: "", remark: "" };
 
 /** "create": a new draft. "draft": a draft changed, every field. "sent": a sent request, only what may still change. */
 export type ShipmentRequestMode = "create" | "draft" | "sent";
@@ -97,6 +115,7 @@ export type ShipmentRequestMode = "create" | "draft" | "sent";
 export function shipmentRequestValues(request: ShipmentRequest): ShipmentRequestValues {
   return {
     contractId: String(request.contract.id),
+    supplierId: String(request.supplier.id),
     qtyPlanned: request.qtyPlanned === null ? "" : String(request.qtyPlanned),
     deliveryFrom: request.deliveryFrom ?? "",
     deliveryUntil: request.deliveryUntil ?? "",
@@ -107,6 +126,7 @@ export function shipmentRequestValues(request: ShipmentRequest): ShipmentRequest
 export function validateShipmentRequest(values: ShipmentRequestValues, mode: ShipmentRequestMode): FormErrors {
   const errors: FormErrors = {};
   if (mode !== "sent" && !values.contractId) errors.contractId = "Pilih kontrak beli.";
+  if (mode !== "sent" && !values.supplierId) errors.supplierId = "Pilih PKS yang mengirim.";
   if (values.qtyPlanned.trim()) {
     const qty = decimalNumber(values.qtyPlanned);
     if (qty === null || qty <= 0) errors.qtyPlanned = "Isi quantity lebih dari nol, tanpa titik ribuan.";
@@ -126,6 +146,7 @@ export function shipmentRequestPayload(values: ShipmentRequestValues, mode: Ship
   if (mode === "sent") return { qtyPlanned, deliveryUntil, remark };
   const all: Record<string, unknown> = {
     contractId: values.contractId,
+    supplierId: values.supplierId,
     qtyPlanned,
     deliveryFrom: values.deliveryFrom || null,
     deliveryUntil,

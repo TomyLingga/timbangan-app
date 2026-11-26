@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Plus, Trash2, X } from "lucide-react";
 
 import { SelectField, TextAreaField, TextField } from "@/components/form-fields";
-import { ListError, ListSkeleton, PageHeader } from "@/components/page-parts";
+import { ListError, ListSkeleton, Notice, PageHeader } from "@/components/page-parts";
 import { Button } from "@/components/ui/button";
 import { dropErrors, FormSection, SubmitBar, focusFirstInvalid } from "@/features/registrations/form-parts";
 import { plantToday } from "@/features/registrations/incoming-form";
@@ -16,7 +16,8 @@ import { isApiError } from "@/lib/api-client";
 import { registrationErrorMessage } from "@/lib/messages";
 import { planPerTruck, wholeKg } from "@/lib/quantity";
 import { api } from "@/lib/session";
-import type { DeliveryOrder, DeliveryOrderDetail, Page, Registration, VehicleType } from "@/lib/types";
+import { changeQuery } from "@/lib/registration-changes";
+import type { DeliveryOrder, DeliveryOrderDetail, Page, Registration, SpjChange, VehicleType } from "@/lib/types";
 import {
   emptyTruck,
   outgoingFromDraft,
@@ -49,6 +50,10 @@ function OutgoingFormBody({
   draftOrders: DeliveryOrder[];
 }) {
   const router = useRouter();
+  // a registration already sent: trucks that checked in stay out of the form, and with them the DOs are fixed
+  const sent = draft !== null && draft.status.toUpperCase() !== "DRAFT";
+  const lockedTrips = sent ? draft.trips.filter((trip) => trip.edit && !trip.edit.allowed && !["CANCELLED", "EXPIRED"].includes(trip.status.toUpperCase())) : [];
+  const ordersFixed = sent && draft.edit?.allocationsLocked === true;
   const [initial] = useState(() => (draft ? outgoingFromDraft(draft, draftOrders) : null));
   const [orders, setOrders] = useState<OutgoingValues["orders"]>(
     initial?.orders ?? (initialOrder ? [{ order: initialOrder, qty: remainingText(initialOrder) }] : []),
@@ -112,11 +117,12 @@ function OutgoingFormBody({
     }
     setPending(submit ? "submit" : "draft");
     try {
-      const { registration } = await api.request<{ registration: Registration }>(
+      const { registration, spjChanges } = await api.request<{ registration: Registration; spjChanges?: SpjChange[] }>(
         draft ? `/api/registrations/${encodeURIComponent(String(draft.id))}` : "/api/registrations",
         { method: draft ? "PUT" : "POST", body: outgoingPayload(values, submit) },
       );
-      router.push(`/registrasi/${encodeURIComponent(String(registration.id))}?baru=${submit ? "kirim" : "draf"}`);
+      const id = encodeURIComponent(String(registration.id));
+      router.push(sent ? `/registrasi/${id}?${changeQuery(spjChanges ?? [])}` : `/registrasi/${id}?baru=${submit ? "kirim" : "draf"}`);
     } catch (error) {
       const placed = isApiError(error) ? registrationFieldErrors("OUT", error.fieldMessages) : { errors: {}, unplaced: [] };
       setErrors(placed.errors);
@@ -129,10 +135,20 @@ function OutgoingFormBody({
   return (
     <form noValidate onSubmit={(event) => event.preventDefault()} className="flex flex-col gap-5">
       <PageHeader
-        title={draft ? `Ubah draf ${draft.regNo}` : "Registrasi outgoing"}
+        title={draft ? (sent ? `Ubah ${draft.regNo}` : `Ubah draf ${draft.regNo}`) : "Registrasi outgoing"}
         description="Daftar truk untuk delivery order yang sudah diterima. Quantity tiap DO dibagi rata ke semua truk. Close cargo dan flexi bag ditandai petugas pos saat truk check-in."
       />
 
+      {sent ? (
+        <div data-testid="sent-edit-notice">
+          <Notice tone="warning">
+            Registrasi ini sudah dikirim. Truk yang plat, kendaraan, atau supirnya diganti mendapat SPJ baru yang harus dicetak lagi.
+            {lockedTrips.length > 0
+              ? ` Truk ${lockedTrips.map((trip) => `${trip.seq} (${trip.vehicle?.plateDisplay ?? "-"})`).join(", ")} sudah check-in di pos, jadi tidak ikut diubah, dan DO tidak bisa diganti.`
+              : ""}
+          </Notice>
+        </div>
+      ) : null}
       <FormSection title="1. Delivery order">
         {orders.length === 0 ? <p className="text-sm text-muted-foreground">Belum ada DO yang dipilih.</p> : null}
         <ul className="flex flex-col gap-3">
@@ -154,19 +170,21 @@ function OutgoingFormBody({
                       {entry.order.deliveryUntil ? ` sampai ${formatDate(entry.order.deliveryUntil)}` : ""}
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Hapus DO ${entry.order.doNo}`}
-                    onClick={() => setOrders((current) => current.filter((_, at) => at !== index))}
-                  >
-                    <X aria-hidden="true" />
-                  </Button>
+                  {ordersFixed ? null : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label={`Hapus DO ${entry.order.doNo}`}
+                      onClick={() => setOrders((current) => current.filter((_, at) => at !== index))}
+                    >
+                      <X aria-hidden="true" />
+                    </Button>
+                  )}
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,14rem)_1fr] sm:items-end">
                   <TextField
-                    label="Quantity untuk registrasi ini (kg)"
+                    label={lockedTrips.length > 0 ? "Quantity untuk truk yang belum check-in (kg)" : "Quantity untuk registrasi ini (kg)"}
                     name={`orders.${index}.qty`}
                     inputMode="numeric"
                     value={entry.qty}
@@ -189,7 +207,7 @@ function OutgoingFormBody({
           })}
         </ul>
         {errors.orders ? <p className="text-sm text-destructive">{errors.orders}</p> : null}
-        {addable.length > 0 ? (
+        {addable.length > 0 && !ordersFixed ? (
           <div className="flex flex-wrap items-end gap-2">
             <SelectField
               label={orders.length === 0 ? "Pilih DO" : "Tambah DO lain"}
@@ -300,7 +318,7 @@ function OutgoingFormBody({
         <TextAreaField label="Catatan" name="remark" optional rows={2} value={remark} onChange={setRemark} />
       </FormSection>
 
-      <SubmitBar pending={pending} error={formError} onDraft={() => void save(false)} onSubmit={() => void save(true)} />
+      <SubmitBar pending={pending} error={formError} onDraft={() => void save(false)} onSubmit={() => void save(true)} sent={sent} />
     </form>
   );
 }

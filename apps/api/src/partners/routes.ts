@@ -1,5 +1,5 @@
 import { and, asc, count, eq, ilike, or, sql } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { AppContext } from "../app.js";
 import { accountOf, type Guards } from "../auth/guard.js";
@@ -17,9 +17,13 @@ const listQuery = z.object({
 
 const NAME_MESSAGE = "Nama partner wajib diisi, 2 sampai 200 huruf.";
 const flag = (name: string) => z.boolean(`${name} harus true atau false.`).default(false);
-const createBody = z.object({
+/** Name and address of a partner kept only here; also the new mill of POST /api/admin/users. */
+export const localPartnerFields = {
   name: z.string(NAME_MESSAGE).trim().min(2, NAME_MESSAGE).max(200, NAME_MESSAGE),
   address: z.string("Alamat harus berupa teks.").trim().max(500, "Alamat terlalu panjang.").nullable().optional(),
+};
+const createBody = z.object({
+  ...localPartnerFields,
   isSupplier: flag("isSupplier"),
   isTransporter: flag("isTransporter"),
   isCustomer: flag("isCustomer"),
@@ -41,6 +45,42 @@ const columns = {
 
 /** One partner at a time is added, so that the name check below sees the one added just before. */
 const lockLocalPartners = (orm: Orm) => orm.execute(sql`select pg_advisory_xact_lock(hashtext('partners_local'))`);
+
+export interface LocalPartner {
+  name: string;
+  address?: string | null;
+  isSupplier: boolean;
+  isTransporter: boolean;
+  isCustomer: boolean;
+}
+
+/**
+ * Adds a partner that is not in the ERP, inside the caller's transaction, and audits it. A name equal to one already
+ * there (ignoring case and the spaces around it) is refused with 409 PARTNER_EXISTS and the id of that partner.
+ */
+export async function insertLocalPartner(tx: Orm, request: FastifyRequest, now: Date, input: LocalPartner) {
+  await lockLocalPartners(tx);
+  const [same] = await tx
+    .select({ id: partners.id, name: partners.name })
+    .from(partners)
+    .where(sql`lower(btrim(${partners.name})) = lower(${input.name})`)
+    .orderBy(asc(partners.id))
+    .limit(1);
+  if (same) throw new AppError(409, "PARTNER_EXISTS", `Partner dengan nama ${same.name} sudah ada.`, undefined, { partnerId: same.id });
+  const [created] = await tx
+    .insert(partners)
+    .values({ name: input.name, address: input.address || null, isSupplier: input.isSupplier, isTransporter: input.isTransporter, isCustomer: input.isCustomer, createdAt: now, updatedAt: now })
+    .returning(columns);
+  if (!created) throw new Error("The partner was not created.");
+  await writeAudit(tx, request, now, {
+    action: "PARTNER_CREATED",
+    entityType: "partner",
+    entityId: created.id,
+    before: null,
+    after: { name: created.name, address: created.address, isSupplier: created.isSupplier, isTransporter: created.isTransporter, isCustomer: created.isCustomer },
+  });
+  return created;
+}
 
 /**
  * Lookup of active partners for the staff screens (choosing a supplier, a customer, a transporter), and the partners
@@ -80,29 +120,7 @@ export function registerPartnerRoutes(app: FastifyInstance, context: AppContext,
     const body = createBody.parse(request.body);
     if (!body.isSupplier && !body.isTransporter && !body.isCustomer) throw invalid("isSupplier", "Pilih minimal satu jenis partner: supplier, transporter, atau customer.");
     const now = context.now();
-    const partner = await orm.transaction(async (tx) => {
-      await lockLocalPartners(tx);
-      const [same] = await tx
-        .select({ id: partners.id, name: partners.name })
-        .from(partners)
-        .where(sql`lower(btrim(${partners.name})) = lower(${body.name})`)
-        .orderBy(asc(partners.id))
-        .limit(1);
-      if (same) throw new AppError(409, "PARTNER_EXISTS", `Partner dengan nama ${same.name} sudah ada.`, undefined, { partnerId: same.id });
-      const [created] = await tx
-        .insert(partners)
-        .values({ name: body.name, address: body.address || null, isSupplier: body.isSupplier, isTransporter: body.isTransporter, isCustomer: body.isCustomer, createdAt: now, updatedAt: now })
-        .returning(columns);
-      if (!created) throw new Error("The partner was not created.");
-      await writeAudit(tx, request, now, {
-        action: "PARTNER_CREATED",
-        entityType: "partner",
-        entityId: created.id,
-        before: null,
-        after: { name: created.name, address: created.address, isSupplier: created.isSupplier, isTransporter: created.isTransporter, isCustomer: created.isCustomer },
-      });
-      return created;
-    });
+    const partner = await orm.transaction((tx) => insertLocalPartner(tx, request, now, body));
     request.log.info({ partnerId: partner.id, by: accountOf(request).id }, "local partner added");
     return reply.code(201).send({ partner });
   });

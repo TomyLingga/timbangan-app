@@ -46,6 +46,7 @@ const ROUTES: Row[] = [
 
   row("GET", "/api/partners", [], true),
   row("POST", "/api/partners", [["shipment_requests", "CREATE"]], true),
+  row("POST", "/api/admin/users", [["users", "EDIT"]], true),
 
   // /api/destinations belongs to a module switched off by 0009; migration-0009.test.ts checks that it refuses everyone
 

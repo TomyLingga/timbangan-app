@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useMemo, useState } from "react";
-import { ShieldCheck, ShieldOff, UserRoundCog } from "lucide-react";
+import { ShieldCheck, ShieldOff, UserPlus, UserRoundCog } from "lucide-react";
 
 import { DataList, type Column } from "@/components/data-list";
 import { SelectField } from "@/components/form-fields";
@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/features/auth/auth-provider";
+import { PartnerAccountSheet } from "@/features/users/partner-account-sheet";
 import { useApiQuery } from "@/hooks/use-api-query";
 import { useUrlFilter } from "@/hooks/use-url-filter";
 import { TotalFigure } from "@/components/total-figure";
@@ -33,6 +34,7 @@ import {
   canEdit,
   canView,
   grantAll,
+  isStaff,
   levelChoices,
   modulesForKind,
   permissionsPayload,
@@ -124,6 +126,7 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
   const [searchText, setSearchText] = useUrlFilter("q");
   const [reloadToken, setReloadToken] = useState(0);
   const [editing, setEditing] = useState<AdminUser | null>(null);
+  const [creating, setCreating] = useState(false);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [togglingId, setTogglingId] = useState<AdminUser["id"] | null>(null);
 
@@ -220,7 +223,14 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
         title="Pengguna"
         figures={list.data ? <TotalFigure value={list.data.total} noun="akun" /> : null}
         description="Karyawan yang baru masuk lewat portal belum punya hak akses. Atur modul yang boleh dibukanya di sini."
-      />
+      >
+        {mayEdit && isStaff(currentUser) ? (
+          <Button onClick={() => setCreating(true)}>
+            <UserPlus aria-hidden="true" />
+            Akun partner
+          </Button>
+        ) : null}
+      </PageHeader>
 
       <div aria-live="polite" className="empty:hidden">
         {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
@@ -277,6 +287,22 @@ function UsersPage({ currentUser, onOwnAccountChanged }: { currentUser: User; on
           ) : null}
         </div>
       )}
+
+      {creating ? (
+        <PartnerAccountSheet
+          onClose={() => setCreating(false)}
+          onSaved={(account, newMill) => {
+            setCreating(false);
+            setNotice({
+              tone: "success",
+              text: newMill
+                ? `${account.partner?.name ?? "PKS baru"} dan akun ${account.username} dibuat. PKS ini sekarang bisa dipilih di permintaan pengiriman.`
+                : `Akun ${account.username} untuk ${account.partner?.name ?? "perusahaan"} dibuat.`,
+            });
+            setReloadToken((token) => token + 1);
+          }}
+        />
+      ) : null}
 
       {editing && modules.data ? (
         <PermissionsSheet
